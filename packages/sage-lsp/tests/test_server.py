@@ -3,6 +3,7 @@ from pathlib import Path
 from lsprotocol.types import (
     ClientCapabilities,
     CompletionParams,
+    DidCloseTextDocumentParams,
     DidOpenTextDocumentParams,
     DefinitionParams,
     DocumentSymbolParams,
@@ -221,6 +222,29 @@ def test_server_document_symbols_track_open_document_contents() -> None:
     names = {item["name"] if isinstance(item, dict) else item.name for item in symbols}
 
     assert {"R", "x", "helper", "factorial"} <= names
+
+
+def test_server_drops_overlay_documents_on_close() -> None:
+    server = _initialized_server()
+    uri = Path("/workspace/example.sage").as_uri()
+    source = "value = ZZ\nsqrt(4)\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    open_handler = server.protocol.fm.features["textDocument/didOpen"]
+    open_handler(
+        DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+        )
+    )
+    assert server.workspace_index is not None
+    assert uri in server.workspace_index._document_records  # noqa: SLF001 - intentional state verification
+
+    close_handler = server.protocol.fm.features["textDocument/didClose"]
+    close_handler(DidCloseTextDocumentParams(text_document=TextDocumentIdentifier(uri=uri)))
+
+    assert uri not in server.workspace_index._document_records  # noqa: SLF001 - intentional state verification
 
 
 def test_server_hover_omits_docstring_when_hover_docs_disabled() -> None:

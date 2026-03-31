@@ -233,6 +233,47 @@ def test_workspace_index_invalidates_persistent_cache_when_source_changes(tmp_pa
     assert documentation.summary == "Updated."
 
 
+def test_workspace_index_reuses_open_document_overlay_for_unchanged_source(monkeypatch) -> None:
+    index = WorkspaceIndex([], (), True)
+    uri = Path("/workspace/example.sage").as_uri()
+    source = "value = ZZ\nsqrt(4)\n"
+
+    first = index.parse_document(uri, source, "sagemath")
+
+    def _fail_parse(*args, **kwargs):
+        raise AssertionError("parse_module should not run again for an unchanged open document")
+
+    monkeypatch.setattr("sage_lsp.index.parse_module", _fail_parse)
+
+    second = index.parse_document(uri, source, "sagemath")
+
+    assert second is first
+
+
+def test_workspace_index_invalidates_open_document_overlay_when_source_changes(monkeypatch) -> None:
+    index = WorkspaceIndex([], (), True)
+    uri = Path("/workspace/example.sage").as_uri()
+    first_source = "value = ZZ\n"
+    second_source = "result = QQ\n"
+
+    index.parse_document(uri, first_source, "sagemath")
+
+    observed_sources: list[str] = []
+    original_parse_module = parse_module
+
+    def _track_parse(*args, **kwargs):
+        observed_sources.append(args[2])
+        return original_parse_module(*args, **kwargs)
+
+    monkeypatch.setattr("sage_lsp.index.parse_module", _track_parse)
+
+    updated = index.parse_document(uri, second_source, "sagemath")
+
+    assert second_source in observed_sources
+    assert "result" in updated.symbols
+    assert "value" not in updated.symbols
+
+
 def test_workspace_index_diagnostics_report_unresolved_imports() -> None:
     index = WorkspaceIndex([], (), True)
     record = parse_module(

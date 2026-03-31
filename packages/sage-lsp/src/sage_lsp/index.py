@@ -59,6 +59,7 @@ class WorkspaceIndex:
         self._module_paths: dict[Path, str] = {}
         self._resolved_symbol_cache: dict[tuple[str, str], Optional[SymbolRecord]] = {}
         self._resolved_member_cache: dict[tuple[str, str, str], Optional[SymbolRecord]] = {}
+        self._document_records: dict[str, tuple[str, str, ModuleRecord]] = {}
 
     @property
     def modules(self) -> dict[str, ModuleRecord]:
@@ -69,6 +70,7 @@ class WorkspaceIndex:
         self._module_paths.clear()
         self._resolved_symbol_cache.clear()
         self._resolved_member_cache.clear()
+        self._document_records.clear()
         cache_entries = self._load_cached_entries()
         next_cache_entries: dict[str, dict[str, object]] = {}
         for root in self._source_roots:
@@ -121,6 +123,12 @@ class WorkspaceIndex:
         source: str,
         language_id: str,
     ) -> ModuleRecord:
+        cached_document = self._document_records.get(uri)
+        if cached_document is not None:
+            cached_language_id, cached_source, cached_record = cached_document
+            if cached_language_id == language_id and cached_source == source:
+                return cached_record
+
         path = path_from_uri(uri)
         module_name = self._module_paths.get(path.resolve(), f"document::{path.stem}")
         record = parse_module(module_name, path, source)
@@ -128,7 +136,11 @@ class WorkspaceIndex:
             for candidate in ("sage.all_cmdline", "sage.all"):
                 if candidate in self._modules and candidate not in record.star_imports:
                     record.star_imports.append(candidate)
+        self._document_records[uri] = (language_id, source, record)
         return record
+
+    def drop_document(self, uri: str) -> None:
+        self._document_records.pop(uri, None)
 
     def resolve_symbol(self, record: ModuleRecord, name: str) -> Optional[SymbolRecord]:
         cache_key = self._symbol_cache_key(record, name)

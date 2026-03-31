@@ -8,6 +8,7 @@ from lsprotocol.types import (
     CompletionList,
     CompletionItem,
     CompletionParams,
+    DidCloseTextDocumentParams,
     Diagnostic,
     DiagnosticSeverity,
     DidChangeTextDocumentParams,
@@ -394,13 +395,39 @@ def create_server() -> SageLanguageServer:
 
     @server.feature("textDocument/didOpen")
     def on_did_open(params: DidOpenTextDocumentParams) -> None:
+        if server.workspace_index is not None:
+            server.workspace_index.parse_document(
+                params.text_document.uri,
+                params.text_document.text,
+                params.text_document.language_id,
+            )
         _publish_diagnostics(server, params.text_document.uri)
         _prewarm_request_caches(server, params.text_document.uri)
 
     @server.feature("textDocument/didChange")
     def on_did_change(params: DidChangeTextDocumentParams) -> None:
+        if server.workspace_index is not None:
+            try:
+                document = server.workspace.get_text_document(params.text_document.uri)
+            except KeyError:
+                document = None
+            if document is not None:
+                server.workspace_index.parse_document(
+                    params.text_document.uri,
+                    document.source,
+                    getattr(document, "language_id", "python"),
+                )
         _publish_diagnostics(server, params.text_document.uri)
         _clear_request_caches(server, params.text_document.uri)
+
+    @server.feature("textDocument/didClose")
+    def on_did_close(params: DidCloseTextDocumentParams) -> None:
+        if server.workspace_index is not None:
+            server.workspace_index.drop_document(params.text_document.uri)
+        _clear_request_caches(server, params.text_document.uri)
+        server.text_document_publish_diagnostics(
+            PublishDiagnosticsParams(uri=params.text_document.uri, diagnostics=[])
+        )
 
     @server.feature("sage/getDocumentation")
     def on_get_documentation(params: Dict[str, Any]) -> Optional[dict[str, object]]:
