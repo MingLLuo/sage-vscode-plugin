@@ -142,7 +142,7 @@ of coloring almost everything as one generic support token.
 - Task ID: EXT-011
 - Scope: extension
 - Related milestone: Developer workflow
-- Commit: `pending`
+- Commit: `edb8aaf`
 
 ### Goal
 
@@ -181,7 +181,7 @@ runtime path and a language-server Python host separately.
 - Task ID: LSP-020
 - Scope: lsp
 - Related milestone: Runtime hardening
-- Commit: `pending`
+- Commit: `d054bd5`
 
 ### Goal
 
@@ -220,7 +220,7 @@ feeding the runtime probe enough import roots to see source plus compiled native
 - Task ID: SYN-005
 - Scope: syntax
 - Related milestone: Native source support
-- Commit: `pending`
+- Commit: `f8a6f8d`
 
 ### Goal
 
@@ -260,7 +260,7 @@ helpers, decorators, namespaces, and factory patterns in addition to broad mathe
 - Task ID: LSP-021
 - Scope: lsp
 - Related milestone: LSP baseline
-- Commit: `pending`
+- Commit: `b010904`
 
 ### Goal
 
