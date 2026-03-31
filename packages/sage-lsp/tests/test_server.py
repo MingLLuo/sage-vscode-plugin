@@ -183,6 +183,102 @@ def test_server_hover_omits_docstring_when_hover_docs_disabled() -> None:
     assert hover.contents.value == "function sqrt"
 
 
+def test_server_prewarms_runtime_documentation_for_open_documents() -> None:
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": []},
+            "analysis": {
+                "enablePyxParsing": True,
+                "enableRuntimeIntrospection": True,
+            },
+        }
+    )
+    uri = Path("/workspace/runtime_prewarm.sage").as_uri()
+    source = "R = PolynomialRing(QQ, 2)\nE = EllipticCurve([0, 0, 1, -1, 0])\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    requested_names: list[str] = []
+
+    def _lookup(name: str) -> RuntimeSymbolResult:
+        requested_names.append(name)
+        return RuntimeSymbolResult(
+            name=name,
+            kind="function",
+            detail=f"{name}(*args, **kwds)",
+            module_name=f"sage.runtime.{name}",
+            docstring=f"Runtime docs for {name}.",
+            file_path=Path(f"/runtime/{name}.py"),
+            line=12,
+        )
+
+    server.runtime_introspector.lookup = _lookup  # type: ignore[method-assign]
+
+    did_open_handler = server.protocol.fm.features["textDocument/didOpen"]
+    did_open_handler(
+        DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+        )
+    )
+
+    assert requested_names == ["PolynomialRing", "EllipticCurve"]
+    assert (uri, "PolynomialRing", "PolynomialRing") in server.documentation_cache
+    assert (uri, "EllipticCurve", "EllipticCurve") in server.documentation_cache
+
+
+def test_server_hover_uses_prewarmed_documentation_cache() -> None:
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": []},
+            "analysis": {
+                "enablePyxParsing": True,
+                "enableRuntimeIntrospection": True,
+            },
+        }
+    )
+    uri = Path("/workspace/runtime_cache_hover.sage").as_uri()
+    source = "PolynomialRing(QQ, 2)\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    requested_names: list[str] = []
+
+    def _lookup(name: str) -> RuntimeSymbolResult:
+        requested_names.append(name)
+        return RuntimeSymbolResult(
+            name=name,
+            kind="function",
+            detail=f"{name}(*args, **kwds)",
+            module_name=f"sage.runtime.{name}",
+            docstring=f"Runtime docs for {name}.",
+            file_path=Path(f"/runtime/{name}.py"),
+            line=12,
+        )
+
+    server.runtime_introspector.lookup = _lookup  # type: ignore[method-assign]
+
+    did_open_handler = server.protocol.fm.features["textDocument/didOpen"]
+    did_open_handler(
+        DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+        )
+    )
+
+    hover_handler = server.protocol.fm.features["textDocument/hover"]
+    hover = hover_handler(
+        HoverParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=0, character=2),
+        )
+    )
+
+    assert hover is not None
+    assert "Runtime docs for PolynomialRing." in hover.contents.value
+    assert requested_names == ["PolynomialRing"]
+
+
 def test_merge_documentation_with_runtime_prefers_runtime_signature_and_static_source() -> None:
     merged = _merge_documentation_with_runtime(
         DocumentationResult(

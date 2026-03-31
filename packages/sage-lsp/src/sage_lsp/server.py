@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 from typing import Any, Dict, Optional, Tuple
 
 from lsprotocol.types import (
@@ -51,6 +52,11 @@ class SageLanguageServer(LanguageServer):
         self.environment = SageEnvironment()
         self.workspace_index: Optional[WorkspaceIndex] = None
         self.runtime_introspector = RuntimeIntrospector(command=None, enabled=False)
+        self.documentation_cache: dict[tuple[str, str, str], DocumentationResult] = {}
+
+
+PREWARM_CALL_RE = re.compile(r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\(")
+MAX_PREWARM_SYMBOLS = 8
 
 
 def create_server() -> SageLanguageServer:
@@ -95,6 +101,7 @@ def create_server() -> SageLanguageServer:
             resolved["record"],
             str(resolved.get("static_name") or resolved["name"]),
             str(resolved.get("runtime_name") or resolved["name"]),
+            uri=params.text_document.uri,
         )
         if documentation is None:
             return None
@@ -238,6 +245,7 @@ def create_server() -> SageLanguageServer:
     @server.feature("textDocument/didOpen")
     def on_did_open(params: DidOpenTextDocumentParams) -> None:
         _publish_diagnostics(server, params.text_document.uri)
+        _prewarm_documentation_cache(server, params.text_document.uri)
 
     @server.feature("textDocument/didChange")
     def on_did_change(params: DidChangeTextDocumentParams) -> None:
@@ -271,7 +279,7 @@ def create_server() -> SageLanguageServer:
             if name is None:
                 return None
 
-        documentation = _documentation_for_request(server, record, name, runtime_name or name)
+        documentation = _documentation_for_request(server, record, name, runtime_name or name, uri=uri)
         return documentation.to_payload() if documentation is not None else None
 
     return server
@@ -335,12 +343,27 @@ def _publish_diagnostics(server: SageLanguageServer, uri: str) -> None:
     )
 
 
+def _prewarm_documentation_cache(server: SageLanguageServer, uri: str) -> None:
+    _clear_documentation_cache(server, uri)
+    record, text = _record_for_uri(server, uri)
+    if record is None:
+        return
+
+    for static_name, runtime_name in _documentation_prewarm_candidates(record, text or record.source):
+        _documentation_for_request(server, record, static_name, runtime_name, uri=uri)
+
+
 def _documentation_for_request(
     server: SageLanguageServer,
     record: ModuleRecord,
     name: str,
     runtime_name: Optional[str] = None,
+    uri: Optional[str] = None,
 ) -> Optional[DocumentationResult]:
+    cache_key = _documentation_cache_key(uri, name, runtime_name)
+    if cache_key is not None and cache_key in server.documentation_cache:
+        return server.documentation_cache[cache_key]
+
     documentation = (
         server.workspace_index.documentation_for_symbol(record, name)
         if server.workspace_index is not None
@@ -350,10 +373,18 @@ def _documentation_for_request(
     if documentation is None:
         if runtime_symbol is None:
             return None
-        return _documentation_from_runtime_symbol(runtime_symbol)
+        result = _documentation_from_runtime_symbol(runtime_symbol)
+        if cache_key is not None:
+            server.documentation_cache[cache_key] = result
+        return result
     if runtime_symbol is None:
+        if cache_key is not None:
+            server.documentation_cache[cache_key] = documentation
         return documentation
-    return _merge_documentation_with_runtime(documentation, runtime_symbol)
+    result = _merge_documentation_with_runtime(documentation, runtime_symbol)
+    if cache_key is not None:
+        server.documentation_cache[cache_key] = result
+    return result
 
 
 def _documentation_from_runtime_symbol(symbol: RuntimeSymbolResult) -> DocumentationResult:
@@ -503,6 +534,52 @@ def _resolve_request_symbol(
         "runtime_name": runtime_name,
         "range": source_range,
     }
+
+
+def _documentation_cache_key(
+    uri: Optional[str],
+    name: str,
+    runtime_name: Optional[str],
+) -> Optional[tuple[str, str, str]]:
+    if uri is None:
+        return None
+    return (uri, name, runtime_name or name)
+
+
+def _clear_documentation_cache(server: SageLanguageServer, uri: str) -> None:
+    stale_keys = [key for key in server.documentation_cache if key[0] == uri]
+    for key in stale_keys:
+        server.documentation_cache.pop(key, None)
+
+
+def _documentation_prewarm_candidates(
+    record: ModuleRecord,
+    text: str,
+) -> list[tuple[str, str]]:
+    candidates: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(static_name: str, runtime_name: Optional[str] = None) -> None:
+        candidate = (static_name, runtime_name or static_name)
+        if candidate in seen:
+            return
+        seen.add(candidate)
+        candidates.append(candidate)
+
+    for name, symbol in sorted(record.symbols.items()):
+        if symbol.kind in {"function", "class"} and not name.startswith("_"):
+            add(name)
+        if len(candidates) >= MAX_PREWARM_SYMBOLS:
+            return candidates
+
+    for match in PREWARM_CALL_RE.finditer(text):
+        raw_name = match.group("name")
+        static_name = raw_name if "." in raw_name else raw_name
+        add(static_name, raw_name)
+        if len(candidates) >= MAX_PREWARM_SYMBOLS:
+            break
+
+    return candidates
 
 
 def symbol_at_position(
