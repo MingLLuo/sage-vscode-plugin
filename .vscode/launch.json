@@ -14,6 +14,20 @@
         "${workspaceFolder}/packages/extension-core/out/**/*.js"
       ],
       "preLaunchTask": "build"
+    },
+    {
+      "name": "Sage Plugin: Smoke Workspace",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/extension-core",
+        "${workspaceFolder}/examples/manual-smoke-workspace"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/packages/extension-core/out/**/*.js"
+      ],
+      "preLaunchTask": "build"
     }
   ]
 }

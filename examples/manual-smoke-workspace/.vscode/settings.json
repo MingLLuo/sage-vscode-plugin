@@ -1,0 +1,11 @@
+{
+  "sage.analysis.sourceRoots": [
+    "src"
+  ],
+  "sage.analysis.extraPaths": [
+    "vendor"
+  ],
+  "sage.analysis.enablePyxParsing": true,
+  "sage.run.target": "repl",
+  "sage.docs.showOnHover": true
+}
