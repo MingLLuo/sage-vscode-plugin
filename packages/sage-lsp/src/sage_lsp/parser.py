@@ -3,9 +3,9 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from .model import ImportBinding, ModuleRecord, SourceRange, SymbolRecord
+from .model import ImportBinding, ModuleRecord, SourcePosition, SourceRange, SymbolRecord
 from .source_map import preprocess_sage_source
 
 
@@ -32,16 +32,41 @@ def parse_module(module_name: str, file_path: Path, source: str) -> ModuleRecord
     if file_path.suffix in {".pyx", ".pxd", ".pxi"}:
         return parse_pyx_module(module_name, file_path, source)
     if file_path.suffix == ".sage":
-        record = parse_loose_module(module_name, file_path, source)
-        record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source))
-        return record
+        return parse_sage_module(module_name, file_path, source)
     return parse_python_module(module_name, file_path, source)
 
 
-def parse_python_module(module_name: str, file_path: Path, source: str) -> ModuleRecord:
+def parse_sage_module(module_name: str, file_path: Path, source: str) -> ModuleRecord:
+    if _has_preparser_assignment(source):
+        record = parse_loose_module(module_name, file_path, source)
+        record.language = "sage"
+        record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source))
+        return record
+
+    preprocessed = preprocess_sage_source(source)
+    record = parse_python_module(
+        module_name,
+        file_path,
+        source,
+        parsed_source=preprocessed.generated_text,
+        position_mapper=_generated_to_source_mapper(preprocessed),
+    )
+    record.language = "sage"
+    record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source))
+    return record
+
+
+def parse_python_module(
+    module_name: str,
+    file_path: Path,
+    source: str,
+    parsed_source: Optional[str] = None,
+    position_mapper: Optional[Callable[[int, int], tuple[int, int]]] = None,
+) -> ModuleRecord:
     record = ModuleRecord(module_name=module_name, file_path=file_path, language="python", source=source)
+    parse_target = parsed_source if parsed_source is not None else source
     try:
-        tree = ast.parse(source, filename=str(file_path))
+        tree = ast.parse(parse_target, filename=str(file_path))
     except SyntaxError as error:
         record = parse_loose_module(module_name, file_path, source)
         record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source, syntax_error=error))
@@ -56,7 +81,7 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                 kind="function",
                 module_name=module_name,
                 file_path=file_path,
-                source_range=node_range(node),
+                source_range=node_range(node, position_mapper),
                 detail=f"function {node.name}",
                 docstring=ast.get_docstring(node),
             )
@@ -68,11 +93,11 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                 kind="class",
                 module_name=module_name,
                 file_path=file_path,
-                source_range=node_range(node),
+                source_range=node_range(node, position_mapper),
                 detail=f"class {node.name}",
                 docstring=ast.get_docstring(node),
             )
-            _collect_class_members(record, module_name, file_path, node)
+            _collect_class_members(record, module_name, file_path, node, position_mapper)
             continue
 
         if isinstance(node, ast.Assign):
@@ -83,7 +108,7 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                         kind="constant" if target.id.isupper() else "variable",
                         module_name=module_name,
                         file_path=file_path,
-                        source_range=node_range(target),
+                        source_range=node_range(target, position_mapper),
                         detail=f"variable {target.id}",
                     )
                     instance_type = class_instance_target(record, node.value)
@@ -98,7 +123,7 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                 kind="constant" if target.id.isupper() else "variable",
                 module_name=module_name,
                 file_path=file_path,
-                source_range=node_range(target),
+                source_range=node_range(target, position_mapper),
                 detail=f"variable {target.id}",
             )
             instance_type = class_instance_target(record, node.value)
@@ -119,7 +144,7 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                     alias=imported_name,
                     module_name=imported_module,
                     target_name=alias.name,
-                    source_range=node_range(node),
+                    source_range=node_range(node, position_mapper),
                 )
             continue
 
@@ -130,11 +155,11 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                     alias=imported_name,
                     module_name=alias.name,
                     target_name=None,
-                    source_range=node_range(node),
+                    source_range=node_range(node, position_mapper),
                 )
             continue
 
-        binding = parse_lazy_import_statement(module_name, node)
+        binding = parse_lazy_import_statement(module_name, node, position_mapper)
         if binding:
             for item in binding:
                 record.bindings[item.alias] = item
@@ -147,6 +172,7 @@ def _collect_class_members(
     module_name: str,
     file_path: Path,
     node: ast.ClassDef,
+    position_mapper: Optional[Callable[[int, int], tuple[int, int]]] = None,
 ) -> None:
     owner_name = node.name
     member_symbols = record.member_symbols.setdefault(owner_name, {})
@@ -166,7 +192,7 @@ def _collect_class_members(
                     alias=imported_name,
                     module_name=imported_module,
                     target_name=alias.name,
-                    source_range=node_range(item),
+                    source_range=node_range(item, position_mapper),
                 )
             continue
 
@@ -177,7 +203,7 @@ def _collect_class_members(
                     alias=imported_name,
                     module_name=alias.name,
                     target_name=None,
-                    source_range=node_range(item),
+                    source_range=node_range(item, position_mapper),
                 )
             continue
 
@@ -187,7 +213,7 @@ def _collect_class_members(
                 kind="function",
                 module_name=module_name,
                 file_path=file_path,
-                source_range=node_range(item),
+                source_range=node_range(item, position_mapper),
                 detail=f"function {owner_name}.{item.name}",
                 docstring=ast.get_docstring(item),
             )
@@ -202,7 +228,7 @@ def _collect_class_members(
                     module_name,
                     target.id,
                     item.value,
-                    node_range(target),
+                    node_range(target, position_mapper),
                     class_bindings,
                 )
                 if binding is not None:
@@ -228,7 +254,7 @@ def _collect_class_members(
                 module_name,
                 target.id,
                 item.value,
-                node_range(target),
+                node_range(target, position_mapper),
                 class_bindings,
             )
             if binding is not None:
@@ -632,7 +658,11 @@ def parse_cython_symbol_line(line: str) -> tuple[Optional[str], Optional[str]]:
     return None, None
 
 
-def parse_lazy_import_statement(module_name: str, node: ast.stmt) -> list[ImportBinding]:
+def parse_lazy_import_statement(
+    module_name: str,
+    node: ast.stmt,
+    position_mapper: Optional[Callable[[int, int], tuple[int, int]]] = None,
+) -> list[ImportBinding]:
     if not isinstance(node, ast.Expr) or not isinstance(node.value, ast.Call):
         return []
     call = node.value
@@ -663,7 +693,7 @@ def parse_lazy_import_statement(module_name: str, node: ast.stmt) -> list[Import
                 alias=alias,
                 module_name=imported_module,
                 target_name=name,
-                source_range=node_range(node),
+                source_range=node_range(node, position_mapper),
                 is_lazy=True,
             )
         )
@@ -742,9 +772,34 @@ def resolve_imported_module(module_name: str, raw_module: Optional[str], level: 
     return ".".join(piece for piece in pieces if piece) or None
 
 
-def node_range(node: ast.AST) -> SourceRange:
+def node_range(
+    node: ast.AST,
+    position_mapper: Optional[Callable[[int, int], tuple[int, int]]] = None,
+) -> SourceRange:
     line = getattr(node, "lineno", 1)
     end_line = getattr(node, "end_lineno", line)
     column = getattr(node, "col_offset", 0)
     end_column = getattr(node, "end_col_offset", column)
-    return SourceRange.from_offsets(line, column, end_line, end_column)
+    if position_mapper is None:
+        return SourceRange.from_offsets(line, column, end_line, end_column)
+
+    start_line, start_character = position_mapper(max(line - 1, 0), column)
+    mapped_end_line, mapped_end_character = position_mapper(max(end_line - 1, 0), end_column)
+    return SourceRange(
+        start=SourcePosition(line=max(start_line, 0), character=max(start_character, 0)),
+        end=SourcePosition(line=max(mapped_end_line, 0), character=max(mapped_end_character, 0)),
+    )
+
+
+def _has_preparser_assignment(source: str) -> bool:
+    return any(LOOSE_PREPARSE_ASSIGN_RE.match(line.strip()) for line in source.splitlines())
+
+
+def _generated_to_source_mapper(
+    document,
+) -> Callable[[int, int], tuple[int, int]]:
+    def _map(line: int, character: int) -> tuple[int, int]:
+        position = document.map_generated_to_source(line, character)
+        return position.line, position.character
+
+    return _map

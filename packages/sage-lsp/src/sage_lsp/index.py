@@ -44,6 +44,8 @@ class WorkspaceIndex:
         self._enable_pyx = enable_pyx
         self._modules: dict[str, ModuleRecord] = {}
         self._module_paths: dict[Path, str] = {}
+        self._resolved_symbol_cache: dict[tuple[str, str], Optional[SymbolRecord]] = {}
+        self._resolved_member_cache: dict[tuple[str, str, str], Optional[SymbolRecord]] = {}
 
     @property
     def modules(self) -> dict[str, ModuleRecord]:
@@ -52,15 +54,17 @@ class WorkspaceIndex:
     def build(self) -> None:
         self._modules.clear()
         self._module_paths.clear()
+        self._resolved_symbol_cache.clear()
+        self._resolved_member_cache.clear()
         for root in self._source_roots:
             if not root.exists():
                 continue
             for path in root.rglob("*"):
                 if not path.is_file():
                     continue
-                if path.suffix not in {".py", ".pyx", ".pxd"}:
+                if path.suffix not in {".py", ".sage", ".pyx", ".pxd", ".pxi"}:
                     continue
-                if path.suffix in {".pyx", ".pxd"} and not self._enable_pyx:
+                if path.suffix in {".pyx", ".pxd", ".pxi"} and not self._enable_pyx:
                     continue
                 if self._is_excluded(root, path):
                     continue
@@ -95,7 +99,14 @@ class WorkspaceIndex:
         return record
 
     def resolve_symbol(self, record: ModuleRecord, name: str) -> Optional[SymbolRecord]:
-        return self._resolve_symbol(record, name, visited=set())
+        cache_key = self._symbol_cache_key(record, name)
+        if cache_key is not None and cache_key in self._resolved_symbol_cache:
+            return self._resolved_symbol_cache[cache_key]
+
+        resolved = self._resolve_symbol(record, name, visited=set())
+        if cache_key is not None:
+            self._resolved_symbol_cache[cache_key] = resolved
+        return resolved
 
     def exported_symbols(self, module_name: str) -> dict[str, SymbolRecord]:
         record = self._modules.get(module_name)
@@ -448,21 +459,36 @@ class WorkspaceIndex:
         attribute: str,
         visited: set[tuple[str, str]],
     ) -> Optional[SymbolRecord]:
+        cache_key = self._member_cache_key(record, owner_name, attribute)
+        if cache_key is not None and cache_key in self._resolved_member_cache:
+            return self._resolved_member_cache[cache_key]
+
         direct_symbol = record.member_symbols.get(owner_name, {}).get(attribute)
         if direct_symbol is not None:
+            if cache_key is not None:
+                self._resolved_member_cache[cache_key] = direct_symbol
             return direct_symbol
 
         binding = record.member_bindings.get(owner_name, {}).get(attribute)
         if binding is None:
+            if cache_key is not None:
+                self._resolved_member_cache[cache_key] = None
             return None
 
         resolved = self._resolve_binding(binding, visited)
         if resolved is not None:
+            if cache_key is not None:
+                self._resolved_member_cache[cache_key] = resolved
             return resolved
         target_record = self._modules.get(binding.module_name)
         if target_record is None:
+            if cache_key is not None:
+                self._resolved_member_cache[cache_key] = None
             return None
-        return self._symbol_from_module_binding(binding, target_record)
+        result = self._symbol_from_module_binding(binding, target_record)
+        if cache_key is not None:
+            self._resolved_member_cache[cache_key] = result
+        return result
 
     def _resolved_member_symbols(self, record: ModuleRecord, owner_name: str) -> dict[str, SymbolRecord]:
         members: dict[str, SymbolRecord] = dict(record.member_symbols.get(owner_name, {}))
@@ -562,6 +588,27 @@ class WorkspaceIndex:
             }
             for source_range in iter_identifier_ranges(record.source, name)
         ]
+
+    def _symbol_cache_key(self, record: ModuleRecord, name: str) -> Optional[tuple[str, str]]:
+        cached_record = self._modules.get(record.module_name)
+        if cached_record is None:
+            return None
+        if cached_record.source != record.source or cached_record.file_path.resolve() != record.file_path.resolve():
+            return None
+        return (record.module_name, name)
+
+    def _member_cache_key(
+        self,
+        record: ModuleRecord,
+        owner_name: str,
+        attribute: str,
+    ) -> Optional[tuple[str, str, str]]:
+        cached_record = self._modules.get(record.module_name)
+        if cached_record is None:
+            return None
+        if cached_record.source != record.source or cached_record.file_path.resolve() != record.file_path.resolve():
+            return None
+        return (record.module_name, owner_name, attribute)
 
 
 def module_name_from_path(root: Path, path: Path) -> Optional[str]:

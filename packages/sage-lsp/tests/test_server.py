@@ -12,6 +12,7 @@ from lsprotocol.types import (
     ReferenceContext,
     ReferenceParams,
     RenameParams,
+    SemanticTokensParams,
     SignatureHelpParams,
     TextDocumentIdentifier,
     TextDocumentItem,
@@ -65,6 +66,70 @@ def test_server_imports_and_initializes_with_capabilities() -> None:
     assert server.workspace_index is not None
     assert "sage.all" in server.workspace_index.modules
     assert "workspace/didChangeConfiguration" in server.protocol.fm.features
+
+
+def test_server_declares_semantic_tokens_and_encodes_sage_structures() -> None:
+    server = create_server()
+    server.protocol._workspace = Workspace(  # noqa: SLF001 - intentional test setup
+        root_uri="file:///workspace",
+        sync_kind=TextDocumentSyncKind.Incremental,
+        workspace_folders=[WorkspaceFolder(uri="file:///workspace", name="workspace")],
+    )
+    initialize_handler = server.protocol.fm.features["initialize"]
+    initialize_result = initialize_handler(
+        InitializeParams(
+            process_id=1,
+            root_uri="file:///workspace",
+            capabilities=ClientCapabilities(),
+            workspace_folders=[WorkspaceFolder(uri="file:///workspace", name="workspace")],
+            initialization_options={
+                "workspace": {"sourceRoots": [str(FIXTURE_ROOT)]},
+                "analysis": {"enablePyxParsing": True},
+            },
+        )
+    )
+    uri = Path("/workspace/semantic_tokens.sage").as_uri()
+    source = (
+        "from sage.misc.cachefunc import cached_method\n"
+        "X = toric_varieties.P2()\n"
+        "R.<x, y> = PolynomialRing(QQ, 2)\n"
+        "class DemoFamily:\n"
+        "    @cached_method\n"
+        "    def invariant(self):\n"
+        "        return matrix(QQ, [[1]])\n"
+    )
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    semantic_provider = initialize_result.capabilities.semantic_tokens_provider
+    assert semantic_provider is not None
+    legend = semantic_provider.legend if hasattr(semantic_provider, "legend") else semantic_provider["legend"]  # type: ignore[index]
+    token_types = legend.token_types if hasattr(legend, "token_types") else legend["tokenTypes"]  # type: ignore[index]
+    token_modifiers = (
+        legend.token_modifiers if hasattr(legend, "token_modifiers") else legend["tokenModifiers"]  # type: ignore[index]
+    )
+    assert token_types
+
+    semantic_handler = server.protocol.fm.features["textDocument/semanticTokens/full"]
+    semantic_tokens = semantic_handler(
+        SemanticTokensParams(text_document=TextDocumentIdentifier(uri=uri))
+    )
+
+    decoded = decode_semantic_tokens(
+        semantic_tokens.data,
+        source,
+        token_types,
+        token_modifiers,
+    )
+
+    assert any(token["lexeme"] == "toric_varieties" and token["type"] == "namespace" for token in decoded)
+    assert any(token["lexeme"] == "PolynomialRing" and token["type"] == "type" for token in decoded)
+    assert any(token["lexeme"] == "QQ" and token["type"] == "variable" and "readonly" in token["modifiers"] for token in decoded)
+    assert any(token["lexeme"] == "cached_method" and token["type"] == "decorator" for token in decoded)
+    assert any(token["lexeme"] == "DemoFamily" and token["type"] == "class" and "declaration" in token["modifiers"] for token in decoded)
+    assert any(token["lexeme"] == "invariant" and token["type"] == "method" and "declaration" in token["modifiers"] for token in decoded)
+    assert any(token["lexeme"] == "x" and token["type"] == "parameter" and "declaration" in token["modifiers"] for token in decoded)
 
 
 def test_server_handlers_resolve_hover_definition_completion_and_documentation() -> None:
@@ -736,6 +801,40 @@ def test_server_signature_help_uses_runtime_fallback_for_dotted_calls() -> None:
     assert requested_names == ["graphs.PetersenGraph"]
     assert signature_help.signatures[0].label == "graphs.PetersenGraph(order=None, immutable=False)"
     assert signature_help.active_parameter == 1
+
+
+def decode_semantic_tokens(
+    data: list[int],
+    source: str,
+    token_types: list[str],
+    token_modifiers: list[str],
+) -> list[dict[str, object]]:
+    decoded: list[dict[str, object]] = []
+    current_line = 0
+    current_character = 0
+    lines = source.splitlines()
+
+    for index in range(0, len(data), 5):
+        delta_line, delta_character, length, token_type, modifier_mask = data[index:index + 5]
+        current_line += delta_line
+        current_character = current_character + delta_character if delta_line == 0 else delta_character
+        lexeme = lines[current_line][current_character:current_character + length]
+        modifiers = [
+            modifier
+            for bit, modifier in enumerate(token_modifiers)
+            if modifier_mask & (1 << bit)
+        ]
+        decoded.append(
+            {
+                "line": current_line,
+                "character": current_character,
+                "lexeme": lexeme,
+                "type": token_types[token_type],
+                "modifiers": modifiers,
+            }
+        )
+
+    return decoded
 
 
 def _write_module(root: Path, relative_path: str, contents: str) -> None:

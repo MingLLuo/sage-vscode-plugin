@@ -111,6 +111,28 @@ helper = factorial
     assert "helper" in record.symbols
 
 
+def test_parse_python_like_sage_module_uses_ast_path_and_tracks_members() -> None:
+    source = """
+from pkg.helpers import helper
+
+
+class Solver:
+    def compute(self, value):
+        return helper(value^2)
+
+
+result = Solver().compute(3)
+"""
+    record = parse_module("document::example", Path("example.sage"), source)
+
+    assert record.language == "sage"
+    assert "helper" in record.bindings
+    assert "Solver" in record.symbols
+    assert "result" in record.symbols
+    assert record.member_symbols["Solver"]["compute"].kind == "function"
+    assert record.diagnostics == []
+
+
 def test_parse_python_module_extracts_singleton_member_bindings() -> None:
     source = """
 class GraphGenerators:

@@ -32,6 +32,8 @@ from lsprotocol.types import (
     SignatureHelp,
     SignatureHelpParams,
     SignatureInformation,
+    SemanticTokens,
+    SemanticTokensParams,
     TextDocumentSyncKind,
     TextEdit,
     WorkspaceEdit,
@@ -41,7 +43,7 @@ from lsprotocol.types import (
 from pygls.lsp.server import LanguageServer
 
 from .environment import SageEnvironment
-from .index import DocumentationResult, WorkspaceIndex, path_from_uri, split_docstring
+from .index import DocumentationResult, WorkspaceIndex, iter_identifier_ranges, path_from_uri, split_docstring
 from .model import ModuleRecord
 from .runtime_introspection import RuntimeIntrospector, RuntimeSymbolResult
 
@@ -58,6 +60,150 @@ class SageLanguageServer(LanguageServer):
 
 PREWARM_CALL_RE = re.compile(r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\(")
 MAX_PREWARM_SYMBOLS = 8
+SEMANTIC_TOKEN_TYPES = [
+    "namespace",
+    "type",
+    "class",
+    "function",
+    "method",
+    "variable",
+    "parameter",
+    "keyword",
+    "decorator",
+]
+SEMANTIC_TOKEN_MODIFIERS = ["declaration", "readonly", "defaultLibrary"]
+SEMANTIC_TYPE_INDEX = {name: index for index, name in enumerate(SEMANTIC_TOKEN_TYPES)}
+SEMANTIC_MODIFIER_INDEX = {name: index for index, name in enumerate(SEMANTIC_TOKEN_MODIFIERS)}
+SEMANTIC_NAMESPACE_NAMES = {
+    "graphs",
+    "toric_varieties",
+    "simplicial_complexes",
+    "matroids",
+    "mq",
+    "interacts",
+    "plot3d",
+}
+SEMANTIC_READONLY_NAMES = {
+    "ZZ",
+    "QQ",
+    "RR",
+    "CC",
+    "SR",
+    "GF",
+    "QQbar",
+    "AA",
+    "CDF",
+    "RDF",
+    "IF",
+    "CIF",
+    "Integers",
+    "Rationals",
+    "ComplexField",
+    "RealField",
+    "FiniteField",
+    "pi",
+    "e",
+    "I",
+    "oo",
+    "Infinity",
+}
+SEMANTIC_TYPE_NAMES = {
+    "PolynomialRing",
+    "PowerSeriesRing",
+    "LaurentSeriesRing",
+    "FractionField",
+    "QuadraticField",
+    "CyclotomicField",
+    "NumberField",
+    "OrePolynomialRing",
+    "MatrixSpace",
+    "EllipticCurve",
+    "Graph",
+    "DiGraph",
+    "FreeModule",
+    "VectorSpace",
+    "SimplicialComplex",
+    "FilteredSimplicialComplex",
+    "ChowGroup",
+    "FreeAbelianMonoid",
+    "ToricVariety",
+    "Cone",
+    "Fan",
+    "Polyhedron",
+    "LatticePolytope",
+    "ToricPlotter",
+    "CPRFanoToricVariety",
+    "BooleanFunction",
+    "SBox",
+    "Partitions",
+    "Permutations",
+    "SymmetricGroup",
+    "Compositions",
+    "Combinations",
+    "Subsets",
+}
+SEMANTIC_FUNCTION_NAMES = {
+    "matrix",
+    "vector",
+    "identity_matrix",
+    "diagonal_matrix",
+    "block_matrix",
+    "random_matrix",
+    "var",
+    "function",
+    "factor",
+    "factorial",
+    "expand",
+    "simplify",
+    "integrate",
+    "diff",
+    "limit",
+    "solve",
+    "sqrt",
+    "sin",
+    "cos",
+    "tan",
+    "exp",
+    "log",
+    "plot",
+    "parametric_plot",
+    "implicit_plot",
+    "list_plot",
+    "line",
+    "point",
+    "circle",
+    "polygon",
+    "density_plot",
+    "text3d",
+    "sigma",
+    "euler_phi",
+    "next_prime",
+    "is_prime",
+    "cyclotomic_polynomial",
+    "lazy_import",
+    "lazy_attribute",
+    "cached_method",
+    "cached_function",
+    "cached_in_parent_method",
+    "cached_property",
+    "abstract_method",
+    "PetersenGraph",
+    "CompleteGraph",
+    "CycleGraph",
+    "PathGraph",
+}
+SEMANTIC_DECORATOR_RE = re.compile(r"^\s*@(?P<name>[A-Za-z_][A-Za-z0-9_\.]*)", re.MULTILINE)
+SEMANTIC_PREPARSE_RE = re.compile(
+    r"(?P<parent>\b[A-Za-z_][A-Za-z0-9_]*\b)\.\<(?P<symbols>[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)\>"
+)
+SEMANTIC_CLASS_DEF_RE = re.compile(
+    r"^(?P<indent>\s*)(?:class|cdef\s+class|cpdef\s+class)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
+    re.MULTILINE,
+)
+SEMANTIC_FUNCTION_DEF_RE = re.compile(
+    r"^(?P<indent>\s*)(?:async\s+def|def|cpdef|cdef)(?:\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed|long|short|char|int|float|double|void|object|bint|size_t|Py_ssize_t|[A-Za-z_][A-Za-z0-9_\.\*\[\]]*))*\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(",
+    re.MULTILINE,
+)
 
 
 def create_server() -> SageLanguageServer:
@@ -80,6 +226,13 @@ def create_server() -> SageLanguageServer:
                 workspace_symbol_provider=True,
                 signature_help_provider={"triggerCharacters": ["(", ","]},
                 completion_provider={"triggerCharacters": [".", "("], "resolveProvider": False},
+                semantic_tokens_provider={
+                    "legend": {
+                        "tokenTypes": SEMANTIC_TOKEN_TYPES,
+                        "tokenModifiers": SEMANTIC_TOKEN_MODIFIERS,
+                    },
+                    "full": True,
+                },
             ),
         )
 
@@ -175,6 +328,13 @@ def create_server() -> SageLanguageServer:
         if signature is None:
             return None
         return signature
+
+    @server.feature("textDocument/semanticTokens/full")
+    def on_semantic_tokens(params: SemanticTokensParams) -> SemanticTokens:
+        record, text = _record_for_uri(server, params.text_document.uri)
+        if record is None:
+            return SemanticTokens(data=[])
+        return SemanticTokens(data=_encode_semantic_tokens(record, text or record.source))
 
     @server.feature("textDocument/documentSymbol")
     def on_document_symbol(params: DocumentSymbolParams) -> list[dict[str, object]]:
@@ -523,6 +683,159 @@ def _signature_help_from_runtime_symbol(
         active_signature=0,
         active_parameter=clamped_active_parameter,
     )
+
+
+def _encode_semantic_tokens(record: ModuleRecord, text: str) -> list[int]:
+    tokens: list[tuple[int, int, int, int, int]] = []
+    seen: set[tuple[int, int, int]] = set()
+
+    def push(
+        line: int,
+        character: int,
+        length: int,
+        token_type: str,
+        modifiers: tuple[str, ...] = (),
+    ) -> None:
+        if length <= 0:
+            return
+        key = (line, character, length)
+        if key in seen:
+            return
+        seen.add(key)
+        tokens.append(
+            (
+                line,
+                character,
+                length,
+                SEMANTIC_TYPE_INDEX[token_type],
+                _semantic_modifier_mask(modifiers),
+            )
+        )
+
+    for match in SEMANTIC_PREPARSE_RE.finditer(text):
+        symbols_text = match.group("symbols")
+        symbols_start = match.start("symbols")
+        relative_offset = 0
+        for name in [item.strip() for item in symbols_text.split(",") if item.strip()]:
+            local_offset = symbols_text.find(name, relative_offset)
+            if local_offset < 0:
+                continue
+            start = _offset_to_position(text, symbols_start + local_offset)
+            push(start[0], start[1], len(name), "parameter", ("declaration",))
+            relative_offset = local_offset + len(name)
+
+    for match in SEMANTIC_CLASS_DEF_RE.finditer(text):
+        start = _offset_to_position(text, match.start("name"))
+        push(start[0], start[1], len(match.group("name")), "class", ("declaration",))
+
+    for match in SEMANTIC_FUNCTION_DEF_RE.finditer(text):
+        start = _offset_to_position(text, match.start("name"))
+        token_type = "method" if match.group("indent") else "function"
+        push(start[0], start[1], len(match.group("name")), token_type, ("declaration",))
+
+    for symbol in record.symbols.values():
+        token_type = _semantic_token_type_for_symbol_kind(symbol.kind)
+        if token_type is None:
+            continue
+        push(
+            symbol.source_range.start.line,
+            symbol.source_range.start.character,
+            len(symbol.name),
+            token_type,
+            ("declaration",),
+        )
+
+    for owner_symbols in record.member_symbols.values():
+        for symbol in owner_symbols.values():
+            token_type = _semantic_token_type_for_symbol_kind(symbol.kind, is_member=True)
+            if token_type is None:
+                continue
+            push(
+                symbol.source_range.start.line,
+                symbol.source_range.start.character,
+                len(symbol.name),
+                token_type,
+                ("declaration",),
+            )
+
+    for match in SEMANTIC_DECORATOR_RE.finditer(text):
+        start = _offset_to_position(text, match.start("name"))
+        push(start[0], start[1], len(match.group("name")), "decorator")
+
+    for name in SEMANTIC_NAMESPACE_NAMES:
+        for source_range in iter_identifier_ranges(text, name):
+            push(
+                source_range.start.line,
+                source_range.start.character,
+                len(name),
+                "namespace",
+                ("defaultLibrary",),
+            )
+
+    for name in SEMANTIC_READONLY_NAMES:
+        for source_range in iter_identifier_ranges(text, name):
+            push(
+                source_range.start.line,
+                source_range.start.character,
+                len(name),
+                "variable",
+                ("readonly", "defaultLibrary"),
+            )
+
+    for name in SEMANTIC_TYPE_NAMES:
+        for source_range in iter_identifier_ranges(text, name):
+            push(
+                source_range.start.line,
+                source_range.start.character,
+                len(name),
+                "type",
+                ("defaultLibrary",),
+            )
+
+    for name in SEMANTIC_FUNCTION_NAMES:
+        for source_range in iter_identifier_ranges(text, name):
+            push(
+                source_range.start.line,
+                source_range.start.character,
+                len(name),
+                "function",
+                ("defaultLibrary",),
+            )
+
+    encoded: list[int] = []
+    previous_line = 0
+    previous_character = 0
+    for line, character, length, token_type, modifier_mask in sorted(tokens):
+        delta_line = line - previous_line
+        delta_character = character - previous_character if delta_line == 0 else character
+        encoded.extend([delta_line, delta_character, length, token_type, modifier_mask])
+        previous_line = line
+        previous_character = character
+    return encoded
+
+
+def _semantic_modifier_mask(modifiers: tuple[str, ...]) -> int:
+    mask = 0
+    for modifier in modifiers:
+        mask |= 1 << SEMANTIC_MODIFIER_INDEX[modifier]
+    return mask
+
+
+def _semantic_token_type_for_symbol_kind(kind: str, is_member: bool = False) -> Optional[str]:
+    if kind == "class":
+        return "class"
+    if kind == "function":
+        return "method" if is_member else "function"
+    if kind in {"variable", "constant"}:
+        return "variable"
+    return None
+
+
+def _offset_to_position(text: str, offset: int) -> tuple[int, int]:
+    line = text.count("\n", 0, offset)
+    line_start = text.rfind("\n", 0, offset)
+    character = offset if line_start < 0 else offset - line_start - 1
+    return (line, character)
 
 
 def _as_completion_item(item: CompletionItem | dict[str, object]) -> CompletionItem:

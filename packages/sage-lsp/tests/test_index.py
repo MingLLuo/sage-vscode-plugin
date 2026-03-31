@@ -135,6 +135,32 @@ def test_workspace_index_workspace_symbols_and_references_follow_resolved_symbol
     assert any(uri.endswith("consumer.py") for uri in rename_edits)
 
 
+def test_workspace_index_builds_python_like_sage_modules_and_resolves_imports(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", 'def helper(value):\n    """Return a scaled helper value."""\n    return value * 2\n')
+    _write_module(
+        root,
+        "pkg/consumer.sage",
+        "from pkg.helpers import helper\n\nclass Solver:\n    def compute(self, value):\n        return helper(value^2)\n\nresult = helper(4)\n",
+    )
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    consumer = index.modules["pkg.consumer"]
+    helper = index.resolve_symbol(consumer, "helper")
+    documentation = index.documentation_for_symbol(consumer, "helper")
+    symbols = index.document_symbols(consumer)
+
+    assert helper is not None
+    assert helper.file_path.name == "helpers.py"
+    assert documentation is not None
+    assert documentation.summary == "Return a scaled helper value."
+    assert any(item["name"] == "Solver" for item in symbols)
+    assert any(item["name"] == "result" for item in symbols)
+
+
 def test_workspace_index_diagnostics_report_unresolved_imports() -> None:
     index = WorkspaceIndex([], (), True)
     record = parse_module(
