@@ -1,6 +1,7 @@
 const SERVER_RESTART_SECTIONS = [
   "sage.interpreter.path",
   "sage.interpreter.args",
+  "sage.languageServer",
   "sage.analysis",
   "sage.indexing",
   "sage.docs",

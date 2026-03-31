@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class SourcePosition:
     line: int
     character: int
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class SourceRange:
     start: SourcePosition
     end: SourcePosition
@@ -20,8 +21,8 @@ class SourceRange:
         cls,
         start_line: int,
         start_character: int,
-        end_line: int | None = None,
-        end_character: int | None = None,
+        end_line: Optional[int] = None,
+        end_character: Optional[int] = None,
     ) -> "SourceRange":
         final_end_line = start_line if end_line is None else end_line
         final_end_character = start_character if end_character is None else end_character
@@ -37,7 +38,7 @@ class SourceRange:
         }
 
 
-@dataclass(slots=True)
+@dataclass
 class SymbolRecord:
     name: str
     kind: str
@@ -45,7 +46,7 @@ class SymbolRecord:
     file_path: Path
     source_range: SourceRange
     detail: str = ""
-    docstring: str | None = None
+    docstring: Optional[str] = None
 
     def location(self) -> dict[str, object]:
         return {
@@ -61,22 +62,22 @@ class SymbolRecord:
         }
 
 
-@dataclass(slots=True)
+@dataclass
 class ImportBinding:
     alias: str
     module_name: str
-    target_name: str | None
+    target_name: Optional[str]
     source_range: SourceRange
     is_lazy: bool = False
 
 
-@dataclass(slots=True)
+@dataclass
 class ModuleRecord:
     module_name: str
     file_path: Path
     language: str
     source: str
-    docstring: str | None = None
+    docstring: Optional[str] = None
     symbols: dict[str, SymbolRecord] = field(default_factory=dict)
     bindings: dict[str, ImportBinding] = field(default_factory=dict)
     star_imports: list[str] = field(default_factory=list)

@@ -103,7 +103,7 @@
         "sage.interpreter.path": {
           "type": "string",
           "default": "sage",
-          "markdownDescription": "Path to the Sage executable used for running files and querying the language server."
+          "markdownDescription": "Path to the Sage executable used for running files and for Sage-aware runtime context."
         },
         "sage.interpreter.args": {
           "type": "array",
@@ -112,6 +112,19 @@
             "type": "string"
           },
           "markdownDescription": "Extra arguments passed to the Sage executable."
+        },
+        "sage.languageServer.pythonPath": {
+          "type": "string",
+          "default": "auto",
+          "markdownDescription": "Python executable used to run the language server. Use `auto` to prefer the selected interpreter when it is already a Python executable, otherwise fall back to the active Python environment."
+        },
+        "sage.languageServer.pythonArgs": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Extra arguments passed to the Python executable that runs the language server."
         },
         "sage.analysis.mode": {
           "type": "string",

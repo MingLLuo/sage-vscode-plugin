@@ -36,7 +36,15 @@ export function createLanguageClient(
     ...settings,
     extraPaths: resolvedExtraPaths,
   };
-  const launch = buildLanguageServerLaunch(settings.interpreterPath, settings.interpreterArgs);
+  const launch = buildLanguageServerLaunch({
+    interpreterPath: settings.interpreterPath,
+    interpreterArgs: settings.interpreterArgs,
+    languageServerPythonPath: settings.languageServerPythonPath,
+    languageServerPythonArgs: settings.languageServerPythonArgs,
+  });
+  outputChannel.appendLine(
+    `[info] starting language server with: ${launch.command} ${launch.args.join(" ")}`,
+  );
 
   const serverOptions: ServerOptions = {
     command: launch.command,

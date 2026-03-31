@@ -10,13 +10,13 @@ _TRIPLE_SINGLE = "triple_single"
 _TRIPLE_DOUBLE = "triple_double"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class MappedPosition:
     line: int
     character: int
 
 
-@dataclass(slots=True)
+@dataclass
 class LineMap:
     source_line: str
     generated_line: str
@@ -32,7 +32,7 @@ class LineMap:
         return self.generated_to_source[bounded]
 
 
-@dataclass(slots=True)
+@dataclass
 class PreprocessedDocument:
     original_text: str
     generated_text: str
@@ -240,4 +240,3 @@ def _split_lines(text: str) -> list[tuple[str, str]]:
         result.append(("", ""))
 
     return result
-

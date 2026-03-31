@@ -10,4 +10,5 @@ test("shouldRestartLanguageServer ignores run-target-only changes", () => {
 test("shouldRestartLanguageServer reacts to language-server-affecting settings", () => {
   assert.equal(shouldRestartLanguageServer((section) => section === "sage.analysis"), true);
   assert.equal(shouldRestartLanguageServer((section) => section === "sage.docs"), true);
+  assert.equal(shouldRestartLanguageServer((section) => section === "sage.languageServer"), true);
 });

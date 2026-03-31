@@ -4,25 +4,26 @@ import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
 import re
+from typing import Optional
 from urllib.parse import unquote, urlparse
 
 from .model import ImportBinding, ModuleRecord, SymbolRecord, document_symbol_kind
 from .parser import parse_module
 
 
-@dataclass(slots=True)
+@dataclass
 class DocumentationResult:
     name: str
     kind: str
     module_name: str
     uri: str
     detail: str
-    summary: str | None
-    docstring: str | None
+    summary: Optional[str]
+    docstring: Optional[str]
     markers: tuple[str, ...] = ()
     sections: tuple[dict[str, str], ...] = ()
 
-    def to_payload(self) -> dict[str, str | None]:
+    def to_payload(self) -> dict[str, Optional[str]]:
         return {
             "name": self.name,
             "kind": self.kind,
@@ -71,7 +72,7 @@ class WorkspaceIndex:
                 self._modules[module_name] = record
                 self._module_paths[path.resolve()] = module_name
 
-    def module_for_path(self, path: Path) -> ModuleRecord | None:
+    def module_for_path(self, path: Path) -> Optional[ModuleRecord]:
         module_name = self._module_paths.get(path.resolve())
         if module_name is None:
             return None
@@ -92,7 +93,7 @@ class WorkspaceIndex:
                     record.star_imports.append(candidate)
         return record
 
-    def resolve_symbol(self, record: ModuleRecord, name: str) -> SymbolRecord | None:
+    def resolve_symbol(self, record: ModuleRecord, name: str) -> Optional[SymbolRecord]:
         return self._resolve_symbol(record, name, visited=set())
 
     def exported_symbols(self, module_name: str) -> dict[str, SymbolRecord]:
@@ -133,7 +134,7 @@ class WorkspaceIndex:
             )
         return items
 
-    def documentation_for_symbol(self, record: ModuleRecord, name: str) -> DocumentationResult | None:
+    def documentation_for_symbol(self, record: ModuleRecord, name: str) -> Optional[DocumentationResult]:
         symbol = self.resolve_symbol(record, name)
         if symbol is None:
             return None
@@ -166,7 +167,7 @@ class WorkspaceIndex:
         record: ModuleRecord,
         name: str,
         visited: set[tuple[str, str]],
-    ) -> SymbolRecord | None:
+    ) -> Optional[SymbolRecord]:
         visit_key = (record.module_name, name)
         if visit_key in visited:
             return None
@@ -203,7 +204,7 @@ class WorkspaceIndex:
         self,
         binding: ImportBinding,
         visited: set[tuple[str, str]],
-    ) -> SymbolRecord | None:
+    ) -> Optional[SymbolRecord]:
         target_record = self._modules.get(binding.module_name)
         if target_record is None:
             return None
@@ -233,7 +234,7 @@ class WorkspaceIndex:
         )
 
 
-def module_name_from_path(root: Path, path: Path) -> str | None:
+def module_name_from_path(root: Path, path: Path) -> Optional[str]:
     relative = path.relative_to(root)
     if not relative.parts:
         return None
@@ -254,7 +255,7 @@ def path_from_uri(uri: str) -> Path:
     return Path(path_text)
 
 
-def first_paragraph(docstring: str | None) -> str | None:
+def first_paragraph(docstring: Optional[str]) -> Optional[str]:
     if not docstring:
         return None
     stripped = docstring.strip()
@@ -263,7 +264,7 @@ def first_paragraph(docstring: str | None) -> str | None:
     return stripped.split("\n\n", maxsplit=1)[0].strip()
 
 
-def split_docstring(docstring: str | None) -> tuple[str | None, tuple[dict[str, str], ...]]:
+def split_docstring(docstring: Optional[str]) -> tuple[Optional[str], tuple[dict[str, str], ...]]:
     if not docstring:
       return None, ()
     stripped = docstring.strip()

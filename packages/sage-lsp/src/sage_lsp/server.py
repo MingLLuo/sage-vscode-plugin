@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Optional, Tuple
 
 from lsprotocol.types import (
     CompletionList,
@@ -32,7 +32,7 @@ class SageLanguageServer(LanguageServer):
     def __init__(self) -> None:
         super().__init__("sage-lsp", "0.3.0")
         self.environment = SageEnvironment()
-        self.workspace_index: WorkspaceIndex | None = None
+        self.workspace_index: Optional[WorkspaceIndex] = None
 
 
 def create_server() -> SageLanguageServer:
@@ -59,7 +59,7 @@ def create_server() -> SageLanguageServer:
         del params
 
     @server.feature("textDocument/hover")
-    def on_hover(params: HoverParams) -> Hover | None:
+    def on_hover(params: HoverParams) -> Optional[Hover]:
         resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
         if resolved is None or server.workspace_index is None:
             return None
@@ -78,7 +78,7 @@ def create_server() -> SageLanguageServer:
         )
 
     @server.feature("textDocument/definition")
-    def on_definition(params: DefinitionParams) -> Location | None:
+    def on_definition(params: DefinitionParams) -> Optional[Location]:
         resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
         if resolved is None or server.workspace_index is None:
             return None
@@ -112,7 +112,7 @@ def create_server() -> SageLanguageServer:
         return server.workspace_index.document_symbols(record)
 
     @server.feature("sage/getDocumentation")
-    def on_get_documentation(params: dict[str, Any]) -> dict[str, object] | None:
+    def on_get_documentation(params: Dict[str, Any]) -> Optional[dict[str, object]]:
         if server.workspace_index is None:
             return None
 
@@ -158,7 +158,7 @@ def _rebuild_index(server: SageLanguageServer) -> None:
     server.workspace_index.build()
 
 
-def _record_for_uri(server: SageLanguageServer, uri: str) -> tuple[ModuleRecord | None, str | None]:
+def _record_for_uri(server: SageLanguageServer, uri: str) -> Tuple[Optional[ModuleRecord], Optional[str]]:
     if server.workspace_index is None:
         return None, None
 
@@ -179,7 +179,7 @@ def _resolve_request_symbol(
     server: SageLanguageServer,
     uri: str,
     position: Position,
-) -> dict[str, object] | None:
+) -> Optional[dict[str, object]]:
     record, text = _record_for_uri(server, uri)
     if record is None:
         return None
@@ -209,7 +209,7 @@ def current_prefix(text: str, line: int, character: int) -> str:
     return source_line[start:bounded_character]
 
 
-def word_at_position(text: str, line: int, character: int) -> tuple[str | None, Range | None]:
+def word_at_position(text: str, line: int, character: int) -> Tuple[Optional[str], Optional[Range]]:
     lines = text.splitlines()
     if line < 0 or line >= len(lines):
         return None, None

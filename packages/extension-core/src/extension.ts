@@ -61,9 +61,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await client.stop();
     }
 
-    client = createLanguageClient(context, languageOutputChannel);
-    await client.start();
-    outputChannel.appendLine("Sage language client started.");
+    try {
+      client = createLanguageClient(context, languageOutputChannel);
+      await client.start();
+      outputChannel.appendLine("Sage language client started.");
+    } catch (error) {
+      client = undefined;
+      const message = `Sage language server failed to start: ${String(error)}`;
+      outputChannel.appendLine(message);
+      void vscode.window.showErrorMessage(
+        `${message}. Check 'sage.languageServer.pythonPath' and the Sage output channels.`,
+      );
+    }
   };
 
   context.subscriptions.push(
@@ -81,7 +90,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const selection = await vscode.window.showInputBox({
         title: "Sage interpreter path",
         value: settings.interpreterPath,
-        prompt: "Enter the Sage executable used for language intelligence and execution.",
+        prompt: "Enter the Sage executable used for execution and Sage-aware runtime context.",
       });
 
       if (!selection) {

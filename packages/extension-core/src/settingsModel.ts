@@ -6,6 +6,8 @@ export type RunTarget = "terminal" | "repl";
 export interface SageSettings {
   interpreterPath: string;
   interpreterArgs: string[];
+  languageServerPythonPath: string;
+  languageServerPythonArgs: string[];
   analysisMode: AnalysisMode;
   extraPaths: string[];
   sourceRoots: string[];

@@ -7,7 +7,7 @@ name = "sage-lsp"
 version = "0.1.0"
 description = "pygls-based language server scaffold for Sage VS Code Plugin"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.9"
 dependencies = [
   "pygls>=1.3.1",
   "lsprotocol>=2023.0.1"
@@ -29,4 +29,3 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-

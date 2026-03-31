@@ -2,18 +2,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Optional
 
 
-@dataclass(slots=True)
+@dataclass
 class SageInterpreter:
     """Resolved Sage executable and its derived Python runtime."""
 
     sage_path: Path
-    python_path: Path | None = None
+    python_path: Optional[Path] = None
     args: tuple[str, ...] = ()
 
 
-@dataclass(slots=True)
+@dataclass
 class AnalysisSettings:
     """Server-side analysis configuration supplied by the editor client."""
 
@@ -25,17 +26,17 @@ class AnalysisSettings:
     stub_paths: tuple[str, ...] = ()
 
 
-@dataclass(slots=True)
+@dataclass
 class WorkspaceContext:
     """Initialization data that shapes indexing and symbol resolution."""
 
-    root_uri: str | None = None
+    root_uri: Optional[str] = None
     workspace_folders: tuple[str, ...] = ()
     source_roots: tuple[str, ...] = ()
     excluded_globs: tuple[str, ...] = ()
 
 
-@dataclass(slots=True)
+@dataclass
 class DocumentationSettings:
     """Documentation rendering preferences supplied by the editor client."""
 
@@ -43,25 +44,25 @@ class DocumentationSettings:
     show_on_hover: bool = True
 
 
-@dataclass(slots=True)
+@dataclass
 class LoggingSettings:
     """Logging preferences supplied by the editor client."""
 
     level: str = "info"
 
 
-@dataclass(slots=True)
+@dataclass
 class ExperimentalSettings:
     """Preview feature flags supplied by the editor client."""
 
     notebook_support: bool = False
 
 
-@dataclass(slots=True)
+@dataclass
 class SageEnvironment:
     """Top-level environment snapshot used by the LSP server."""
 
-    interpreter: SageInterpreter | None = None
+    interpreter: Optional[SageInterpreter] = None
     analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
     workspace: WorkspaceContext = field(default_factory=WorkspaceContext)
     documentation: DocumentationSettings = field(default_factory=DocumentationSettings)
@@ -69,11 +70,11 @@ class SageEnvironment:
     experimental: ExperimentalSettings = field(default_factory=ExperimentalSettings)
 
     @classmethod
-    def from_initialize_options(cls, options: dict[str, object] | None) -> "SageEnvironment":
+    def from_initialize_options(cls, options: Optional[dict[str, object]]) -> "SageEnvironment":
         if not options:
             return cls()
 
-        interpreter: SageInterpreter | None = None
+        interpreter: Optional[SageInterpreter] = None
         interpreter_config = options.get("interpreter")
         if isinstance(interpreter_config, dict):
             sage_path = interpreter_config.get("path")

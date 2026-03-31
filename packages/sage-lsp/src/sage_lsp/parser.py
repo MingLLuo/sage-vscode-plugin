@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import re
 from pathlib import Path
+from typing import Optional
 
 from .model import ImportBinding, ModuleRecord, SourceRange, SymbolRecord
 
@@ -339,7 +340,7 @@ def parse_lazy_import_line(line: str, line_number: int) -> list[ImportBinding]:
     return bindings
 
 
-def parse_string_or_list(value: ast.AST | None) -> list[str]:
+def parse_string_or_list(value: Optional[ast.AST]) -> list[str]:
     if isinstance(value, ast.Constant) and isinstance(value.value, str):
         return [value.value]
     if isinstance(value, (ast.List, ast.Tuple)):
@@ -351,7 +352,7 @@ def parse_string_or_list(value: ast.AST | None) -> list[str]:
     return []
 
 
-def parse_aliases(value: ast.AST | None) -> list[str]:
+def parse_aliases(value: Optional[ast.AST]) -> list[str]:
     return parse_string_or_list(value)
 
 
@@ -363,7 +364,7 @@ def is_lazy_import_call(call: ast.Call) -> bool:
     return False
 
 
-def resolve_imported_module(module_name: str, raw_module: str | None, level: int) -> str | None:
+def resolve_imported_module(module_name: str, raw_module: Optional[str], level: int) -> Optional[str]:
     if level == 0:
         return raw_module
 
