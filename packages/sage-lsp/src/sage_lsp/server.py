@@ -53,6 +53,7 @@ class SageLanguageServer(LanguageServer):
         self.workspace_index: Optional[WorkspaceIndex] = None
         self.runtime_introspector = RuntimeIntrospector(command=None, enabled=False)
         self.documentation_cache: dict[tuple[str, str, str], DocumentationResult] = {}
+        self.definition_cache: dict[tuple[str, str, str], Optional[Location]] = {}
 
 
 PREWARM_CALL_RE = re.compile(r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\(")
@@ -120,24 +121,13 @@ def create_server() -> SageLanguageServer:
         resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
         if resolved is None:
             return None
-
-        symbol = (
-            server.workspace_index.resolve_symbol(
-                resolved["record"],
-                str(resolved.get("static_name") or resolved["name"]),
-            )
-            if server.workspace_index is not None
-            else None
+        return _definition_for_request(
+            server,
+            resolved["record"],
+            str(resolved.get("static_name") or resolved["name"]),
+            str(resolved.get("runtime_name") or resolved["name"]),
+            uri=params.text_document.uri,
         )
-        if symbol is None:
-            runtime_symbol = server.runtime_introspector.lookup(
-                str(resolved.get("runtime_name") or resolved["name"])
-            )
-            if runtime_symbol is None or runtime_symbol.file_path is None:
-                return None
-            return _location_from_runtime_symbol(runtime_symbol)
-
-        return Location(uri=symbol.file_path.as_uri(), range=_as_lsp_range(symbol.source_range.to_lsp()))
 
     @server.feature("textDocument/completion")
     def on_completion(params: CompletionParams) -> CompletionList:
@@ -245,11 +235,12 @@ def create_server() -> SageLanguageServer:
     @server.feature("textDocument/didOpen")
     def on_did_open(params: DidOpenTextDocumentParams) -> None:
         _publish_diagnostics(server, params.text_document.uri)
-        _prewarm_documentation_cache(server, params.text_document.uri)
+        _prewarm_request_caches(server, params.text_document.uri)
 
     @server.feature("textDocument/didChange")
     def on_did_change(params: DidChangeTextDocumentParams) -> None:
         _publish_diagnostics(server, params.text_document.uri)
+        _clear_request_caches(server, params.text_document.uri)
 
     @server.feature("sage/getDocumentation")
     def on_get_documentation(params: Dict[str, Any]) -> Optional[dict[str, object]]:
@@ -343,14 +334,49 @@ def _publish_diagnostics(server: SageLanguageServer, uri: str) -> None:
     )
 
 
-def _prewarm_documentation_cache(server: SageLanguageServer, uri: str) -> None:
-    _clear_documentation_cache(server, uri)
+def _prewarm_request_caches(server: SageLanguageServer, uri: str) -> None:
+    _clear_request_caches(server, uri)
     record, text = _record_for_uri(server, uri)
     if record is None:
         return
 
     for static_name, runtime_name in _documentation_prewarm_candidates(record, text or record.source):
         _documentation_for_request(server, record, static_name, runtime_name, uri=uri)
+        _definition_for_request(server, record, static_name, runtime_name, uri=uri)
+
+
+def _definition_for_request(
+    server: SageLanguageServer,
+    record: ModuleRecord,
+    name: str,
+    runtime_name: Optional[str] = None,
+    uri: Optional[str] = None,
+) -> Optional[Location]:
+    cache_key = _request_cache_key(uri, name, runtime_name)
+    if cache_key is not None and cache_key in server.definition_cache:
+        return server.definition_cache[cache_key]
+
+    symbol = (
+        server.workspace_index.resolve_symbol(record, name)
+        if server.workspace_index is not None
+        else None
+    )
+    if symbol is not None:
+        result = Location(uri=symbol.file_path.as_uri(), range=_as_lsp_range(symbol.source_range.to_lsp()))
+        if cache_key is not None:
+            server.definition_cache[cache_key] = result
+        return result
+
+    runtime_symbol = server.runtime_introspector.lookup(runtime_name or name)
+    if runtime_symbol is None or runtime_symbol.file_path is None:
+        if cache_key is not None:
+            server.definition_cache[cache_key] = None
+        return None
+
+    result = _location_from_runtime_symbol(runtime_symbol)
+    if cache_key is not None:
+        server.definition_cache[cache_key] = result
+    return result
 
 
 def _documentation_for_request(
@@ -360,7 +386,7 @@ def _documentation_for_request(
     runtime_name: Optional[str] = None,
     uri: Optional[str] = None,
 ) -> Optional[DocumentationResult]:
-    cache_key = _documentation_cache_key(uri, name, runtime_name)
+    cache_key = _request_cache_key(uri, name, runtime_name)
     if cache_key is not None and cache_key in server.documentation_cache:
         return server.documentation_cache[cache_key]
 
@@ -536,7 +562,7 @@ def _resolve_request_symbol(
     }
 
 
-def _documentation_cache_key(
+def _request_cache_key(
     uri: Optional[str],
     name: str,
     runtime_name: Optional[str],
@@ -546,10 +572,13 @@ def _documentation_cache_key(
     return (uri, name, runtime_name or name)
 
 
-def _clear_documentation_cache(server: SageLanguageServer, uri: str) -> None:
+def _clear_request_caches(server: SageLanguageServer, uri: str) -> None:
     stale_keys = [key for key in server.documentation_cache if key[0] == uri]
     for key in stale_keys:
         server.documentation_cache.pop(key, None)
+    stale_definition_keys = [key for key in server.definition_cache if key[0] == uri]
+    for key in stale_definition_keys:
+        server.definition_cache.pop(key, None)
 
 
 def _documentation_prewarm_candidates(

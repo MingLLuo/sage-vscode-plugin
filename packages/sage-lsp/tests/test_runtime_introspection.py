@@ -1,6 +1,13 @@
 from pathlib import Path
 import subprocess
 
+from sage_lsp.environment import (
+    AnalysisSettings,
+    DocumentationSettings,
+    SageEnvironment,
+    SageInterpreter,
+    WorkspaceContext,
+)
 from sage_lsp.runtime_introspection import (
     RuntimeIntrospector,
     RuntimeSymbolResult,
@@ -89,3 +96,42 @@ def test_build_runtime_environment_uses_temp_home_and_dot_sage(tmp_path: Path) -
     assert environment["HOME"].endswith("sage-lsp-runtime-home")
     assert environment["DOT_SAGE"].endswith("sage-lsp-runtime-home/.sage")
     assert environment["XDG_CACHE_HOME"].endswith("sage-lsp-runtime-home/.cache")
+
+
+def test_build_runtime_environment_prepends_source_and_build_roots(tmp_path: Path) -> None:
+    source_root = tmp_path / "sage-checkout" / "src"
+    build_root = tmp_path / "sage-checkout" / "builddir-test" / "src"
+    (source_root / "sage").mkdir(parents=True)
+    (build_root / "sage").mkdir(parents=True)
+
+    environment = build_runtime_environment(
+        {"PYTHONPATH": "/existing/pythonpath"},
+        source_roots=(source_root,),
+    )
+
+    pythonpath_entries = environment["PYTHONPATH"].split(":")
+    assert str(source_root.resolve()) in pythonpath_entries
+    assert str(build_root.resolve()) in pythonpath_entries
+    assert pythonpath_entries[-1] == "/existing/pythonpath"
+
+
+def test_runtime_introspector_prefers_python_for_local_checkout_environment(tmp_path: Path) -> None:
+    runtime_root = tmp_path / "sage-checkout"
+    (runtime_root / "src" / "bin").mkdir(parents=True)
+    (runtime_root / "src" / "sage").mkdir(parents=True)
+    (runtime_root / "sage").write_text("#!/bin/sh\n", encoding="utf-8")
+
+    environment = SageEnvironment(
+        interpreter=SageInterpreter(
+            sage_path=runtime_root / "sage",
+            python_path=Path("/Users/example/miniforge3/envs/sage-dev/bin/python"),
+        ),
+        analysis=AnalysisSettings(enable_runtime_introspection=True),
+        workspace=WorkspaceContext(source_roots=(str(runtime_root / "src"),)),
+        documentation=DocumentationSettings(),
+    )
+
+    introspector = RuntimeIntrospector.from_environment(environment)
+
+    assert introspector._command == "/Users/example/miniforge3/envs/sage-dev/bin/python"  # noqa: SLF001
+    assert str(runtime_root / "src") in introspector._runtime_environment.get("PYTHONPATH", "")  # noqa: SLF001

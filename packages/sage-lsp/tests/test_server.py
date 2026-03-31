@@ -222,9 +222,11 @@ def test_server_prewarms_runtime_documentation_for_open_documents() -> None:
         )
     )
 
-    assert requested_names == ["PolynomialRing", "EllipticCurve"]
+    assert requested_names == ["PolynomialRing", "PolynomialRing", "EllipticCurve", "EllipticCurve"]
     assert (uri, "PolynomialRing", "PolynomialRing") in server.documentation_cache
     assert (uri, "EllipticCurve", "EllipticCurve") in server.documentation_cache
+    assert (uri, "PolynomialRing", "PolynomialRing") in server.definition_cache
+    assert (uri, "EllipticCurve", "EllipticCurve") in server.definition_cache
 
 
 def test_server_hover_uses_prewarmed_documentation_cache() -> None:
@@ -276,7 +278,59 @@ def test_server_hover_uses_prewarmed_documentation_cache() -> None:
 
     assert hover is not None
     assert "Runtime docs for PolynomialRing." in hover.contents.value
-    assert requested_names == ["PolynomialRing"]
+    assert requested_names == ["PolynomialRing", "PolynomialRing"]
+
+
+def test_server_definition_uses_prewarmed_definition_cache() -> None:
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": []},
+            "analysis": {
+                "enablePyxParsing": True,
+                "enableRuntimeIntrospection": True,
+            },
+        }
+    )
+    uri = Path("/workspace/runtime_cache_definition.sage").as_uri()
+    source = "PolynomialRing(QQ, 2)\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    requested_names: list[str] = []
+
+    def _lookup(name: str) -> RuntimeSymbolResult:
+        requested_names.append(name)
+        return RuntimeSymbolResult(
+            name=name,
+            kind="function",
+            detail=f"{name}(*args, **kwds)",
+            module_name=f"sage.runtime.{name}",
+            docstring=f"Runtime docs for {name}.",
+            file_path=Path(f"/runtime/{name}.py"),
+            line=12,
+        )
+
+    server.runtime_introspector.lookup = _lookup  # type: ignore[method-assign]
+
+    did_open_handler = server.protocol.fm.features["textDocument/didOpen"]
+    did_open_handler(
+        DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+        )
+    )
+
+    definition_handler = server.protocol.fm.features["textDocument/definition"]
+    definition = definition_handler(
+        DefinitionParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=0, character=2),
+        )
+    )
+
+    assert definition is not None
+    assert definition.uri.endswith("/runtime/PolynomialRing.py")
+    assert requested_names == ["PolynomialRing", "PolynomialRing"]
 
 
 def test_merge_documentation_with_runtime_prefers_runtime_signature_and_static_source() -> None:

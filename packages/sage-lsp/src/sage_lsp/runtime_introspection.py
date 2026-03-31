@@ -132,23 +132,32 @@ class RuntimeIntrospector:
         args: tuple[str, ...] = (),
         enabled: bool = False,
         timeout_seconds: int = 6,
+        source_roots: tuple[Path, ...] = (),
     ) -> None:
         self._command = command
         self._args = args
         self._enabled = enabled and bool(command)
         self._timeout_seconds = timeout_seconds
         self._cache: dict[str, Optional[RuntimeSymbolResult]] = {}
-        self._runtime_environment = build_runtime_environment()
+        self._runtime_environment = build_runtime_environment(source_roots=source_roots)
 
     @classmethod
     def from_environment(cls, environment: SageEnvironment) -> "RuntimeIntrospector":
         interpreter = environment.interpreter
         if interpreter is None:
             return cls(command=None, enabled=False)
+        source_roots = tuple(Path(value) for value in environment.workspace.source_roots if value)
+        if interpreter.python_path is not None and looks_like_local_sage_checkout(interpreter.sage_path):
+            return cls(
+                command=str(interpreter.python_path),
+                enabled=environment.analysis.enable_runtime_introspection,
+                source_roots=source_roots,
+            )
         return cls(
             command=str(interpreter.sage_path),
             args=interpreter.args,
             enabled=environment.analysis.enable_runtime_introspection,
+            source_roots=source_roots,
         )
 
     def lookup(self, name: str) -> Optional[RuntimeSymbolResult]:
@@ -238,7 +247,10 @@ def parse_runtime_introspection_output(stdout: str) -> Optional[RuntimeSymbolRes
     )
 
 
-def build_runtime_environment(base_environment: Optional[dict[str, str]] = None) -> dict[str, str]:
+def build_runtime_environment(
+    base_environment: Optional[dict[str, str]] = None,
+    source_roots: tuple[Path, ...] = (),
+) -> dict[str, str]:
     environment = dict(base_environment or os.environ)
     runtime_home = Path(tempfile.gettempdir()) / "sage-lsp-runtime-home"
     dot_sage = runtime_home / ".sage"
@@ -247,4 +259,34 @@ def build_runtime_environment(base_environment: Optional[dict[str, str]] = None)
     environment["HOME"] = str(runtime_home)
     environment["DOT_SAGE"] = str(dot_sage)
     environment.setdefault("XDG_CACHE_HOME", str(runtime_home / ".cache"))
+    python_paths = [str(root) for root in expand_runtime_import_roots(source_roots)]
+    if python_paths:
+        existing_pythonpath = environment.get("PYTHONPATH")
+        if existing_pythonpath:
+            python_paths.append(existing_pythonpath)
+        environment["PYTHONPATH"] = os.pathsep.join(python_paths)
     return environment
+
+
+def looks_like_local_sage_checkout(candidate: Path) -> bool:
+    runtime_root = candidate.resolve().parent
+    return (runtime_root / "src" / "bin" / "sage").exists() or (runtime_root / "src" / "sage").exists()
+
+
+def expand_runtime_import_roots(source_roots: tuple[Path, ...]) -> tuple[Path, ...]:
+    discovered: list[Path] = []
+    seen: set[Path] = set()
+
+    for source_root in source_roots:
+        resolved_root = source_root.resolve()
+        if resolved_root not in seen and (resolved_root / "sage").exists():
+            seen.add(resolved_root)
+            discovered.append(resolved_root)
+
+        repo_root = resolved_root.parent
+        for build_src in repo_root.glob("builddir*/src"):
+            if (build_src / "sage").exists() and build_src.resolve() not in seen:
+                seen.add(build_src.resolve())
+                discovered.append(build_src.resolve())
+
+    return tuple(discovered)
