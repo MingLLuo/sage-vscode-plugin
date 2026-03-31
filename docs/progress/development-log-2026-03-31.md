@@ -1002,3 +1002,103 @@ hover, definition, and docs can see Sage's own sources.
 
 - Next task: add runtime doc/source fallback for symbols that still cannot be resolved statically
 - Risks or blockers: packaged Sage distributions with unusual layouts may still require manual source-root overrides
+
+## Entry 33
+
+- Date: 2026-03-31
+- Task ID: LSP-012
+- Scope: lsp
+- Related milestone: Runtime hardening
+- Commit: `71c27f8`
+
+### Goal
+
+Keep documentation and definition jumps usable against real Sage objects even when the static index cannot resolve the
+symbol from local source roots alone.
+
+### Decisions
+
+- Decision: query Sage's own `sage.misc.sageinspect` helpers instead of raw Python `inspect` for runtime fallback.
+- Reason: Sage and Cython-backed objects expose better docs and source locations through Sage's own introspection layer.
+- Decision: enable runtime introspection by default, but only use it after static lookup fails.
+- Reason: this keeps the common path fast while still making the plugin usable out of the box on larger Sage installs.
+- Decision: cache runtime lookup results by symbol name inside the language server process.
+- Reason: repeated hover, docs, and definition requests should not keep spawning equivalent runtime probes.
+
+### Verification
+
+- Checks run:
+  - `npm run test`
+- Result: repository tests stay green and request-level server coverage now includes runtime-backed docs and definition fallback
+
+### Follow-ups
+
+- Next task: preserve dotted Sage names and expose signatures from the same runtime fallback path
+- Risks or blockers: runtime fallback still depends on the selected Sage executable being able to import the requested symbol
+
+## Entry 34
+
+- Date: 2026-03-31
+- Task ID: LSP-013
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `fe9278c`
+
+### Goal
+
+Make runtime fallback work for more realistic Sage code, especially dotted APIs and function calls that need signature
+help rather than just hover text.
+
+### Decisions
+
+- Decision: preserve dotted identifiers such as `graphs.PetersenGraph` when resolving runtime fallback symbols.
+- Reason: many Sage APIs are reached through graph generators, families, and other dotted access patterns that do not
+  exist as bare names in `sage.all`.
+- Decision: derive signature help from runtime fallback data and expose it through `textDocument/signatureHelp`.
+- Reason: advanced Sage usage depends heavily on long constructor and factory signatures, so hover alone is not enough.
+
+### Verification
+
+- Checks run:
+  - `python - <<'PY' ... call_expression_at_position(...) ... symbol_at_position(...) ... PY`
+  - `npm run test`
+- Result: dotted runtime names survive hover/docs/definition fallback, and signature help now works for runtime-backed
+  Sage calls through request-level tests
+
+### Follow-ups
+
+- Next task: keep extending complex Sage scenarios and add extension-host coverage for runtime-backed requests
+- Risks or blockers: signature help currently depends on runtime detail strings and does not yet provide deep semantic parameter analysis
+
+## Entry 35
+
+- Date: 2026-03-31
+- Task ID: QA-002
+- Scope: examples
+- Related milestone: Manual smoke workspace
+- Commit: `9fc81e8`
+
+### Goal
+
+Broaden the manual smoke workspace so it exercises real SageMath usage patterns instead of only minimal arithmetic and
+small local helper modules.
+
+### Decisions
+
+- Decision: add advanced smoke files around graph generators, elliptic curves, polynomial ideals, symbolic calculus,
+  combinatorics, and number fields.
+- Reason: these scenarios cover heavier runtime-backed docs, definitions, and signatures that are common in actual Sage
+  work.
+- Decision: document explicit checks for dotted-name lookup and runtime-backed navigation in the smoke README.
+- Reason: manual validation needs to target the exact fallback behaviors that were just added to the language server.
+
+### Verification
+
+- Checks run:
+  - `npm run test`
+- Result: the automated suite remains green, and the smoke workspace now contains advanced Sage cases ready for manual validation
+
+### Follow-ups
+
+- Next task: add extension-host automation that opens the smoke workspace and validates a subset of these flows automatically
+- Risks or blockers: the new smoke files still rely on a working local Sage runtime for execution and live docs checks

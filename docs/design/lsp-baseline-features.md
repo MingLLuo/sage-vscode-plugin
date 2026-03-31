@@ -12,6 +12,7 @@ The current baseline now includes:
 - hover
 - completion
 - definition
+- signature help
 - document symbols
 - workspace symbols
 - references
@@ -21,12 +22,13 @@ The current baseline now includes:
 
 ## Scope
 
-- These features are currently static and index-driven.
-- They are designed to be predictable and low-noise before the plugin grows runtime-aware Sage introspection.
+- These features are primarily static and index-driven, with runtime fallback for documentation, definitions, and
+  signatures when static resolution misses Sage runtime objects.
+- They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently report unresolved imports instead of trying to approximate a
   full Python or Cython type checker.
 
 ## Follow-up Areas
 
 - `.sage` source mapping still needs to feed more of the diagnostics and navigation surface.
-- Signature help, semantic tokens, code actions, inlay hints, and richer diagnostics remain open work.
+- Semantic tokens, code actions, inlay hints, richer diagnostics, and deeper runtime-aware analysis remain open work.

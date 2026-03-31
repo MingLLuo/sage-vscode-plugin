@@ -31,7 +31,8 @@ executable used to run `.sage` files.
 7. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
 8. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
 9. Leave `sage.analysis.sourceRoots` empty if you want the extension to infer Sage library roots from the selected interpreter path; this is now the default path for docs, definitions, and navigation into Sage itself.
-10. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, document symbols,
+10. Leave `sage.analysis.enableRuntimeIntrospection = true` if you want the server to fall back to a live Sage runtime for docs, definition jumps, and signature help when static indexing misses a symbol.
+11. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, signature help, document symbols,
    workspace symbols, diagnostics, and docs requests.
 
 ## Runtime Split
@@ -46,6 +47,9 @@ executable used to run `.sage` files.
 - `sage.analysis.sourceRoots`
   When set, these roots are indexed exactly as configured. When left empty, the extension combines workspace-local
   roots with Sage roots inferred from the selected interpreter.
+- `sage.analysis.enableRuntimeIntrospection`
+  Defaults to `true` and lets the language server query the selected Sage runtime for documentation, source locations,
+  and signatures when static analysis alone is not enough.
 - Why this split exists:
   many Sage distributions bundle an older Python or omit `pygls` and `lsprotocol`, so the language server must be
   able to run in a normal Python environment while still targeting Sage for execution.
@@ -57,6 +61,8 @@ If the language server still fails to start, point `sage.languageServer.pythonPa
 
 - A ready-made manual test workspace lives in `examples/manual-smoke-workspace`.
 - It includes `.sage`, `.py`, `.pyx`, `.pxd`, and `.pxi` files plus workspace-local settings for `sourceRoots` and `extraPaths`.
+- Advanced files now cover graph constructors, elliptic curves, polynomial ideals, symbolic integration, combinatorics,
+  and dotted runtime lookups that rely on runtime-backed docs or signature help.
 - Use the `Sage Plugin: Smoke Workspace` launch configuration to open it directly in the extension host.
 
 ## Current Limits
@@ -65,4 +71,5 @@ If the language server still fails to start, point `sage.languageServer.pythonPa
 - Source mapping only handles the first `.sage` transform slice.
 - Interpreter discovery covers PATH, common system locations, workspace virtual environments, and common local Python installs, but it is not exhaustive yet.
 - Runtime-derived source-root discovery covers common source and site-packages layouts, but unusual Sage packaging may still need manual `sage.analysis.sourceRoots`.
+- Runtime fallback currently focuses on docs, definitions, and signature help; completion and richer semantic analysis still rely on static indexing.
 - Notebook and kernel integration are not wired yet.

@@ -69,8 +69,11 @@ tracked, and how the current static-analysis baseline should be extended safely.
 - `src/sage_lsp/source_map.py`
   Hosts the first `.sage` preprocessing and bidirectional position mapping primitives.
 - `src/sage_lsp/server.py`
-  Wires the index and parser into `pygls` request handlers for hover, completion, definition, references, rename,
-  workspace symbols, and diagnostics publication.
+  Wires the index and parser into `pygls` request handlers for hover, completion, definition, signature help,
+  references, rename, workspace symbols, and diagnostics publication.
+- `src/sage_lsp/runtime_introspection.py`
+  Queries a live Sage runtime through `sage.misc.sageinspect` when static indexing cannot supply docs, signatures, or
+  source locations.
 - `tests/fixtures/sage_src_lite`
   Reduced Sage-aligned source corpus used for parser and index regression tests.
 

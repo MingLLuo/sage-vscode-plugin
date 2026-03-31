@@ -18,14 +18,16 @@
 - Standard LSP baseline: workspace symbols, references, rename, and unresolved-import diagnostics now work through the server
 - Interpreter discovery: `Sage: Select Interpreter` now pre-populates Sage and Python candidates from the local machine and routes them to the correct settings
 - Runtime source-root discovery: selected Sage runtimes now contribute inferred library roots to indexing when no explicit source-root config is present
+- Runtime Sage fallback: docs, definitions, and signature help can now query the selected Sage runtime when static indexing misses
+- Advanced smoke workspace: graph, elliptic-curve, ideal, symbolic, combinatorics, and number-field samples now exercise heavier Sage usage
 
 ## Current Focus
 
 1. Extend source mapping beyond caret rewrite into more `.sage` constructs.
 2. Feed source mapping into diagnostics, references, and rename paths.
 3. Add extension-host integration tests beyond the current unit suite.
-4. Layer runtime-aware Sage introspection on top of the static index where useful.
-5. Add signature help, semantic tokens, and richer diagnostics on top of the current LSP baseline.
+4. Deepen runtime-aware Sage introspection beyond docs/definitions/signatures where useful.
+5. Add semantic tokens and richer diagnostics on top of the current LSP baseline.
 
 ## Milestone Tracker
 
@@ -83,3 +85,6 @@
 - Removed the `import.meta.dirname` dependency from the syntax-sync script so repository bootstrap and `dev:vscode` flows run on Node 20 environments.
 - Reworked `Sage: Select Interpreter` into a detected-candidate picker that surfaces Sage runtimes and Python environments separately, routes Python picks to `sage.languageServer.pythonPath`, and keeps custom plus auto-reset actions in the same flow.
 - Added automatic Sage source-root discovery so the extension can infer `.../src` or nearby `site-packages` roots from the selected runtime and feed them into the language server without manual `sourceRoots` setup.
+- Added runtime-backed documentation and definition fallback through Sage's own introspection helpers so real Sage objects remain navigable when static indexing misses them.
+- Added runtime-backed signature help plus dotted-name fallback, allowing calls such as `graphs.PetersenGraph(...)` to retain docs and signatures instead of collapsing to a bare final identifier.
+- Expanded the smoke workspace with heavier SageMath scenarios across graph theory, elliptic curves, ideals, symbolic calculus, combinatorics, and number fields.
