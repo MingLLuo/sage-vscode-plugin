@@ -1213,3 +1213,80 @@ launches, cancelled requests, and benign code-0 exits.
   connection behavior from the UI layer
 - Risks or blockers: unexpected external process exits should still be monitored in the real extension host to confirm
   restart behavior stays correct under VS Code's runtime
+
+## Entry 39
+
+- Date: 2026-03-31
+- Task ID: QA-003
+- Scope: extension/test
+- Related milestone: Runtime hardening
+- Commit: `7ac829d`
+
+### Goal
+
+Replace manual-only restart verification with a real extension-host smoke test that launches VS Code, opens a Sage
+workspace, and checks the behaviors users actually touch.
+
+### Decisions
+
+- Decision: use `@vscode/test-electron` with the locally installed VS Code executable instead of downloading another
+  test build.
+- Reason: this keeps the automation closer to the user's environment and avoids another network dependency during every
+  run.
+- Decision: clone the manual smoke workspace into a temporary directory before the test launches.
+- Reason: the smoke test updates workspace settings and should not mutate repository fixtures or user-local settings.
+- Decision: add hidden `sage.__test.*` commands that expose lifecycle snapshots and await stable client state.
+- Reason: restart stability needs direct observability; otherwise the extension host becomes a black box and race
+  conditions remain hard to assert.
+
+### Verification
+
+- Checks run:
+  - `npm run lint --workspace @sage-vscode/extension-core`
+  - `npm run test --workspace @sage-vscode/extension-core`
+  - `npm run test:extension-host --workspace @sage-vscode/extension-core`
+  - `npm run test:full`
+- Result: the repository now has an automated extension-host smoke path that validates hover, definition, completion,
+  and two consecutive managed language-server restarts end to end
+
+### Follow-ups
+
+- Next task: widen extension-host smoke coverage to runtime-backed Sage cases and selected diagnostics flows
+- Risks or blockers: local VS Code app path detection is currently filesystem-based and may need more fallback handling
+  on unusual installations
+
+## Entry 40
+
+- Date: 2026-03-31
+- Task ID: LSP-016
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `962547e`
+
+### Goal
+
+Fix the completion response shape exposed by the real extension-host smoke test so completion requests work under a
+real VS Code client instead of only in request-level tests.
+
+### Decisions
+
+- Decision: convert completion payloads into concrete `lsprotocol` `CompletionItem` objects before returning them from
+  the server.
+- Reason: `pygls` could not serialize raw dictionaries inside `CompletionList.items` under a real client connection.
+- Decision: pin the regression with server-side tests that assert the completion handler no longer returns dictionaries.
+- Reason: request-level tests now need to reflect the stricter response shape required by `pygls`.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test:extension-host --workspace @sage-vscode/extension-core`
+  - `npm run test:full`
+- Result: real extension-host completion requests now encode cleanly, and the end-to-end smoke harness completes
+  without hitting `pygls` JSON serialization errors
+
+### Follow-ups
+
+- Next task: let the extension-host smoke suite cover more providers that currently only have request-level tests
+- Risks or blockers: other LSP handlers that still rely on dictionary-like convenience payloads may need similar
+  tightening under real clients

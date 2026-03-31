@@ -95,6 +95,14 @@ Shortcut:
 npm run dev:vscode
 ```
 
+Automated verification:
+
+```bash
+npm run test
+npm run test:extension-host
+npm run test:full
+```
+
 ## Local Debugging
 
 - Press `F5` in this repository and choose `Sage Plugin: Extension Host`.
@@ -108,3 +116,6 @@ npm run dev:vscode
 - Python-facing work should keep `npm run test:python` green.
 - Syntax work should keep `npm run sync:syntax` and syntax package checks green.
 - Cross-cutting changes should keep the full `npm run test` path green before commit.
+- Extension-host behavior that depends on the real VS Code client lifecycle should also keep `npm run test:extension-host`
+  green.
+- Use `npm run test:full` when you need the whole repository suite plus the extension-host smoke test in one command.

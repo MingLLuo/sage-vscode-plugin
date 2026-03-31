@@ -23,6 +23,8 @@
 - Runtime invocation hardening: runtime Sage introspection now launches subprocesses with argv-safe invocation and direct unit coverage
 - Singleton member resolution: dotted Sage APIs such as `graphs.PetersenGraph` now resolve statically through class-body imports, singleton instances, and member completion
 - Managed LSP shutdown: extension-driven stop/restart flows now suppress library-level auto-restart to avoid duplicate launches, cancelled requests, and code-0 exits
+- Extension-host automation: a real VS Code smoke harness now opens a copied workspace, exercises hover/definition/completion, and validates managed restart stability
+- Completion transport hardening: completion responses are now serialized as concrete LSP items so real clients no longer trip `pygls` JSON conversion errors
 
 ## Current Focus
 
@@ -94,3 +96,5 @@
 - Fixed runtime introspection subprocess launching so Python 3.12 no longer misreads the argument vector as `bufsize` and drops hover or definition requests.
 - Extended static analysis with class-body import handling, singleton instance tracking, dotted member resolution, member completion, and workspace-symbol coverage for common Sage generator objects.
 - Suppressed client-library auto-restart during extension-managed language-server shutdown so configuration-triggered restarts no longer produce duplicate launches and spurious code-0 exits.
+- Added a real extension-host smoke harness that launches the local VS Code app against a copied smoke workspace and validates hover, definition, completion, and repeated managed restarts end to end.
+- Fixed completion serialization for real VS Code clients after the new extension-host smoke test exposed dictionary-based completion payloads that `pygls` could not encode.

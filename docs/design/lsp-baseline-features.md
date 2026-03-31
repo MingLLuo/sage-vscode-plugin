@@ -21,6 +21,7 @@ The current baseline now includes:
 - custom documentation requests
 - dotted singleton-member resolution for common Sage patterns such as `graphs.PetersenGraph`
 - member completion for statically understood singleton APIs
+- completion responses serialized as concrete LSP `CompletionItem` objects under real clients
 
 ## Scope
 
