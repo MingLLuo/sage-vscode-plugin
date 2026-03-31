@@ -925,3 +925,43 @@ Stop document open/change from crashing the language server when diagnostics are
 
 - Next task: keep tightening runtime behavior exposed by real extension-host testing
 - Risks or blockers: diagnostics are still intentionally conservative and need richer Sage-aware analysis later
+
+## Entry 31
+
+- Date: 2026-03-31
+- Task ID: EXT-007
+- Scope: extension
+- Related milestone: Developer workflow
+- Commit: `1189a08`
+
+### Goal
+
+Make `Sage: Select Interpreter` behave more like mature Python tooling by pre-detecting usable Sage and Python runtimes
+instead of forcing every selection through a blank input box.
+
+### Decisions
+
+- Decision: split detected candidates into Sage-runtime targets and language-server-Python targets.
+- Reason: the extension now has separate settings for execution (`sage.interpreter.path`) and the LSP host runtime
+  (`sage.languageServer.pythonPath`), so a Python choice should not overwrite the Sage runtime setting.
+- Decision: detect Python candidates from PATH, workspace virtual environments, and common local install roots in
+  addition to system Sage locations.
+- Reason: VS Code launched from the GUI often has an incomplete PATH, so relying on PATH-only discovery is fragile.
+- Decision: keep custom-path entry points and an explicit `auto` reset option in the same quick-pick flow.
+- Reason: contributors need a single command that covers detected, manual, and fallback runtime selection paths.
+
+### Verification
+
+- Checks run:
+  - `npm run sync:syntax`
+  - `npm run lint`
+  - `npm run test`
+  - `./scripts/dev-vscode.sh --smoke --no-open`
+- Result: the picker now lists detected Sage/Python candidates with dedicated actions, and the repository-wide build,
+  test, and helper flows remain green
+
+### Follow-ups
+
+- Next task: add extension-host smoke coverage around runtime selection and actual language-server startup
+- Risks or blockers: local interpreter discovery still focuses on common filesystem layouts and does not yet enumerate
+  every environment manager

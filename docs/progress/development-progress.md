@@ -16,6 +16,7 @@
 - Native source support: `.pyx`, `.pxd`, and `.pxi` now participate in indexing, navigation, and highlighting
 - VS Code dev helper: one-command repository prep and launch script added
 - Standard LSP baseline: workspace symbols, references, rename, and unresolved-import diagnostics now work through the server
+- Interpreter discovery: `Sage: Select Interpreter` now pre-populates Sage and Python candidates from the local machine and routes them to the correct settings
 
 ## Current Focus
 
@@ -79,3 +80,4 @@
 - Fixed loose `.sage` lazy-import alias parsing so smoke-workspace aliases no longer degrade into false unresolved-import diagnostics.
 - Switched diagnostics publication over to the `pygls` `textDocument/publishDiagnostics` API so document open/change events no longer crash the server on missing `publish_diagnostics`.
 - Removed the `import.meta.dirname` dependency from the syntax-sync script so repository bootstrap and `dev:vscode` flows run on Node 20 environments.
+- Reworked `Sage: Select Interpreter` into a detected-candidate picker that surfaces Sage runtimes and Python environments separately, routes Python picks to `sage.languageServer.pythonPath`, and keeps custom plus auto-reset actions in the same flow.

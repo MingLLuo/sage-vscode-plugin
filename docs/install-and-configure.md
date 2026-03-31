@@ -25,11 +25,12 @@ executable used to run `.sage` files.
 1. Open the repository in VS Code.
 2. Press `F5` and choose `Sage Plugin: Extension Host` for the repository itself, or `Sage Plugin: Smoke Workspace` to open the ready-made sample workspace under `examples/manual-smoke-workspace`.
 3. The repository-level `build` task runs automatically before the extension host starts.
-4. Use `Sage: Select Interpreter` to point the extension at the Sage executable used by run commands, the managed REPL terminal, and future Sage-aware runtime context.
-5. Leave `sage.languageServer.pythonPath = auto` to use the active Python environment for the language server, or set it explicitly if VS Code cannot find the right Python on its own.
-6. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
-7. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
-8. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, document symbols,
+4. Use `Sage: Select Interpreter` to pick from detected Sage runtimes, detected Python environments, or custom paths.
+5. Sage selections update `sage.interpreter.path` for run commands, the managed REPL terminal, and future Sage-aware runtime context.
+6. Python selections update `sage.languageServer.pythonPath` for the language server; the picker also includes an explicit `auto` reset entry when you want VS Code to go back to automatic Python selection.
+7. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
+8. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
+9. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, document symbols,
    workspace symbols, diagnostics, and docs requests.
 
 ## Runtime Split
@@ -38,6 +39,9 @@ executable used to run `.sage` files.
   Controls the Sage executable used for `Run Current File`, `Run Selection`, and `Start REPL`.
 - `sage.languageServer.pythonPath`
   Controls the Python executable used to run `sage-lsp` itself.
+- `Sage: Select Interpreter`
+  Presents detected Sage runtimes from PATH and common system locations, plus detected Python environments from PATH,
+  workspace virtual environments, and common local installs such as `miniforge3` or `conda` roots.
 - Why this split exists:
   many Sage distributions bundle an older Python or omit `pygls` and `lsprotocol`, so the language server must be
   able to run in a normal Python environment while still targeting Sage for execution.
@@ -55,5 +59,5 @@ If the language server still fails to start, point `sage.languageServer.pythonPa
 
 - Static analysis is intentionally reduced and fixture-backed; it is not yet a full Sage runtime model.
 - Source mapping only handles the first `.sage` transform slice.
-- Runtime Sage interpreter discovery is still manual.
+- Interpreter discovery covers PATH, common system locations, workspace virtual environments, and common local Python installs, but it is not exhaustive yet.
 - Notebook and kernel integration are not wired yet.
