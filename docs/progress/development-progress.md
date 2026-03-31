@@ -11,9 +11,9 @@
 
 ## Current Focus
 
-1. Start the first implementation-facing design note for `.sage` preprocessing.
+1. Extend source mapping beyond caret rewrite into more `.sage` constructs.
 2. Add the first real extension-host test path beyond the placeholder test.
-3. Add the first server-side hover or health check smoke run.
+3. Convert preprocessing output into future diagnostics and navigation plumbing.
 4. Begin real Sage-aware feature work on top of the validated scaffold.
 
 ## Milestone Tracker
@@ -26,7 +26,7 @@
 | Extension scaffold | Done | Minimal VS Code client package, commands, configuration model, and language client wiring are committed. |
 | LSP scaffold | Done | Minimal `pygls` package, entrypoint, and server settings model are committed. |
 | Syntax scaffold | Done | Syntax package, sync script, and generated extension assets are committed. |
-| Source mapping v1 | In progress | First `.sage` preprocessing slice is being defined around caret rewrite and bidirectional column maps. |
+| Source mapping v1 | Done | `.sage` caret rewrite, string/comment skipping, bidirectional column maps, and hover preview wiring are committed. |
 
 ## Change Log Notes
 
@@ -41,3 +41,4 @@
 - First dependency-install pass exposed and isolated a Node workspace wiring issue in the extension package manifest.
 - Installed Node and Python dependencies locally, corrected bootstrap lifecycle typing, and verified `npm run build`, `npm run lint`, and `npm run test`.
 - Accepted the first concrete `.sage` mapping slice around caret-to-power rewrite with bidirectional line-local column maps.
+- Implemented the first real `.sage` preprocessing module, covered it with Python tests, and surfaced mapping information in the server hover path.
