@@ -6,6 +6,62 @@
       "    ${3:pass}"
     ],
     "description": "Insert a minimal Sage or Python function."
+  },
+  "Polynomial Ring": {
+    "prefix": "sagepoly",
+    "body": [
+      "R.<${1:x}> = PolynomialRing(${2:QQ})",
+      "${3:polynomial} = ${1:x}^${4:2} + ${5:1}"
+    ],
+    "description": "Insert a polynomial ring with SageMath generator syntax."
+  },
+  "Finite Field": {
+    "prefix": "sagegf",
+    "body": [
+      "F = GF(${1:7})",
+      "${2:a} = F.${3:gen}()"
+    ],
+    "description": "Insert a finite-field scaffold."
+  },
+  "Matrix Builder": {
+    "prefix": "sagematrix",
+    "body": [
+      "${1:A} = matrix(${2:QQ}, [",
+      "    [${3:1}, ${4:0}],",
+      "    [${5:0}, ${6:1}],",
+      "])"
+    ],
+    "description": "Insert a small Sage matrix literal."
+  },
+  "Vector Builder": {
+    "prefix": "sagevector",
+    "body": [
+      "${1:v} = vector(${2:QQ}, [${3:1}, ${4:2}, ${5:3}])"
+    ],
+    "description": "Insert a Sage vector literal."
+  },
+  "Graph Constructor": {
+    "prefix": "sagegraph",
+    "body": [
+      "${1:G} = graphs.${2:PetersenGraph}()",
+      "${3:property_value} = ${1:G}.${4:chromatic_number}()"
+    ],
+    "description": "Insert a graph-construction scaffold using Sage graph generators."
+  },
+  "Plot Builder": {
+    "prefix": "sageplot",
+    "body": [
+      "${1:x} = var('${1:x}')",
+      "${2:p} = plot(${3:sin(${1:x})}, (${1:x}, ${4:-pi}, ${5:pi}))"
+    ],
+    "description": "Insert a basic Sage plotting scaffold."
+  },
+  "Elliptic Curve": {
+    "prefix": "sageec",
+    "body": [
+      "${1:E} = EllipticCurve([${2:0}, ${3:0}, ${4:1}, ${5:-1}, ${6:0}])",
+      "${7:rank_value} = ${1:E}.rank()"
+    ],
+    "description": "Insert an elliptic-curve scaffold."
   }
 }
-
