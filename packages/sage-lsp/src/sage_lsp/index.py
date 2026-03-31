@@ -2,13 +2,19 @@ from __future__ import annotations
 
 import fnmatch
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 import re
+import tempfile
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
 from .model import ImportBinding, ModuleRecord, SourceRange, SymbolRecord, document_symbol_kind
 from .parser import parse_module
+
+
+CACHE_SCHEMA_VERSION = 1
 
 
 @dataclass
@@ -38,10 +44,17 @@ class DocumentationResult:
 
 
 class WorkspaceIndex:
-    def __init__(self, source_roots: list[Path], excluded_globs: tuple[str, ...], enable_pyx: bool) -> None:
+    def __init__(
+        self,
+        source_roots: list[Path],
+        excluded_globs: tuple[str, ...],
+        enable_pyx: bool,
+        cache_dir: Optional[Path] = None,
+    ) -> None:
         self._source_roots = source_roots
         self._excluded_globs = excluded_globs
         self._enable_pyx = enable_pyx
+        self._cache_dir = cache_dir or default_index_cache_dir()
         self._modules: dict[str, ModuleRecord] = {}
         self._module_paths: dict[Path, str] = {}
         self._resolved_symbol_cache: dict[tuple[str, str], Optional[SymbolRecord]] = {}
@@ -56,6 +69,8 @@ class WorkspaceIndex:
         self._module_paths.clear()
         self._resolved_symbol_cache.clear()
         self._resolved_member_cache.clear()
+        cache_entries = self._load_cached_entries()
+        next_cache_entries: dict[str, dict[str, object]] = {}
         for root in self._source_roots:
             if not root.exists():
                 continue
@@ -72,10 +87,27 @@ class WorkspaceIndex:
                 if not module_name:
                     continue
                 source = path.read_text(encoding="utf-8")
-                record = parse_module(module_name, path, source)
+                cache_key = str(path.resolve())
+                fingerprint = file_fingerprint(path)
+                cached_entry = cache_entries.get(cache_key)
+                if _cache_entry_matches(cached_entry, module_name, fingerprint):
+                    record = deserialize_module_record(
+                        cached_entry["record"],
+                        module_name,
+                        path,
+                        source,
+                    )
+                else:
+                    record = parse_module(module_name, path, source)
                 existing = self._modules.get(module_name)
                 self._modules[module_name] = merge_module_records(existing, record) if existing else record
                 self._module_paths[path.resolve()] = module_name
+                next_cache_entries[cache_key] = {
+                    "moduleName": module_name,
+                    "fingerprint": fingerprint,
+                    "record": serialize_module_record(record),
+                }
+        self._write_cached_entries(next_cache_entries)
 
     def module_for_path(self, path: Path) -> Optional[ModuleRecord]:
         module_name = self._module_paths.get(path.resolve())
@@ -610,6 +642,54 @@ class WorkspaceIndex:
             return None
         return (record.module_name, owner_name, attribute)
 
+    def _cache_file_path(self) -> Path:
+        resolved_cache_dir = _resolve_cache_dir(self._cache_dir)
+        if resolved_cache_dir is None:
+            raise OSError("No writable cache directory available")
+        digest = hashlib.sha256(
+            "\0".join(
+                [
+                    *[str(path.resolve()) for path in self._source_roots],
+                    *self._excluded_globs,
+                    f"enable_pyx={self._enable_pyx}",
+                    f"schema={CACHE_SCHEMA_VERSION}",
+                ]
+            ).encode("utf-8")
+        ).hexdigest()[:16]
+        return resolved_cache_dir / f"workspace-index-{digest}.json"
+
+    def _load_cached_entries(self) -> dict[str, dict[str, object]]:
+        try:
+            cache_file = self._cache_file_path()
+        except OSError:
+            return {}
+        if not cache_file.exists():
+            return {}
+        try:
+            payload = json.loads(cache_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict) or payload.get("schemaVersion") != CACHE_SCHEMA_VERSION:
+            return {}
+        entries = payload.get("entries")
+        if not isinstance(entries, dict):
+            return {}
+        return {key: value for key, value in entries.items() if isinstance(key, str) and isinstance(value, dict)}
+
+    def _write_cached_entries(self, entries: dict[str, dict[str, object]]) -> None:
+        try:
+            cache_file = self._cache_file_path()
+        except OSError:
+            return
+        payload = {
+            "schemaVersion": CACHE_SCHEMA_VERSION,
+            "entries": entries,
+        }
+        try:
+            cache_file.write_text(json.dumps(payload, separators=(",", ":"), sort_keys=True), encoding="utf-8")
+        except OSError:
+            return
+
 
 def module_name_from_path(root: Path, path: Path) -> Optional[str]:
     relative = path.relative_to(root)
@@ -654,6 +734,203 @@ def module_record_precedence(record: ModuleRecord) -> int:
         ".pxd": 2,
         ".pxi": 1,
     }.get(record.file_path.suffix, 0)
+
+
+def default_index_cache_dir() -> Path:
+    return Path.home() / ".cache" / "sage-vscode-plugin" / "lsp-index-v1"
+
+
+def _resolve_cache_dir(preferred: Path) -> Optional[Path]:
+    for candidate in (
+        preferred,
+        Path(tempfile.gettempdir()) / "sage-vscode-plugin" / "lsp-index-v1",
+    ):
+        try:
+            candidate.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except OSError:
+            continue
+    return None
+
+
+def file_fingerprint(path: Path) -> dict[str, int]:
+    stat = path.stat()
+    return {
+        "mtimeNs": stat.st_mtime_ns,
+        "size": stat.st_size,
+    }
+
+
+def _cache_entry_matches(
+    entry: Optional[dict[str, object]],
+    module_name: str,
+    fingerprint: dict[str, int],
+) -> bool:
+    if not isinstance(entry, dict):
+        return False
+    if entry.get("moduleName") != module_name:
+        return False
+    cached_fingerprint = entry.get("fingerprint")
+    return cached_fingerprint == fingerprint and isinstance(entry.get("record"), dict)
+
+
+def serialize_module_record(record: ModuleRecord) -> dict[str, object]:
+    return {
+        "language": record.language,
+        "docstring": record.docstring,
+        "symbols": {name: serialize_symbol_record(symbol) for name, symbol in record.symbols.items()},
+        "bindings": {name: serialize_import_binding(binding) for name, binding in record.bindings.items()},
+        "starImports": list(record.star_imports),
+        "memberSymbols": {
+            owner_name: {name: serialize_symbol_record(symbol) for name, symbol in symbols.items()}
+            for owner_name, symbols in record.member_symbols.items()
+        },
+        "memberBindings": {
+            owner_name: {name: serialize_import_binding(binding) for name, binding in bindings.items()}
+            for owner_name, bindings in record.member_bindings.items()
+        },
+        "instanceTypes": dict(record.instance_types),
+        "diagnostics": list(record.diagnostics),
+    }
+
+
+def deserialize_module_record(
+    payload: object,
+    module_name: str,
+    file_path: Path,
+    source: str,
+) -> ModuleRecord:
+    if not isinstance(payload, dict):
+        return parse_module(module_name, file_path, source)
+
+    return ModuleRecord(
+        module_name=module_name,
+        file_path=file_path,
+        language=str(payload.get("language", "python")),
+        source=source,
+        docstring=payload.get("docstring") if isinstance(payload.get("docstring"), str) else None,
+        symbols={
+            name: deserialize_symbol_record(symbol_payload, module_name, file_path)
+            for name, symbol_payload in (payload.get("symbols", {}) or {}).items()
+            if isinstance(name, str)
+        },
+        bindings={
+            name: deserialize_import_binding(binding_payload)
+            for name, binding_payload in (payload.get("bindings", {}) or {}).items()
+            if isinstance(name, str)
+        },
+        star_imports=[
+            value for value in (payload.get("starImports", []) or []) if isinstance(value, str)
+        ],
+        member_symbols={
+            owner_name: {
+                name: deserialize_symbol_record(symbol_payload, module_name, file_path)
+                for name, symbol_payload in symbols_payload.items()
+                if isinstance(name, str)
+            }
+            for owner_name, symbols_payload in (payload.get("memberSymbols", {}) or {}).items()
+            if isinstance(owner_name, str) and isinstance(symbols_payload, dict)
+        },
+        member_bindings={
+            owner_name: {
+                name: deserialize_import_binding(binding_payload)
+                for name, binding_payload in bindings_payload.items()
+                if isinstance(name, str)
+            }
+            for owner_name, bindings_payload in (payload.get("memberBindings", {}) or {}).items()
+            if isinstance(owner_name, str) and isinstance(bindings_payload, dict)
+        },
+        instance_types={
+            name: value
+            for name, value in (payload.get("instanceTypes", {}) or {}).items()
+            if isinstance(name, str) and isinstance(value, str)
+        },
+        diagnostics=[
+            entry for entry in (payload.get("diagnostics", []) or []) if isinstance(entry, dict)
+        ],
+    )
+
+
+def serialize_symbol_record(symbol: SymbolRecord) -> dict[str, object]:
+    return {
+        "name": symbol.name,
+        "kind": symbol.kind,
+        "moduleName": symbol.module_name,
+        "sourceRange": serialize_source_range(symbol.source_range),
+        "detail": symbol.detail,
+        "docstring": symbol.docstring,
+    }
+
+
+def deserialize_symbol_record(
+    payload: object,
+    module_name: str,
+    file_path: Path,
+) -> SymbolRecord:
+    if not isinstance(payload, dict):
+        return SymbolRecord(
+            name="",
+            kind="variable",
+            module_name=module_name,
+            file_path=file_path,
+            source_range=SourceRange.from_offsets(1, 0, 1, 0),
+        )
+    return SymbolRecord(
+        name=str(payload.get("name", "")),
+        kind=str(payload.get("kind", "variable")),
+        module_name=str(payload.get("moduleName", module_name)),
+        file_path=file_path,
+        source_range=deserialize_source_range(payload.get("sourceRange")),
+        detail=str(payload.get("detail", "")),
+        docstring=payload.get("docstring") if isinstance(payload.get("docstring"), str) else None,
+    )
+
+
+def serialize_import_binding(binding: ImportBinding) -> dict[str, object]:
+    return {
+        "alias": binding.alias,
+        "moduleName": binding.module_name,
+        "targetName": binding.target_name,
+        "sourceRange": serialize_source_range(binding.source_range),
+        "isLazy": binding.is_lazy,
+    }
+
+
+def deserialize_import_binding(payload: object) -> ImportBinding:
+    if not isinstance(payload, dict):
+        return ImportBinding(
+            alias="",
+            module_name="",
+            target_name=None,
+            source_range=SourceRange.from_offsets(1, 0, 1, 0),
+        )
+    return ImportBinding(
+        alias=str(payload.get("alias", "")),
+        module_name=str(payload.get("moduleName", "")),
+        target_name=payload.get("targetName") if isinstance(payload.get("targetName"), str) else None,
+        source_range=deserialize_source_range(payload.get("sourceRange")),
+        is_lazy=bool(payload.get("isLazy", False)),
+    )
+
+
+def serialize_source_range(source_range: SourceRange) -> dict[str, int]:
+    return {
+        "startLine": source_range.start.line,
+        "startCharacter": source_range.start.character,
+        "endLine": source_range.end.line,
+        "endCharacter": source_range.end.character,
+    }
+
+
+def deserialize_source_range(payload: object) -> SourceRange:
+    if not isinstance(payload, dict):
+        return SourceRange.from_offsets(1, 0, 1, 0)
+    return SourceRange.from_offsets(
+        int(payload.get("startLine", 0)) + 1,
+        int(payload.get("startCharacter", 0)),
+        int(payload.get("endLine", 0)) + 1,
+        int(payload.get("endCharacter", 0)),
+    )
 
 
 def iter_identifier_ranges(text: str, name: str) -> list[SourceRange]:

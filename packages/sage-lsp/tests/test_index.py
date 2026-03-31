@@ -184,6 +184,55 @@ def test_workspace_index_keeps_method_structure_for_preparser_sage_modules(tmp_p
     assert any(item["label"] == "square" for item in completions)
 
 
+def test_workspace_index_reuses_persistent_cache_for_unchanged_modules(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    index.build()
+
+    def _fail_parse(*args, **kwargs):
+        raise AssertionError("parse_module should not run when the persistent cache is warm")
+
+    monkeypatch.setattr("sage_lsp.index.parse_module", _fail_parse)
+
+    cached_index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    cached_index.build()
+
+    assert "pkg.helpers" in cached_index.modules
+
+
+def test_workspace_index_invalidates_persistent_cache_when_source_changes(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(root, "pkg/__init__.py", "")
+    helpers_path = _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    index.build()
+
+    helpers_path.write_text('def helper(value):\n    """Updated."""\n    return value + 1\n', encoding="utf-8")
+
+    observed_paths: list[str] = []
+    original_parse_module = parse_module
+
+    def _track_parse(*args, **kwargs):
+        observed_paths.append(args[1].name)
+        return original_parse_module(*args, **kwargs)
+
+    monkeypatch.setattr("sage_lsp.index.parse_module", _track_parse)
+
+    rebuilt_index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    rebuilt_index.build()
+
+    assert "helpers.py" in observed_paths
+    documentation = rebuilt_index.documentation_for_symbol(rebuilt_index.modules["pkg.helpers"], "helper")
+    assert documentation is not None
+    assert documentation.summary == "Updated."
+
+
 def test_workspace_index_diagnostics_report_unresolved_imports() -> None:
     index = WorkspaceIndex([], (), True)
     record = parse_module(
@@ -324,7 +373,8 @@ def test_workspace_index_uses_pyx_function_docstrings_for_documentation(tmp_path
     assert documentation.summary == "Create a matrix."
 
 
-def _write_module(root: Path, relative_path: str, contents: str) -> None:
+def _write_module(root: Path, relative_path: str, contents: str) -> Path:
     module_path = root / relative_path
     module_path.parent.mkdir(parents=True, exist_ok=True)
     module_path.write_text(contents, encoding="utf-8")
+    return module_path
