@@ -29,10 +29,11 @@ executable used to run `.sage` files.
 5. Sage selections update `sage.interpreter.path` for run commands, the managed REPL terminal, and future Sage-aware runtime context.
 6. Python selections update `sage.languageServer.pythonPath` for the language server; the picker also includes an explicit `auto` reset entry when you want VS Code to go back to automatic Python selection.
 7. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
-8. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
-9. Leave `sage.analysis.sourceRoots` empty if you want the extension to infer Sage library roots from the selected interpreter path; this is now the default path for docs, definitions, and navigation into Sage itself.
-10. Leave `sage.analysis.enableRuntimeIntrospection = true` if you want the server to fall back to a live Sage runtime for docs, definition jumps, and signature help when static indexing misses a symbol.
-11. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, signature help, document symbols,
+8. Set `sage.run.cleanupGeneratedPython = true` if you want terminal-based `.sage` runs to remove generated `.sage.py` helper files automatically on POSIX shells.
+9. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
+10. Leave `sage.analysis.sourceRoots` empty if you want the extension to infer Sage library roots from the selected interpreter path; this is now the default path for docs, definitions, and navigation into Sage itself.
+11. Leave `sage.analysis.enableRuntimeIntrospection = true` if you want the server to fall back to a live Sage runtime for docs, definition jumps, and signature help when static indexing misses a symbol.
+12. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, signature help, document symbols,
    workspace symbols, diagnostics, and docs requests.
 
 ## Runtime Split
@@ -50,6 +51,9 @@ executable used to run `.sage` files.
 - `sage.analysis.enableRuntimeIntrospection`
   Defaults to `true` and lets the language server query the selected Sage runtime for documentation, source locations,
   and signatures when static analysis alone is not enough.
+- `sage.run.cleanupGeneratedPython`
+  Defaults to `false`. When enabled, standalone terminal runs of `.sage` files remove the generated `.sage.py` helper
+  file automatically after the command finishes on POSIX shells.
 - Why this split exists:
   many Sage distributions bundle an older Python or omit `pygls` and `lsprotocol`, so the language server must be
   able to run in a normal Python environment while still targeting Sage for execution.
@@ -64,6 +68,8 @@ If the language server still fails to start, point `sage.languageServer.pythonPa
 - Advanced files now cover graph constructors, elliptic curves, polynomial ideals, symbolic integration, combinatorics,
   and dotted runtime lookups that rely on runtime-backed docs or signature help.
 - Use the `Sage Plugin: Smoke Workspace` launch configuration to open it directly in the extension host.
+- The automated `npm run test:extension-host` path reuses a copied version of this workspace in an unattended local VS
+  Code session so it can validate real extension behavior without mutating repository fixtures.
 
 ## Current Limits
 

@@ -27,7 +27,7 @@ tracked, and how the current static-analysis baseline should be extended safely.
   Helper entrypoint that can bootstrap dependencies, sync syntax assets, build the repo, and open VS Code in one step.
 - `examples/manual-smoke-workspace`
   Self-contained manual smoke-test workspace used to exercise hover, definition, completion, docs, `.pyx`, `.pxd`,
-  `.pxi`, and `.sage` cases.
+  `.pxi`, and `.sage` cases plus heavier runtime-backed Sage examples.
 
 ## Working Rules
 
@@ -49,7 +49,8 @@ tracked, and how the current static-analysis baseline should be extended safely.
   documentation requests while suppressing client-library auto-restarts during extension-managed shutdown and restart
   cycles.
 - `src/executionPlan.ts`
-  Builds shell-safe run commands and REPL load commands from extension settings.
+  Builds shell-safe run commands and REPL load commands from extension settings, including optional cleanup of
+  generated `.sage.py` files after standalone terminal runs.
 - `src/serverRestart.ts`
   Limits language-server restarts to configuration changes that actually affect analysis behavior and keeps close/restart
   policy explicit during managed shutdown.
@@ -64,10 +65,12 @@ tracked, and how the current static-analysis baseline should be extended safely.
 ## Key Language Server Modules
 
 - `src/sage_lsp/parser.py`
-  Parses Python, loose `.sage`, and lightweight `.pyx`/`.pxd`/`.pxi` files into a common module model.
+  Parses Python, loose `.sage`, and lightweight `.pyx`/`.pxd`/`.pxi` files into a common module model while preserving
+  conservative syntax diagnostics for valid preparser constructs.
 - `src/sage_lsp/index.py`
   Builds workspace state, merges native declaration and implementation modules, and resolves symbols through imports,
-  star imports, lazy imports, workspace symbol search, references, rename edits, and import diagnostics.
+  star imports, lazy imports, workspace symbol search, references, rename edits, import diagnostics, and syntax
+  diagnostics.
 - `src/sage_lsp/source_map.py`
   Hosts the first `.sage` preprocessing and bidirectional position mapping primitives.
 - `src/sage_lsp/server.py`
@@ -103,6 +106,10 @@ npm run test:extension-host
 npm run test:full
 ```
 
+`npm run test:extension-host` launches the locally installed VS Code desktop in an unattended background test session.
+The harness copies the smoke workspace into a temp directory, captures extension-host and language-server logs, and
+fails the run on known runtime regressions.
+
 ## Local Debugging
 
 - Press `F5` in this repository and choose `Sage Plugin: Extension Host`.
@@ -118,4 +125,6 @@ npm run test:full
 - Cross-cutting changes should keep the full `npm run test` path green before commit.
 - Extension-host behavior that depends on the real VS Code client lifecycle should also keep `npm run test:extension-host`
   green.
+- The extension-host smoke suite now covers hover, definition, completion, references, rename, document/workspace
+  symbols, native Cython navigation, managed restart stability, and optional native Sage source-tree lookups.
 - Use `npm run test:full` when you need the whole repository suite plus the extension-host smoke test in one command.

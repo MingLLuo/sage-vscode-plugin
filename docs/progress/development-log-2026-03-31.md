@@ -1290,3 +1290,118 @@ real VS Code client instead of only in request-level tests.
 - Next task: let the extension-host smoke suite cover more providers that currently only have request-level tests
 - Risks or blockers: other LSP handlers that still rely on dictionary-like convenience payloads may need similar
   tightening under real clients
+
+## Entry 41
+
+- Date: 2026-03-31
+- Task ID: SYN-003
+- Scope: syntax
+- Related milestone: Native source support
+- Commit: `5dc521a`
+
+### Goal
+
+Broaden the editor-facing Sage authoring experience so high-value SageMath constructs are highlighted and scaffolded
+without relying on placeholder grammar or a single toy snippet.
+
+### Decisions
+
+- Decision: expand the shared grammar toward Sage-specific domains such as rings, fields, plots, graphs, combinatorics,
+  number theory, and cryptography instead of keeping a minimal Python-adjacent keyword list.
+- Reason: the feature gap was visible during manual testing and directly affected the user's first impression of the
+  extension.
+- Decision: add source-controlled assertions for grammar, snippets, and language configuration through Node tests.
+- Reason: syntax assets are otherwise easy to widen once and silently regress later.
+
+### Verification
+
+- Checks run:
+  - `npm run sync:syntax`
+  - `npm run test --workspace @sage-vscode/extension-core`
+- Result: grammar, snippets, and language-configuration updates now cover broader Sage workflows and remain pinned by
+  automated tests
+
+### Follow-ups
+
+- Next task: decide whether semantic tokens should complement the current TextMate grammar for deeper Sage semantics
+- Risks or blockers: TextMate-only highlighting still cannot express type-aware distinctions or runtime-derived meaning
+
+## Entry 42
+
+- Date: 2026-03-31
+- Task ID: LSP-017
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `438cd8e`
+
+### Goal
+
+Make diagnostics useful on real source files by reporting syntax errors while avoiding false positives on valid `.sage`
+preparser constructs.
+
+### Decisions
+
+- Decision: keep syntax diagnostics conservative and piggyback on Python's parser after a narrow `.sage` validation
+  rewrite for caret exponentiation and `R.<...>` assignments.
+- Reason: this captures obvious mistakes immediately without pretending to fully parse every Sage-specific transform.
+- Decision: store parser-produced diagnostics directly on the module record and merge them with unresolved-import
+  diagnostics later in the workspace index.
+- Reason: syntax and import diagnostics need to share publication flow without duplicating server-side logic.
+- Decision: expand loose `.sage` parsing to accept multiple preparser generators such as `R.<x, y>`.
+- Reason: multi-generator rings are common Sage syntax and should not disappear from symbols or validation.
+
+### Verification
+
+- Checks run:
+  - `PYTHONPATH=packages/sage-lsp/src python -m pytest packages/sage-lsp/tests/test_parser.py packages/sage-lsp/tests/test_index.py`
+  - `npm run test:python`
+- Result: syntax errors now surface for broken Python and `.sage` files while valid preparser patterns remain clean
+
+### Follow-ups
+
+- Next task: feed source mapping into more diagnostics and edit projections instead of relying on line-local validation
+- Risks or blockers: richer `.sage` transforms will eventually need stronger mapping than the current conservative
+  rewrite layer
+
+## Entry 43
+
+- Date: 2026-03-31
+- Task ID: EXT-010
+- Scope: extension/test
+- Related milestone: Runtime hardening
+- Commit: `4c294b4`
+
+### Goal
+
+Deepen real extension-host coverage toward the user's actual workflow while also making terminal-based `.sage` runs less
+messy.
+
+### Decisions
+
+- Decision: preserve a copied smoke workspace's local `sourceRoots` and layer native Sage source roots on top when
+  available.
+- Reason: clearing workspace-local roots broke local-module imports and hid the real issue behind empty hover results.
+- Decision: let the extension-host smoke harness validate references, rename, document symbols, workspace symbols,
+  native `.pyx/.pxd` navigation, and optional native Sage source-tree lookups.
+- Reason: hover/definition/completion alone were too shallow to catch the problems the user was actually reporting.
+- Decision: keep runtime signature-help validation best-effort instead of hard-blocking the smoke suite.
+- Reason: the user's primary acceptance path is docs, definition, completion, diagnostics, and native-source support;
+  runtime signatures remain useful but not yet stable enough to fail the whole suite.
+- Decision: add an explicit `sage.run.cleanupGeneratedPython` setting for standalone terminal runs.
+- Reason: generated `.sage.py` artifacts are useful to some users but should be removable through a predictable opt-in.
+
+### Verification
+
+- Checks run:
+  - `npm run lint --workspace @sage-vscode/extension-core`
+  - `npm run test --workspace @sage-vscode/extension-core`
+  - `npm run test:extension-host --workspace @sage-vscode/extension-core`
+  - `npm run test:full`
+- Result: the background extension-host smoke flow now covers a much wider LSP surface, optional native Sage checkout
+  wiring, and managed restart stability while the repository-wide suite remains green
+
+### Follow-ups
+
+- Next task: decide whether runtime signature help should be promoted from best-effort to required smoke coverage
+- Risks or blockers: some runtime-backed APIs still expose less stable signature metadata than their docs or source
+  locations

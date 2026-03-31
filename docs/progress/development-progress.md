@@ -23,16 +23,19 @@
 - Runtime invocation hardening: runtime Sage introspection now launches subprocesses with argv-safe invocation and direct unit coverage
 - Singleton member resolution: dotted Sage APIs such as `graphs.PetersenGraph` now resolve statically through class-body imports, singleton instances, and member completion
 - Managed LSP shutdown: extension-driven stop/restart flows now suppress library-level auto-restart to avoid duplicate launches, cancelled requests, and code-0 exits
-- Extension-host automation: a real VS Code smoke harness now opens a copied workspace, exercises hover/definition/completion, and validates managed restart stability
+- Extension-host automation: a real VS Code smoke harness now opens a copied workspace, exercises hover/definition/completion, references, rename, symbols, native Cython, optional native Sage source trees, and validates managed restart stability
 - Completion transport hardening: completion responses are now serialized as concrete LSP items so real clients no longer trip `pygls` JSON conversion errors
+- Editor assets: Sage-specific highlighting, snippets, triple-quoted editing, and operator coverage now target broader SageMath workflows
+- Conservative syntax diagnostics: Python and `.sage` files now surface syntax errors without flagging valid preparser constructs such as `^` or `R.<x, y>`
+- Terminal cleanup: run commands can optionally remove generated `.sage.py` files after standalone terminal execution
 
 ## Current Focus
 
 1. Extend source mapping beyond caret rewrite into more `.sage` constructs.
 2. Feed source mapping into diagnostics, references, and rename paths.
-3. Add extension-host integration tests beyond the current unit suite.
-4. Deepen runtime-aware Sage introspection beyond docs/definitions/signatures where useful.
-5. Add semantic tokens and richer diagnostics on top of the current LSP baseline.
+3. Deepen runtime-aware Sage introspection beyond docs/definitions/signatures where useful.
+4. Add semantic tokens and richer diagnostics on top of the current LSP baseline.
+5. Decide whether runtime signature help should become a required smoke-test guarantee or remain best-effort.
 
 ## Milestone Tracker
 
@@ -54,6 +57,7 @@
 | Native source support | Done | The plugin now treats `.pyx`, `.pxd`, and `.pxi` as first-class documents for highlighting, indexing, and lightweight navigation. |
 | Developer workflow | Done | A helper script now prepares the repository and opens VS Code with the local launch configs ready to use. |
 | LSP baseline | Done | Workspace symbols, references, rename, and conservative diagnostics now sit alongside hover, completion, definition, and document symbols. |
+| Editor authoring baseline | Done | Syntax assets, snippets, triple-quoted editing, terminal cleanup, and background extension-host smoke automation now support richer Sage authoring workflows. |
 
 ## Change Log Notes
 
@@ -98,3 +102,6 @@
 - Suppressed client-library auto-restart during extension-managed language-server shutdown so configuration-triggered restarts no longer produce duplicate launches and spurious code-0 exits.
 - Added a real extension-host smoke harness that launches the local VS Code app against a copied smoke workspace and validates hover, definition, completion, and repeated managed restarts end to end.
 - Fixed completion serialization for real VS Code clients after the new extension-host smoke test exposed dictionary-based completion payloads that `pygls` could not encode.
+- Expanded Sage grammar, snippets, and language configuration so common rings, fields, graphs, plots, symbolic functions, operators, and triple-quoted authoring flows are covered by automated syntax-asset tests.
+- Added conservative syntax diagnostics for Python and `.sage` documents, including valid-preparser exceptions for caret exponentiation and multi-generator `R.<x, y>` declarations.
+- Added an optional run-command cleanup toggle for generated `.sage.py` files and deepened the extension-host smoke harness to cover references, rename, symbols, native Cython navigation, and optional native Sage source-tree lookups.
