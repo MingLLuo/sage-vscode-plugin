@@ -11,7 +11,15 @@
     { "include": "#definitions" },
     { "include": "#imports" },
     { "include": "#keywords" },
-    { "include": "#sage-support" },
+    { "include": "#sage-domains" },
+    { "include": "#sage-constructors" },
+    { "include": "#sage-linear-algebra" },
+    { "include": "#sage-symbolic" },
+    { "include": "#sage-plotting" },
+    { "include": "#sage-number-theory" },
+    { "include": "#sage-combinatorics" },
+    { "include": "#sage-graph-theory" },
+    { "include": "#sage-crypto" },
     { "include": "#cython-support" },
     { "include": "#operators" },
     { "include": "#constants" },
@@ -124,15 +132,83 @@
         }
       ]
     },
-    "sage-support": {
+    "sage-domains": {
       "patterns": [
         {
-          "name": "support.function.sagemath",
-          "match": "\\b(PolynomialRing|PowerSeriesRing|LaurentSeriesRing|FractionField|QuadraticField|CyclotomicField|NumberField|MatrixSpace|vector|matrix|identity_matrix|diagonal_matrix|block_matrix|random_matrix|var|function|factor|factorial|expand|simplify|integrate|diff|limit|solve|sqrt|sin|cos|tan|exp|log|plot|parametric_plot|implicit_plot|list_plot|line|point|circle|polygon|density_plot|text3d|EllipticCurve|BooleanFunction|SBox|sigma|euler_phi|next_prime|is_prime|Partitions|Permutations|SymmetricGroup|Compositions|Combinations|Subsets|Graph|DiGraph|graphs)\\b"
+          "name": "support.type.ring.sagemath",
+          "match": "\\b(ZZ|QQ|RR|CC|SR|GF|QQbar|AA|CDF|RDF|IF|CIF|Integers|Rationals|ComplexField|RealField|FiniteField)\\b"
         },
         {
-          "name": "support.constant.sagemath",
-          "match": "\\b(ZZ|QQ|RR|CC|SR|GF|QQbar|AA|CDF|RDF|IF|CIF|pi|e|I|oo|Infinity|Integers|Rationals|ComplexField|RealField|FiniteField)\\b"
+          "name": "constant.language.sagemath",
+          "match": "\\b(pi|e|I|oo|Infinity)\\b"
+        }
+      ]
+    },
+    "sage-constructors": {
+      "patterns": [
+        {
+          "name": "support.class.constructor.sagemath",
+          "match": "\\b(PolynomialRing|PowerSeriesRing|LaurentSeriesRing|FractionField|QuadraticField|CyclotomicField|NumberField|MatrixSpace|EllipticCurve|Graph|DiGraph)\\b"
+        }
+      ]
+    },
+    "sage-linear-algebra": {
+      "patterns": [
+        {
+          "name": "support.function.linear-algebra.sagemath",
+          "match": "\\b(matrix|vector|identity_matrix|diagonal_matrix|block_matrix|random_matrix)\\b"
+        }
+      ]
+    },
+    "sage-symbolic": {
+      "patterns": [
+        {
+          "name": "support.function.symbolic.sagemath",
+          "match": "\\b(var|function|factor|factorial|expand|simplify|integrate|diff|limit|solve|sqrt|sin|cos|tan|exp|log)\\b"
+        }
+      ]
+    },
+    "sage-plotting": {
+      "patterns": [
+        {
+          "name": "support.function.plotting.sagemath",
+          "match": "\\b(plot|parametric_plot|implicit_plot|list_plot|line|point|circle|polygon|density_plot|text3d)\\b"
+        }
+      ]
+    },
+    "sage-number-theory": {
+      "patterns": [
+        {
+          "name": "support.function.number-theory.sagemath",
+          "match": "\\b(sigma|euler_phi|next_prime|is_prime|cyclotomic_polynomial)\\b"
+        }
+      ]
+    },
+    "sage-combinatorics": {
+      "patterns": [
+        {
+          "name": "support.class.combinatorics.sagemath",
+          "match": "\\b(Partitions|Permutations|SymmetricGroup|Compositions|Combinations|Subsets)\\b"
+        }
+      ]
+    },
+    "sage-graph-theory": {
+      "patterns": [
+        {
+          "name": "entity.name.namespace.sagemath",
+          "match": "\\bgraphs\\b"
+        },
+        {
+          "name": "support.function.graph-theory.sagemath",
+          "match": "\\b(Graph|DiGraph)\\b"
+        }
+      ]
+    },
+    "sage-crypto": {
+      "patterns": [
+        {
+          "name": "support.class.crypto.sagemath",
+          "match": "\\b(BooleanFunction|SBox)\\b"
         }
       ]
     },

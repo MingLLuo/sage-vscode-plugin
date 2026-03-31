@@ -12,7 +12,17 @@ test("syntax grammar highlights broad SageMath domains and operators", () => {
   const grammar = readJson("syntaxes/sagemath.tmLanguage.json") as {
     repository?: Record<string, { patterns?: Array<{ match?: string }> }>;
   };
-  const supportPatterns = grammar.repository?.["sage-support"]?.patterns ?? [];
+  const supportPatterns = [
+    ...(grammar.repository?.["sage-domains"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-constructors"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-linear-algebra"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-symbolic"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-plotting"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-number-theory"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-combinatorics"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-graph-theory"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-crypto"]?.patterns ?? []),
+  ];
   const operatorPatterns = grammar.repository?.operators?.patterns ?? [];
   const patternText = [...supportPatterns, ...operatorPatterns]
     .map((entry) => entry.match ?? "")
