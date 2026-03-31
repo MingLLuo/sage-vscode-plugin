@@ -69,7 +69,7 @@ def create_server() -> SageLanguageServer:
             return None
 
         parts = [documentation.detail]
-        if documentation.docstring:
+        if server.environment.documentation.show_on_hover and documentation.docstring:
             parts.append(documentation.docstring)
 
         return Hover(

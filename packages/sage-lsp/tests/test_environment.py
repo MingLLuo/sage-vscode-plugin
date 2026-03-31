@@ -23,6 +23,16 @@ def test_environment_from_initialize_options() -> None:
                 "sourceRoots": ["/workspace/src"],
                 "exclude": ["**/.venv"],
             },
+            "documentation": {
+                "preferredSource": "runtime",
+                "showOnHover": False,
+            },
+            "logging": {
+                "level": "debug",
+            },
+            "experimental": {
+                "notebookSupport": True,
+            },
         }
     )
 
@@ -33,3 +43,7 @@ def test_environment_from_initialize_options() -> None:
     assert environment.analysis.enable_pyx_parsing is False
     assert environment.workspace.root_uri == "file:///workspace"
     assert environment.workspace.source_roots == ("/workspace/src",)
+    assert environment.documentation.preferred_source == "runtime"
+    assert environment.documentation.show_on_hover is False
+    assert environment.logging.level == "debug"
+    assert environment.experimental.notebook_support is True

@@ -36,12 +36,37 @@ class WorkspaceContext:
 
 
 @dataclass(slots=True)
+class DocumentationSettings:
+    """Documentation rendering preferences supplied by the editor client."""
+
+    preferred_source: str = "auto"
+    show_on_hover: bool = True
+
+
+@dataclass(slots=True)
+class LoggingSettings:
+    """Logging preferences supplied by the editor client."""
+
+    level: str = "info"
+
+
+@dataclass(slots=True)
+class ExperimentalSettings:
+    """Preview feature flags supplied by the editor client."""
+
+    notebook_support: bool = False
+
+
+@dataclass(slots=True)
 class SageEnvironment:
     """Top-level environment snapshot used by the LSP server."""
 
     interpreter: SageInterpreter | None = None
     analysis: AnalysisSettings = field(default_factory=AnalysisSettings)
     workspace: WorkspaceContext = field(default_factory=WorkspaceContext)
+    documentation: DocumentationSettings = field(default_factory=DocumentationSettings)
+    logging: LoggingSettings = field(default_factory=LoggingSettings)
+    experimental: ExperimentalSettings = field(default_factory=ExperimentalSettings)
 
     @classmethod
     def from_initialize_options(cls, options: dict[str, object] | None) -> "SageEnvironment":
@@ -119,4 +144,40 @@ class SageEnvironment:
         else:
             workspace = WorkspaceContext()
 
-        return cls(interpreter=interpreter, analysis=analysis, workspace=workspace)
+        documentation_config = options.get("documentation")
+        if isinstance(documentation_config, dict):
+            documentation = DocumentationSettings(
+                preferred_source=documentation_config.get("preferredSource", "auto")
+                if isinstance(documentation_config.get("preferredSource"), str)
+                else "auto",
+                show_on_hover=bool(documentation_config.get("showOnHover", True)),
+            )
+        else:
+            documentation = DocumentationSettings()
+
+        logging_config = options.get("logging")
+        if isinstance(logging_config, dict):
+            logging = LoggingSettings(
+                level=logging_config.get("level", "info")
+                if isinstance(logging_config.get("level"), str)
+                else "info"
+            )
+        else:
+            logging = LoggingSettings()
+
+        experimental_config = options.get("experimental")
+        if isinstance(experimental_config, dict):
+            experimental = ExperimentalSettings(
+                notebook_support=bool(experimental_config.get("notebookSupport", False))
+            )
+        else:
+            experimental = ExperimentalSettings()
+
+        return cls(
+            interpreter=interpreter,
+            analysis=analysis,
+            workspace=workspace,
+            documentation=documentation,
+            logging=logging,
+            experimental=experimental,
+        )

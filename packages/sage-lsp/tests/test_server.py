@@ -22,6 +22,15 @@ FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "sage_src_lite" / "src"
 
 
 def _initialized_server():
+    return _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(FIXTURE_ROOT)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+
+
+def _initialized_server_with_options(initialization_options: dict[str, object]):
     server = create_server()
     server.protocol._workspace = Workspace(  # noqa: SLF001 - intentional test setup
         root_uri="file:///workspace",
@@ -36,10 +45,7 @@ def _initialized_server():
             root_uri="file:///workspace",
             capabilities=ClientCapabilities(),
             workspace_folders=[WorkspaceFolder(uri="file:///workspace", name="workspace")],
-            initialization_options={
-                "workspace": {"sourceRoots": [str(FIXTURE_ROOT)]},
-                "analysis": {"enablePyxParsing": True},
-            },
+            initialization_options=initialization_options,
         )
     )
     return server
@@ -120,3 +126,28 @@ def test_server_document_symbols_track_open_document_contents() -> None:
     names = {item["name"] if isinstance(item, dict) else item.name for item in symbols}
 
     assert {"R", "x", "helper", "factorial"} <= names
+
+
+def test_server_hover_omits_docstring_when_hover_docs_disabled() -> None:
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(FIXTURE_ROOT)]},
+            "analysis": {"enablePyxParsing": True},
+            "documentation": {"showOnHover": False},
+        }
+    )
+    uri = Path("/workspace/example.sage").as_uri()
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text="sqrt(4)\n")
+    )
+
+    hover_handler = server.protocol.fm.features["textDocument/hover"]
+    hover = hover_handler(
+        HoverParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=0, character=2),
+        )
+    )
+
+    assert hover is not None
+    assert hover.contents.value == "function sqrt"
