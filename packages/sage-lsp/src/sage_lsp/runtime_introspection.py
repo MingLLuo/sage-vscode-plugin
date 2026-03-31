@@ -164,8 +164,7 @@ class RuntimeIntrospector:
 
         try:
             completed = subprocess.run(
-                invocation[0],
-                invocation[1],
+                invocation,
                 check=False,
                 capture_output=True,
                 text=True,
@@ -181,21 +180,15 @@ class RuntimeIntrospector:
             return None
         return payload
 
-    def _build_invocation(self, name: str) -> Optional[tuple[str, list[str]]]:
+    def _build_invocation(self, name: str) -> Optional[list[str]]:
         if not self._command:
             return None
 
         command = Path(self._command).name.lower()
         if command.startswith("python"):
-            return (
-                self._command,
-                [*self._args, "-c", RUNTIME_INTROSPECTION_SCRIPT, name],
-            )
+            return [self._command, *self._args, "-c", RUNTIME_INTROSPECTION_SCRIPT, name]
         if command.startswith("sage") or self._command == "sage":
-            return (
-                self._command,
-                [*self._args, "-python", "-c", RUNTIME_INTROSPECTION_SCRIPT, name],
-            )
+            return [self._command, *self._args, "-python", "-c", RUNTIME_INTROSPECTION_SCRIPT, name]
         return None
 
 
