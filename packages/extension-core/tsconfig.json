@@ -3,8 +3,9 @@
   "compilerOptions": {
     "outDir": "out",
     "rootDir": ".",
+    "sourceMap": true,
+    "inlineSources": true,
     "types": ["node", "vscode"]
   },
   "include": ["src/**/*.ts", "test/**/*.ts"]
 }
-

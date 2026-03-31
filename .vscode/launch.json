@@ -1,0 +1,19 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Sage Plugin: Extension Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/extension-core",
+        "${workspaceFolder}"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/packages/extension-core/out/**/*.js"
+      ],
+      "preLaunchTask": "build"
+    }
+  ]
+}
