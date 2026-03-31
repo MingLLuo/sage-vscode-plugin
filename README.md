@@ -24,7 +24,10 @@ indexing, and Sage-aware `.sage` preprocessing primitives.
 - The extension now launches the language server with a dedicated Python runtime instead of assuming Sage's bundled Python can host `pygls`.
 - The language server provides static hover, completion, definition, document symbols, documentation requests, and
   reduced Sage fixture-backed source indexing.
+- Native Sage/Cython sources now participate in the editor experience through `.pyx`, `.pxd`, and `.pxi` registration,
+  lightweight `cimport` parsing, and richer syntax highlighting.
 - `.sage` source mapping v1 currently rewrites standalone exponent carets while preserving bidirectional column maps.
+- A repository-local helper script now bootstraps the repo, rebuilds assets, and opens VS Code through `npm run dev:vscode`.
 
 ## Reference Inputs
 
@@ -43,6 +46,7 @@ indexing, and Sage-aware `.sage` preprocessing primitives.
 
 - [Developer Guide](./docs/developer-guide.md)
 - [Install and Configure](./docs/install-and-configure.md)
+- [Native Source Support](./docs/design/native-source-support.md)
 - [Design Overview](./docs/design/overview.md)
 - [Development Progress](./docs/progress/development-progress.md)
 - [Manual Smoke Workspace](./examples/manual-smoke-workspace/README.md)
@@ -51,4 +55,4 @@ indexing, and Sage-aware `.sage` preprocessing primitives.
 
 1. Extend `.sage` preprocessing beyond the initial caret rewrite.
 2. Feed source mapping into diagnostics and navigation paths.
-3. Add deeper integration tests and runtime-aware fallbacks.
+3. Add deeper extension-host integration coverage and runtime-aware fallbacks.

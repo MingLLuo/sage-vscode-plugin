@@ -660,3 +660,130 @@ during activation and workspace configuration churn.
 
 - Next task: add extension-host smoke coverage
 - Risks or blockers: the extension lifecycle fix is covered by protocol probing and repository tests, but not yet by a true VS Code extension-host automation layer
+
+## Entry 23
+
+- Date: 2026-03-31
+- Task ID: LSP-008
+- Scope: lsp
+- Related milestone: Native source support
+- Commit: `87c7f0f`
+
+### Goal
+
+Treat Sage-native library sources as first-class analysis inputs instead of reducing the plugin to `.sage` and `.pyx`
+only.
+
+### Decisions
+
+- Decision: extend the lightweight parser to cover `.pxd` and `.pxi` inputs alongside `.pyx`.
+- Reason: Sage's native components often split declarations and implementations across those file types, so skipping
+  them loses useful symbols.
+- Decision: merge module records when `.pyx` and `.pxd` represent the same logical module.
+- Reason: declaration-only symbols should remain visible without letting `.pxd` override the authoritative implementation
+  file for hover and navigation metadata.
+
+### Verification
+
+- Checks run: `npm run test`
+- Result: request-level server tests plus parser/index coverage now include `cimport` resolution and native module merges
+
+### Follow-ups
+
+- Next task: register the new file types in the extension and syntax layer
+- Risks or blockers: parsing remains intentionally lightweight and does not yet model the full Cython grammar
+
+## Entry 24
+
+- Date: 2026-03-31
+- Task ID: EXT-006
+- Scope: extension
+- Related milestone: Native source support
+- Commit: `41a6a87`
+
+### Goal
+
+Ensure the VS Code extension actually activates and forwards native Sage/Cython documents to the language server.
+
+### Decisions
+
+- Decision: introduce a dedicated `sagemath-cython` language id rather than overloading `sagemath`.
+- Reason: this keeps native-source behavior explicit while still allowing the grammar and settings surface to remain
+  shared.
+- Decision: expand both `documentSelector` and file-system watchers to cover `.pyx`, `.pxd`, and `.pxi`.
+- Reason: indexing support is wasted if the extension never routes those documents through the client lifecycle.
+
+### Verification
+
+- Checks run: `npm run test`
+- Result: extension build and unit coverage stayed green after the new document registrations
+
+### Follow-ups
+
+- Next task: land matching syntax support and smoke examples
+- Risks or blockers: extension-host automation for native documents is still future work
+
+## Entry 25
+
+- Date: 2026-03-31
+- Task ID: SYN-002
+- Scope: syntax
+- Related milestone: Native source support
+- Commit: `79ee691`
+
+### Goal
+
+Replace the placeholder syntax assets with something usable for both `.sage` and Sage-native Cython sources.
+
+### Decisions
+
+- Decision: keep one shared TextMate grammar for `.sage`, `.pyx`, `.pxd`, and `.pxi`.
+- Reason: Sage and its native components overlap heavily enough that a shared grammar reduces drift and duplication.
+- Decision: add native declarations and preparser assignments to the smoke workspace.
+- Reason: highlighting changes are easier to validate when the repository ships its own representative files.
+
+### Verification
+
+- Checks run:
+  - `npm run lint`
+  - `npm run test`
+- Result: generated syntax assets stayed in sync and the expanded smoke fixtures did not break the repository test chain
+
+### Follow-ups
+
+- Next task: keep expanding native-source semantic coverage beyond highlighting
+- Risks or blockers: the current grammar is still hand-maintained and does not yet embed the full upstream Python grammar
+
+## Entry 26
+
+- Date: 2026-03-31
+- Task ID: DEV-001
+- Scope: repo
+- Related milestone: Developer workflow
+- Commit: `e3b42d4`
+
+### Goal
+
+Give contributors a single command that can prepare the repository and open the right VS Code development context.
+
+### Decisions
+
+- Decision: make the helper script repository-local and expose it through root npm scripts.
+- Reason: the workflow should be discoverable from the repo itself instead of living in ad hoc shell history.
+- Decision: keep bootstrap, build, and open steps controllable through flags such as `--bootstrap`, `--skip-build`, and
+  `--no-open`.
+- Reason: contributors need the same entrypoint to work for both first-time setup and fast local rebuild cycles.
+
+### Verification
+
+- Checks run:
+  - `./scripts/dev-vscode.sh --help`
+  - `./scripts/dev-vscode.sh --dry-run --bootstrap --python python --smoke --no-open`
+  - `./scripts/dev-vscode.sh --no-open --smoke`
+- Result: the script prints clear usage, correctly describes the bootstrap workflow, and successfully runs the sync/build
+  path without launching a GUI when requested
+
+### Follow-ups
+
+- Next task: extension-host smoke automation remains the next development workflow target
+- Risks or blockers: opening the GUI still depends on the user having the `code` CLI available in their PATH

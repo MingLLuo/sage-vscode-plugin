@@ -11,6 +11,14 @@
 Note: this Python environment is the default host for the language server itself. It does not need to match the Sage
 executable used to run `.sage` files.
 
+## One-Command VS Code Setup
+
+- Run `npm run dev:vscode` to sync syntax assets, build the repository, and open the plugin repository in VS Code.
+- Run `npm run dev:vscode:smoke` to do the same prep work and then remind yourself to launch the smoke-workspace
+  extension-host configuration with `F5`.
+- Run `./scripts/dev-vscode.sh --bootstrap --python /path/to/python` when you want the helper script to install Node
+  dependencies and editable-install `sage-lsp` before opening VS Code.
+
 ## Extension Development Host
 
 1. Open the repository in VS Code.
@@ -38,7 +46,7 @@ If the language server still fails to start, point `sage.languageServer.pythonPa
 ## Manual Smoke Workspace
 
 - A ready-made manual test workspace lives in `examples/manual-smoke-workspace`.
-- It includes `.sage`, `.py`, and `.pyx` files plus workspace-local settings for `sourceRoots` and `extraPaths`.
+- It includes `.sage`, `.py`, `.pyx`, `.pxd`, and `.pxi` files plus workspace-local settings for `sourceRoots` and `extraPaths`.
 - Use the `Sage Plugin: Smoke Workspace` launch configuration to open it directly in the extension host.
 
 ## Current Limits

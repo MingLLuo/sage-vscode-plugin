@@ -12,9 +12,9 @@ tracked, and how the current static-analysis baseline should be extended safely.
   documentation panel rendering, workspace discovery, and LSP client startup.
 - `packages/sage-lsp`
   Python language server. Owns `pygls` lifecycle, environment normalization, parser and index logic, static symbol
-  resolution, and `.sage` preprocessing primitives.
+  resolution, `.sage` preprocessing primitives, and lightweight native-source support for `.pyx`, `.pxd`, and `.pxi`.
 - `packages/syntax-pack`
-  Shared syntax assets. Owns grammar, snippets, and language configuration.
+  Shared syntax assets. Owns grammar, snippets, and language configuration for `.sage` and Sage-native Cython files.
 - `docs/design`
   Architecture notes and accepted design decisions.
 - `docs/process`
@@ -23,9 +23,11 @@ tracked, and how the current static-analysis baseline should be extended safely.
   Milestone status and task-level tracking.
 - `.vscode`
   Repository-local launch and task definitions for starting the extension development host with `F5`.
+- `scripts/dev-vscode.sh`
+  Helper entrypoint that can bootstrap dependencies, sync syntax assets, build the repo, and open VS Code in one step.
 - `examples/manual-smoke-workspace`
-  Self-contained manual smoke-test workspace used to exercise hover, definition, completion, docs, `.pyx`, and
-  `.sage` cases.
+  Self-contained manual smoke-test workspace used to exercise hover, definition, completion, docs, `.pyx`, `.pxd`,
+  `.pxi`, and `.sage` cases.
 
 ## Working Rules
 
@@ -42,7 +44,8 @@ tracked, and how the current static-analysis baseline should be extended safely.
 - `src/workspaceDiscovery.ts`
   Determines which workspace roots should be indexed.
 - `src/languageClient.ts`
-  Starts the `pygls` server in a dedicated Python runtime and sends custom documentation requests.
+  Starts the `pygls` server in a dedicated Python runtime, watches Sage/Cython document types, and sends custom
+  documentation requests.
 - `src/executionPlan.ts`
   Builds shell-safe run commands and REPL load commands from extension settings.
 - `src/serverRestart.ts`
@@ -58,9 +61,10 @@ tracked, and how the current static-analysis baseline should be extended safely.
 ## Key Language Server Modules
 
 - `src/sage_lsp/parser.py`
-  Parses Python, loose `.sage`, and lightweight `.pyx` files into a common module model.
+  Parses Python, loose `.sage`, and lightweight `.pyx`/`.pxd`/`.pxi` files into a common module model.
 - `src/sage_lsp/index.py`
-  Builds workspace state and resolves symbols through imports, star imports, and lazy imports.
+  Builds workspace state, merges native declaration and implementation modules, and resolves symbols through imports,
+  star imports, and lazy imports.
 - `src/sage_lsp/source_map.py`
   Hosts the first `.sage` preprocessing and bidirectional position mapping primitives.
 - `src/sage_lsp/server.py`
@@ -76,6 +80,12 @@ python -m pip install -e ./packages/sage-lsp[dev]
 npm run sync:syntax
 npm run build
 npm run test
+```
+
+Shortcut:
+
+```bash
+npm run dev:vscode
 ```
 
 ## Local Debugging
