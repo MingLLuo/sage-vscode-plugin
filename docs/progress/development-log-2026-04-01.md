@@ -430,7 +430,7 @@ buffer has not changed.
 - Task ID: LSP-025
 - Scope: lsp
 - Related milestone: LSP baseline
-- Commit: `pending`
+- Commit: `b91355a`
 
 ### Goal
 
