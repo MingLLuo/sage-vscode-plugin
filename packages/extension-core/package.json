@@ -1,0 +1,65 @@
+{
+  "name": "@sage-vscode/extension-core",
+  "displayName": "Sage VS Code Plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "VS Code extension client for Sage language tooling",
+  "main": "./out/src/extension.js",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "activationEvents": [
+    "onCommand:sage.selectInterpreter",
+    "onCommand:sage.showEnvironmentDetails"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "sage.selectInterpreter",
+        "title": "Sage: Select Interpreter"
+      },
+      {
+        "command": "sage.showEnvironmentDetails",
+        "title": "Sage: Show Environment Details"
+      }
+    ],
+    "configuration": {
+      "title": "Sage",
+      "properties": {
+        "sage.interpreterPath": {
+          "type": "string",
+          "default": "python",
+          "description": "Python executable used to launch the Sage language server during bootstrap."
+        },
+        "sage.analysis.sourceRoots": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "description": "Optional analysis source roots forwarded to the language server."
+        },
+        "sage.logLevel": {
+          "type": "string",
+          "default": "info",
+          "enum": ["trace", "debug", "info", "warn", "error"],
+          "description": "Client and server log verbosity."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "lint": "tsc -p . --noEmit",
+    "test": "npm run build && node --test out/test/**/*.test.js"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.7.2"
+  }
+}
+
