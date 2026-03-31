@@ -7,7 +7,7 @@ import re
 from typing import Optional
 from urllib.parse import unquote, urlparse
 
-from .model import ImportBinding, ModuleRecord, SymbolRecord, document_symbol_kind
+from .model import ImportBinding, ModuleRecord, SourceRange, SymbolRecord, document_symbol_kind
 from .parser import parse_module
 
 
@@ -135,6 +135,127 @@ class WorkspaceIndex:
             )
         return items
 
+    def workspace_symbols(self, query: str) -> list[dict[str, object]]:
+        needle = query.casefold().strip()
+        items: list[dict[str, object]] = []
+        seen: set[tuple[Path, int, int, str]] = set()
+        for module_name in sorted(self._modules):
+            record = self._modules[module_name]
+            for name, symbol in sorted(record.symbols.items()):
+                if name.startswith("_"):
+                    continue
+                haystack = f"{name} {module_name}".casefold()
+                if needle and needle not in haystack:
+                    continue
+                identity = symbol_identity(symbol)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                items.append(
+                    {
+                        "name": name,
+                        "kind": document_symbol_kind(symbol.kind),
+                        "location": {
+                            "uri": symbol.file_path.as_uri(),
+                            "range": symbol.source_range.to_lsp(),
+                        },
+                        "containerName": module_name,
+                    }
+                )
+        return items[:200]
+
+    def reference_locations(
+        self,
+        record: ModuleRecord,
+        name: str,
+        include_declaration: bool = True,
+    ) -> list[dict[str, object]]:
+        binding = record.bindings.get(name)
+        if (
+            binding is not None
+            and name not in record.symbols
+            and (binding.target_name is None or binding.target_name != name)
+        ):
+            return self._local_name_locations(record, name)
+
+        target = self.resolve_symbol(record, name)
+        if target is None:
+            return self._local_name_locations(record, name)
+
+        target_identity = symbol_identity(target)
+        records = self._records_for_search(record)
+        locations: list[dict[str, object]] = []
+        seen: set[tuple[str, int, int, int, int]] = set()
+
+        for candidate in records.values():
+            resolved = self.resolve_symbol(candidate, name)
+            if resolved is None or symbol_identity(resolved) != target_identity:
+                continue
+            for source_range in iter_identifier_ranges(candidate.source, name):
+                if not include_declaration and _same_location(candidate.file_path, source_range, target.file_path, target.source_range):
+                    continue
+                location = {
+                    "uri": candidate.file_path.as_uri(),
+                    "range": source_range.to_lsp(),
+                }
+                location_key = location_identity(location)
+                if location_key in seen:
+                    continue
+                seen.add(location_key)
+                locations.append(location)
+
+        return locations
+
+    def rename_edits(
+        self,
+        record: ModuleRecord,
+        name: str,
+        new_name: str,
+    ) -> dict[str, list[dict[str, object]]]:
+        locations = self.reference_locations(record, name, include_declaration=True)
+        changes: dict[str, list[dict[str, object]]] = {}
+        for location in locations:
+            uri = location["uri"]
+            changes.setdefault(uri, []).append(
+                {
+                    "range": location["range"],
+                    "newText": new_name,
+                }
+            )
+        return changes
+
+    def diagnostics_for_record(self, record: ModuleRecord) -> list[dict[str, object]]:
+        diagnostics: list[dict[str, object]] = []
+        seen: set[tuple[int, int, str]] = set()
+        for binding in record.bindings.values():
+            target_record = self._modules.get(binding.module_name)
+            message: Optional[str] = None
+            if target_record is None:
+                message = f"Unresolved import module '{binding.module_name}'"
+            elif binding.target_name is not None and self._resolve_symbol(target_record, binding.target_name, visited=set()) is None:
+                message = (
+                    f"Unresolved import name '{binding.target_name}' from '{binding.module_name}'"
+                )
+            if message is None:
+                continue
+            diagnostic_key = (
+                binding.source_range.start.line,
+                binding.source_range.start.character,
+                message,
+            )
+            if diagnostic_key in seen:
+                continue
+            seen.add(diagnostic_key)
+            diagnostics.append(
+                {
+                    "range": binding.source_range.to_lsp(),
+                    "severity": 2,
+                    "source": "sage-lsp",
+                    "message": message,
+                }
+            )
+        return diagnostics
+
     def documentation_for_symbol(self, record: ModuleRecord, name: str) -> Optional[DocumentationResult]:
         symbol = self.resolve_symbol(record, name)
         if symbol is None:
@@ -234,6 +355,20 @@ class WorkspaceIndex:
             for pattern in self._excluded_globs
         )
 
+    def _records_for_search(self, current_record: ModuleRecord) -> dict[str, ModuleRecord]:
+        records = dict(self._modules)
+        records[current_record.module_name] = current_record
+        return records
+
+    def _local_name_locations(self, record: ModuleRecord, name: str) -> list[dict[str, object]]:
+        return [
+            {
+                "uri": record.file_path.as_uri(),
+                "range": source_range.to_lsp(),
+            }
+            for source_range in iter_identifier_ranges(record.source, name)
+        ]
+
 
 def module_name_from_path(root: Path, path: Path) -> Optional[str]:
     relative = path.relative_to(root)
@@ -273,6 +408,143 @@ def module_record_precedence(record: ModuleRecord) -> int:
         ".pxd": 2,
         ".pxi": 1,
     }.get(record.file_path.suffix, 0)
+
+
+def iter_identifier_ranges(text: str, name: str) -> list[SourceRange]:
+    if not name:
+        return []
+
+    line_number = 1
+    column = 0
+    index = 0
+    state = "code"
+    ranges: list[SourceRange] = []
+
+    while index < len(text):
+        char = text[index]
+
+        if char == "\n":
+            line_number += 1
+            column = 0
+            index += 1
+            continue
+
+        if state == "code":
+            if text.startswith("'''", index):
+                state = "triple_single"
+                index += 3
+                column += 3
+                continue
+            if text.startswith('"""', index):
+                state = "triple_double"
+                index += 3
+                column += 3
+                continue
+            if char == "#":
+                while index < len(text) and text[index] != "\n":
+                    index += 1
+                    column += 1
+                continue
+            if char == "'":
+                state = "single"
+                index += 1
+                column += 1
+                continue
+            if char == '"':
+                state = "double"
+                index += 1
+                column += 1
+                continue
+            if char.isalpha() or char == "_":
+                start_line = line_number
+                start_column = column
+                end_index = index + 1
+                end_column = column + 1
+                while end_index < len(text) and (text[end_index].isalnum() or text[end_index] == "_"):
+                    end_index += 1
+                    end_column += 1
+                if text[index:end_index] == name:
+                    ranges.append(
+                        SourceRange.from_offsets(
+                            start_line,
+                            start_column,
+                            start_line,
+                            end_column,
+                        )
+                    )
+                index = end_index
+                column = end_column
+                continue
+
+            index += 1
+            column += 1
+            continue
+
+        if state in {"single", "double"}:
+            if char == "\\" and index + 1 < len(text):
+                index += 2
+                column += 2
+                continue
+            if (state == "single" and char == "'") or (state == "double" and char == '"'):
+                state = "code"
+            index += 1
+            column += 1
+            continue
+
+        if state == "triple_single":
+            if text.startswith("'''", index):
+                state = "code"
+                index += 3
+                column += 3
+            else:
+                index += 1
+                column += 1
+            continue
+
+        if text.startswith('"""', index):
+            state = "code"
+            index += 3
+            column += 3
+        else:
+            index += 1
+            column += 1
+
+    return ranges
+
+
+def symbol_identity(symbol: SymbolRecord) -> tuple[Path, int, int, str]:
+    return (
+        symbol.file_path.resolve(),
+        symbol.source_range.start.line,
+        symbol.source_range.start.character,
+        symbol.name,
+    )
+
+
+def location_identity(location: dict[str, object]) -> tuple[str, int, int, int, int]:
+    raw_range = location["range"]
+    return (
+        str(location["uri"]),
+        int(raw_range["start"]["line"]),
+        int(raw_range["start"]["character"]),
+        int(raw_range["end"]["line"]),
+        int(raw_range["end"]["character"]),
+    )
+
+
+def _same_location(
+    left_path: Path,
+    left_range: SourceRange,
+    right_path: Path,
+    right_range: SourceRange,
+) -> bool:
+    return (
+        left_path.resolve() == right_path.resolve()
+        and left_range.start.line == right_range.start.line
+        and left_range.start.character == right_range.start.character
+        and left_range.end.line == right_range.end.line
+        and left_range.end.character == right_range.end.character
+    )
 
 
 def path_from_uri(uri: str) -> Path:

@@ -3,14 +3,19 @@ from pathlib import Path
 from lsprotocol.types import (
     ClientCapabilities,
     CompletionParams,
+    DidOpenTextDocumentParams,
     DefinitionParams,
     DocumentSymbolParams,
     HoverParams,
     InitializeParams,
     Position,
+    ReferenceContext,
+    ReferenceParams,
+    RenameParams,
     TextDocumentIdentifier,
     TextDocumentItem,
     TextDocumentSyncKind,
+    WorkspaceSymbolParams,
     WorkspaceFolder,
 )
 from pygls.workspace import Workspace
@@ -219,6 +224,80 @@ def test_server_resolves_native_cython_definitions(tmp_path: Path) -> None:
     )
     assert definition is not None
     assert definition.uri.endswith("native_support.pxd")
+
+
+def test_server_provides_workspace_symbols_references_and_rename(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    _write_module(source_root, "pkg/__init__.py", "")
+    _write_module(source_root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+    consumer_path = source_root / "pkg" / "consumer.py"
+    _write_module(
+        source_root,
+        "pkg/consumer.py",
+        "from pkg.helpers import helper\n\nresult = helper(4)\n",
+    )
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(source_root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+    consumer_uri = consumer_path.as_uri()
+    consumer_source = consumer_path.read_text(encoding="utf-8")
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=consumer_uri, language_id="python", version=1, text=consumer_source)
+    )
+
+    workspace_symbol_handler = server.protocol.fm.features["workspace/symbol"]
+    symbols = workspace_symbol_handler(WorkspaceSymbolParams(query="helper"))
+    assert any(item["name"] == "helper" and str(item["location"]["uri"]).endswith("helpers.py") for item in symbols)
+
+    references_handler = server.protocol.fm.features["textDocument/references"]
+    references = references_handler(
+        ReferenceParams(
+            text_document=TextDocumentIdentifier(uri=consumer_uri),
+            position=Position(line=2, character=9),
+            context=ReferenceContext(include_declaration=True),
+        )
+    )
+    assert any(location.uri.endswith("helpers.py") for location in references)
+    assert any(location.uri.endswith("consumer.py") for location in references)
+
+    rename_handler = server.protocol.fm.features["textDocument/rename"]
+    rename = rename_handler(
+        RenameParams(
+            text_document=TextDocumentIdentifier(uri=consumer_uri),
+            position=Position(line=2, character=9),
+            new_name="renamed_helper",
+        )
+    )
+    assert rename is not None
+    assert any(uri.endswith("helpers.py") for uri in rename.changes)
+    assert any(uri.endswith("consumer.py") for uri in rename.changes)
+
+
+def test_server_publishes_import_diagnostics_on_open() -> None:
+    server = _initialized_server()
+    uri = Path("/workspace/broken.py").as_uri()
+    source = "from missing.module import helper\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="python", version=1, text=source)
+    )
+
+    published: list[tuple[str, list[object]]] = []
+    server.publish_diagnostics = lambda target_uri, diagnostics: published.append((target_uri, diagnostics))  # type: ignore[assignment]
+
+    did_open_handler = server.protocol.fm.features["textDocument/didOpen"]
+    did_open_handler(
+        DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(uri=uri, language_id="python", version=1, text=source)
+        )
+    )
+
+    assert published
+    assert published[0][0] == uri
+    assert any("missing.module" in diagnostic.message for diagnostic in published[0][1])
 
 
 def _write_module(root: Path, relative_path: str, contents: str) -> None:

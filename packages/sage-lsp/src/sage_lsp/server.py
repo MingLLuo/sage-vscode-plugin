@@ -6,7 +6,11 @@ from typing import Any, Dict, Optional, Tuple
 from lsprotocol.types import (
     CompletionList,
     CompletionParams,
+    Diagnostic,
+    DiagnosticSeverity,
+    DidChangeTextDocumentParams,
     DidChangeConfigurationParams,
+    DidOpenTextDocumentParams,
     DefinitionParams,
     DocumentSymbolParams,
     Hover,
@@ -18,9 +22,14 @@ from lsprotocol.types import (
     MarkupContent,
     MarkupKind,
     Position,
+    ReferenceParams,
     Range,
+    RenameParams,
     ServerCapabilities,
     TextDocumentSyncKind,
+    TextEdit,
+    WorkspaceEdit,
+    WorkspaceSymbolParams,
 )
 from pygls.lsp.server import LanguageServer
 
@@ -50,7 +59,10 @@ def create_server() -> SageLanguageServer:
                 text_document_sync=TextDocumentSyncKind.Incremental,
                 hover_provider=True,
                 definition_provider=True,
+                references_provider=True,
+                rename_provider=True,
                 document_symbol_provider=True,
+                workspace_symbol_provider=True,
                 completion_provider={"triggerCharacters": [".", "("], "resolveProvider": False},
             ),
         )
@@ -116,6 +128,61 @@ def create_server() -> SageLanguageServer:
             return []
         return server.workspace_index.document_symbols(record)
 
+    @server.feature("workspace/symbol")
+    def on_workspace_symbol(params: WorkspaceSymbolParams) -> list[dict[str, object]]:
+        if server.workspace_index is None:
+            return []
+        return server.workspace_index.workspace_symbols(params.query)
+
+    @server.feature("textDocument/references")
+    def on_references(params: ReferenceParams) -> list[Location]:
+        if server.workspace_index is None:
+            return []
+        resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
+        if resolved is None:
+            return []
+        locations = server.workspace_index.reference_locations(
+            resolved["record"],
+            resolved["name"],
+            include_declaration=params.context.include_declaration,
+        )
+        return [
+            Location(uri=location["uri"], range=_as_lsp_range(location["range"]))
+            for location in locations
+        ]
+
+    @server.feature("textDocument/rename")
+    def on_rename(params: RenameParams) -> Optional[WorkspaceEdit]:
+        if server.workspace_index is None:
+            return None
+        resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
+        if resolved is None:
+            return None
+        changes = server.workspace_index.rename_edits(
+            resolved["record"],
+            resolved["name"],
+            params.new_name,
+        )
+        if not changes:
+            return None
+        return WorkspaceEdit(
+            changes={
+                uri: [
+                    TextEdit(range=_as_lsp_range(edit["range"]), new_text=edit["newText"])
+                    for edit in edits
+                ]
+                for uri, edits in changes.items()
+            }
+        )
+
+    @server.feature("textDocument/didOpen")
+    def on_did_open(params: DidOpenTextDocumentParams) -> None:
+        _publish_diagnostics(server, params.text_document.uri)
+
+    @server.feature("textDocument/didChange")
+    def on_did_change(params: DidChangeTextDocumentParams) -> None:
+        _publish_diagnostics(server, params.text_document.uri)
+
     @server.feature("sage/getDocumentation")
     def on_get_documentation(params: Dict[str, Any]) -> Optional[dict[str, object]]:
         if server.workspace_index is None:
@@ -178,6 +245,28 @@ def _record_for_uri(server: SageLanguageServer, uri: str) -> Tuple[Optional[Modu
 
     record = server.workspace_index.module_for_path(path_from_uri(uri))
     return record, record.source if record is not None else None
+
+
+def _publish_diagnostics(server: SageLanguageServer, uri: str) -> None:
+    if server.workspace_index is None or not server.environment.analysis.enable_diagnostics:
+        server.publish_diagnostics(uri, [])
+        return
+
+    record, _ = _record_for_uri(server, uri)
+    if record is None:
+        server.publish_diagnostics(uri, [])
+        return
+
+    diagnostics = [
+        Diagnostic(
+            range=_as_lsp_range(entry["range"]),
+            severity=DiagnosticSeverity(entry.get("severity", 2)),
+            source=str(entry.get("source", "sage-lsp")),
+            message=str(entry["message"]),
+        )
+        for entry in server.workspace_index.diagnostics_for_record(record)
+    ]
+    server.publish_diagnostics(uri, diagnostics)
 
 
 def _resolve_request_symbol(

@@ -1,6 +1,7 @@
 from pathlib import Path
 
-from sage_lsp.index import WorkspaceIndex, path_from_uri
+from sage_lsp.index import WorkspaceIndex, iter_identifier_ranges, path_from_uri
+from sage_lsp.parser import parse_module
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "sage_src_lite" / "src"
@@ -109,6 +110,52 @@ def test_workspace_index_resolves_cimported_symbols_from_pxd(tmp_path: Path) -> 
     assert accumulator.file_path.name == "native_support.pxd"
     assert native_step is not None
     assert native_step.file_path.name == "native_support.pxd"
+
+
+def test_workspace_index_workspace_symbols_and_references_follow_resolved_symbol(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+    _write_module(root, "pkg/consumer.py", "from pkg.helpers import helper\n\nresult = helper(4)\n")
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    symbols = index.workspace_symbols("helper")
+    assert any(item["name"] == "helper" and str(item["location"]["uri"]).endswith("helpers.py") for item in symbols)
+
+    consumer = index.modules["pkg.consumer"]
+    references = index.reference_locations(consumer, "helper", include_declaration=True)
+    uris = {str(location["uri"]) for location in references}
+    assert any(uri.endswith("helpers.py") for uri in uris)
+    assert any(uri.endswith("consumer.py") for uri in uris)
+
+    rename_edits = index.rename_edits(consumer, "helper", "renamed_helper")
+    assert any(uri.endswith("helpers.py") for uri in rename_edits)
+    assert any(uri.endswith("consumer.py") for uri in rename_edits)
+
+
+def test_workspace_index_diagnostics_report_unresolved_imports() -> None:
+    index = WorkspaceIndex([], (), True)
+    record = parse_module(
+        "document::broken",
+        Path("broken.py"),
+        "from missing.module import helper\nimport also_missing\n",
+    )
+
+    diagnostics = index.diagnostics_for_record(record)
+
+    assert any("missing.module" in entry["message"] for entry in diagnostics)
+    assert any("also_missing" in entry["message"] for entry in diagnostics)
+
+
+def test_iter_identifier_ranges_skips_comments_and_strings() -> None:
+    ranges = iter_identifier_ranges(
+        'helper = 1\nprint(helper)\n# helper\ntext = "helper"\n',
+        "helper",
+    )
+
+    assert len(ranges) == 2
 
 
 def _write_module(root: Path, relative_path: str, contents: str) -> None:
