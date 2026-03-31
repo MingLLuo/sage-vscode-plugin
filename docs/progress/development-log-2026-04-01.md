@@ -390,7 +390,7 @@ re-parsing every indexed file from scratch.
 - Task ID: LSP-024
 - Scope: lsp
 - Related milestone: LSP baseline
-- Commit: `pending`
+- Commit: `48decf3`
 
 ### Goal
 
