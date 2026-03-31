@@ -16,6 +16,10 @@ import {
   formatStatusBarTooltip,
 } from "./environmentPresentation";
 import { createLanguageClient, requestDocumentation } from "./languageClient";
+import {
+  discoverInterpreterCandidates,
+  type InterpreterCandidate,
+} from "./interpreterDiscovery";
 import { shouldRestartLanguageServer } from "./serverRestart";
 import { buildWorkspaceInitializationData } from "./workspaceDiscovery";
 
@@ -108,23 +112,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
     vscode.commands.registerCommand("sage.selectInterpreter", async () => {
       const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
-      const selection = await vscode.window.showInputBox({
-        title: "Sage interpreter path",
-        value: settings.interpreterPath,
-        prompt: "Enter the Sage executable used for execution and Sage-aware runtime context.",
+      const detectedOptions = discoverInterpreterCandidates({
+        currentPath: settings.interpreterPath,
+        languageServerPythonPath: settings.languageServerPythonPath,
+        workspaceFolders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+      });
+      const picked = await vscode.window.showQuickPick(detectedOptions, {
+        title: "Select Sage runtime or language-server Python",
+        placeHolder: "Choose a detected Sage runtime for execution or a Python runtime for the language server.",
+        matchOnDescription: true,
+        matchOnDetail: true,
       });
 
-      if (!selection) {
+      if (!picked) {
+        return;
+      }
+
+      const update = await resolveInterpreterConfigurationUpdate(picked, settings);
+      if (!update) {
         return;
       }
 
       await vscode.workspace
         .getConfiguration("sage")
-        .update("interpreter.path", selection, vscode.ConfigurationTarget.Workspace);
-      resetReplTerminal();
-      outputChannel.appendLine(`Updated Sage interpreter path to: ${selection}`);
-      updateStatusBar();
-      await startLanguageClient();
+        .update(update.section, update.value, vscode.ConfigurationTarget.Workspace);
+      if (update.section === "interpreter.path") {
+        resetReplTerminal();
+      }
+      outputChannel.appendLine(`Updated sage.${update.section} to: ${update.value}`);
     }),
     vscode.commands.registerCommand("sage.restartLanguageServer", async () => {
       outputChannel.appendLine("Restarting Sage language server.");
@@ -237,6 +252,47 @@ export async function deactivate(): Promise<void> {
     await client.stop();
     client = undefined;
   }
+}
+
+async function resolveInterpreterConfigurationUpdate(
+  picked: InterpreterCandidate,
+  settings: ReturnType<typeof readSettings>,
+): Promise<{ section: "interpreter.path" | "languageServer.pythonPath"; value: string } | undefined> {
+  if (picked.selectionTarget === "languageServerAuto") {
+    return { section: "languageServer.pythonPath", value: "auto" };
+  }
+
+  if (picked.selectionTarget === "runtimeCustom") {
+    const selection = await vscode.window.showInputBox({
+      title: "Sage runtime path",
+      value: settings.interpreterPath,
+      prompt: "Enter the Sage executable used for run commands and the managed REPL.",
+    });
+    if (!selection) {
+      return undefined;
+    }
+    return { section: "interpreter.path", value: selection };
+  }
+
+  if (picked.selectionTarget === "languageServerCustom") {
+    const selection = await vscode.window.showInputBox({
+      title: "Language-server Python path",
+      value: settings.languageServerPythonPath === "auto" ? "" : settings.languageServerPythonPath,
+      prompt: "Enter the Python executable used to run sage_lsp.",
+    });
+    if (!selection) {
+      return undefined;
+    }
+    return { section: "languageServer.pythonPath", value: selection };
+  }
+
+  if (!picked.interpreterPath) {
+    return undefined;
+  }
+
+  return picked.selectionTarget === "runtime"
+    ? { section: "interpreter.path", value: picked.interpreterPath }
+    : { section: "languageServer.pythonPath", value: picked.interpreterPath };
 }
 
 function ensureReplTerminal(settings: {
