@@ -529,3 +529,35 @@ Make `analysis.extraPaths` affect the static-analysis graph instead of only the 
 
 - Next task: extend source mapping into diagnostics and navigation
 - Risks or blockers: extension-host coverage and richer `.sage` transforms are still pending
+
+## Entry 19
+
+- Date: 2026-03-31
+- Task ID: EXT-005
+- Scope: extension
+- Related milestone: Local debugging baseline
+- Commit: `56b7f3b`
+
+### Goal
+
+Make extension debugging first-class in the repository by providing a local `F5` launch path instead of requiring a manual
+`code --extensionDevelopmentPath=...` command.
+
+### Decisions
+
+- Decision: add repository-local launch and task definitions instead of depending on user-global VS Code state.
+- Reason: the plugin repository should be self-describing and runnable by any contributor who clones it.
+- Decision: enable source maps for the extension package build output.
+- Reason: stepping through compiled JavaScript is unnecessary friction when the source is TypeScript.
+
+### Verification
+
+- Checks run:
+  - `npm run build`
+  - `npm run test`
+- Result: the repository debug scaffolding landed without regressing the existing build and test path
+
+### Follow-ups
+
+- Next task: add extension-host smoke coverage
+- Risks or blockers: launch configuration still opens the current repository as the default workspace in the extension host

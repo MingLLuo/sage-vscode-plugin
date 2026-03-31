@@ -21,6 +21,8 @@ tracked, and how the current static-analysis baseline should be extended safely.
   Commit rules, task flow, and operating templates.
 - `docs/progress`
   Milestone status and task-level tracking.
+- `.vscode`
+  Repository-local launch and task definitions for starting the extension development host with `F5`.
 
 ## Working Rules
 
@@ -69,6 +71,12 @@ npm run sync:syntax
 npm run build
 npm run test
 ```
+
+## Local Debugging
+
+- Press `F5` in this repository and choose `Sage Plugin: Extension Host`.
+- The repository-level `build` task runs first, then VS Code launches the extension from `packages/extension-core`.
+- The launch configuration opens the current repository as the first workspace in the extension host.
 
 ## Verification Strategy
 

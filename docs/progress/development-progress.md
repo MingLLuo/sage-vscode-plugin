@@ -9,6 +9,7 @@
 - Language server package: static indexing, request-level coverage, and config-aware hover behavior added
 - Syntax package: baseline scaffold added and synced into extension resources
 - Runtime hardening: interpreter launch, path resolution, execution targets, and URI handling aligned
+- Local debugging: repository-level VS Code launch and task scaffolding added
 
 ## Current Focus
 
@@ -30,6 +31,7 @@
 | Source mapping v1 | Done | `.sage` caret rewrite, string/comment skipping, bidirectional column maps, and hover preview wiring are committed. |
 | Static source intelligence baseline | Done | Parser, workspace index, lazy import resolution, docs extraction, and LSP-backed symbol features are committed. |
 | Extension workflow baseline | Done | Status bar, environment presentation, run commands, docs panel, and richer settings model are committed. |
+| Local debugging baseline | Done | Repository-local `F5` launch, prelaunch build task, and source-map-enabled extension builds are committed. |
 | Runtime hardening | Done | Interpreter-driven LSP launch, workspace-relative path handling, request-level LSP tests, run-target-aware terminals, and hover-doc preference handling are now committed. |
 
 ## Change Log Notes
@@ -53,3 +55,4 @@
 - Taught the extension to manage dedicated run and REPL terminals, honor `sage.run.target`, reset stale REPL state when interpreter settings change, and avoid restarting the language server for run-target-only setting edits.
 - Extended server-side environment parsing to cover documentation, logging, and experimental settings, then made hover output respect the client's documentation-preview preference.
 - Wired resolved `analysis.extraPaths` into both language-server initialization payloads and server-side indexing so external source roots affect analysis instead of only process import state.
+- Added repository-local `.vscode` launch and task definitions so `F5` starts the extension development host after a root build, and enabled source maps for direct extension-side TypeScript debugging.
