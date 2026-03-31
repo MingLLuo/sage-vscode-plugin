@@ -182,8 +182,8 @@
         },
         "sage.analysis.enableRuntimeIntrospection": {
           "type": "boolean",
-          "default": false,
-          "markdownDescription": "Allow the language server to query a live Sage runtime for docs and signatures."
+          "default": true,
+          "markdownDescription": "Allow the language server to query a live Sage runtime when static indexing cannot supply docs or source locations."
         },
         "sage.analysis.enablePyxParsing": {
           "type": "boolean",

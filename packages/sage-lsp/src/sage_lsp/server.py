@@ -35,8 +35,9 @@ from lsprotocol.types import (
 from pygls.lsp.server import LanguageServer
 
 from .environment import SageEnvironment
-from .index import WorkspaceIndex, path_from_uri
+from .index import DocumentationResult, WorkspaceIndex, path_from_uri, split_docstring
 from .model import ModuleRecord
+from .runtime_introspection import RuntimeIntrospector, RuntimeSymbolResult
 
 
 class SageLanguageServer(LanguageServer):
@@ -44,6 +45,7 @@ class SageLanguageServer(LanguageServer):
         super().__init__("sage-lsp", "0.3.0")
         self.environment = SageEnvironment()
         self.workspace_index: Optional[WorkspaceIndex] = None
+        self.runtime_introspector = RuntimeIntrospector(command=None, enabled=False)
 
 
 def create_server() -> SageLanguageServer:
@@ -79,10 +81,10 @@ def create_server() -> SageLanguageServer:
     @server.feature("textDocument/hover")
     def on_hover(params: HoverParams) -> Optional[Hover]:
         resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
-        if resolved is None or server.workspace_index is None:
+        if resolved is None:
             return None
 
-        documentation = server.workspace_index.documentation_for_symbol(resolved["record"], resolved["name"])
+        documentation = _documentation_for_request(server, resolved["record"], resolved["name"])
         if documentation is None:
             return None
 
@@ -98,12 +100,19 @@ def create_server() -> SageLanguageServer:
     @server.feature("textDocument/definition")
     def on_definition(params: DefinitionParams) -> Optional[Location]:
         resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
-        if resolved is None or server.workspace_index is None:
+        if resolved is None:
             return None
 
-        symbol = server.workspace_index.resolve_symbol(resolved["record"], resolved["name"])
+        symbol = (
+            server.workspace_index.resolve_symbol(resolved["record"], resolved["name"])
+            if server.workspace_index is not None
+            else None
+        )
         if symbol is None:
-            return None
+            runtime_symbol = server.runtime_introspector.lookup(resolved["name"])
+            if runtime_symbol is None or runtime_symbol.file_path is None:
+                return None
+            return _location_from_runtime_symbol(runtime_symbol)
 
         return Location(uri=symbol.file_path.as_uri(), range=_as_lsp_range(symbol.source_range.to_lsp()))
 
@@ -186,9 +195,6 @@ def create_server() -> SageLanguageServer:
 
     @server.feature("sage/getDocumentation")
     def on_get_documentation(params: Dict[str, Any]) -> Optional[dict[str, object]]:
-        if server.workspace_index is None:
-            return None
-
         text_document = params.get("textDocument")
         if not isinstance(text_document, dict):
             return None
@@ -213,7 +219,7 @@ def create_server() -> SageLanguageServer:
             if name is None:
                 return None
 
-        documentation = server.workspace_index.documentation_for_symbol(record, name)
+        documentation = _documentation_for_request(server, record, name)
         return documentation.to_payload() if documentation is not None else None
 
     return server
@@ -229,6 +235,7 @@ def _rebuild_index(server: SageLanguageServer) -> None:
         enable_pyx=server.environment.analysis.enable_pyx_parsing,
     )
     server.workspace_index.build()
+    server.runtime_introspector = RuntimeIntrospector.from_environment(server.environment)
 
 
 def _record_for_uri(server: SageLanguageServer, uri: str) -> Tuple[Optional[ModuleRecord], Optional[str]]:
@@ -273,6 +280,57 @@ def _publish_diagnostics(server: SageLanguageServer, uri: str) -> None:
     ]
     server.text_document_publish_diagnostics(
         PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
+    )
+
+
+def _documentation_for_request(
+    server: SageLanguageServer,
+    record: ModuleRecord,
+    name: str,
+) -> Optional[DocumentationResult]:
+    documentation = (
+        server.workspace_index.documentation_for_symbol(record, name)
+        if server.workspace_index is not None
+        else None
+    )
+    if documentation is not None:
+        return documentation
+
+    runtime_symbol = server.runtime_introspector.lookup(name)
+    if runtime_symbol is None:
+        return None
+    return _documentation_from_runtime_symbol(runtime_symbol)
+
+
+def _documentation_from_runtime_symbol(symbol: RuntimeSymbolResult) -> DocumentationResult:
+    summary, sections = split_docstring(symbol.docstring)
+    uri = symbol.file_path.as_uri() if symbol.file_path is not None else ""
+    source_marker = symbol.file_path.suffix.lstrip(".") if symbol.file_path is not None else "runtime"
+    return DocumentationResult(
+        name=symbol.name,
+        kind=symbol.kind,
+        module_name=symbol.module_name,
+        uri=uri,
+        detail=symbol.detail,
+        summary=summary,
+        docstring=symbol.docstring,
+        markers=(
+            f"kind:{symbol.kind}",
+            f"module:{symbol.module_name}",
+            f"source:{source_marker or 'runtime'}",
+        ),
+        sections=sections,
+    )
+
+
+def _location_from_runtime_symbol(symbol: RuntimeSymbolResult) -> Location:
+    line = max((symbol.line or 1) - 1, 0)
+    return Location(
+        uri=symbol.file_path.as_uri(),
+        range=Range(
+            start=Position(line=line, character=0),
+            end=Position(line=line, character=0),
+        ),
     )
 
 

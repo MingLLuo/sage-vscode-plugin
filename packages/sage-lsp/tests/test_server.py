@@ -20,6 +20,7 @@ from lsprotocol.types import (
 )
 from pygls.workspace import Workspace
 
+from sage_lsp.runtime_introspection import RuntimeSymbolResult
 from sage_lsp.server import create_server
 
 
@@ -298,6 +299,64 @@ def test_server_publishes_import_diagnostics_on_open() -> None:
     assert published
     assert published[0].uri == uri
     assert any("missing.module" in diagnostic.message for diagnostic in published[0].diagnostics)
+
+
+def test_server_falls_back_to_runtime_docs_and_definition() -> None:
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": []},
+            "analysis": {
+                "enablePyxParsing": True,
+                "enableRuntimeIntrospection": True,
+            },
+        }
+    )
+    uri = Path("/workspace/runtime_only.sage").as_uri()
+    source = "runtime_only\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+    server.runtime_introspector.lookup = lambda name: RuntimeSymbolResult(  # type: ignore[method-assign]
+        name=name,
+        kind="function",
+        detail="runtime_only(x)",
+        module_name="sage.runtime",
+        docstring="Runtime fallback documentation.",
+        file_path=Path("/runtime/sage/runtime_only.pyx"),
+        line=42,
+    )
+
+    hover_handler = server.protocol.fm.features["textDocument/hover"]
+    hover = hover_handler(
+        HoverParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=0, character=2),
+        )
+    )
+    assert hover is not None
+    assert "Runtime fallback documentation." in hover.contents.value
+
+    definition_handler = server.protocol.fm.features["textDocument/definition"]
+    definition = definition_handler(
+        DefinitionParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=0, character=2),
+        )
+    )
+    assert definition is not None
+    assert definition.uri.endswith("runtime_only.pyx")
+    assert definition.range.start.line == 41
+
+    documentation_handler = server.protocol.fm.features["sage/getDocumentation"]
+    documentation = documentation_handler(
+        {
+            "textDocument": {"uri": uri},
+            "position": {"line": 0, "character": 2},
+        }
+    )
+    assert documentation is not None
+    assert documentation["name"] == "runtime_only"
+    assert documentation["summary"] == "Runtime fallback documentation."
 
 
 def _write_module(root: Path, relative_path: str, contents: str) -> None:

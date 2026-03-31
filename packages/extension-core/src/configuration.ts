@@ -22,7 +22,7 @@ export function readSettings(workspaceFolder?: vscode.WorkspaceFolder): SageSett
     diagnosticsEnabled: configuration.get<boolean>("analysis.enableDiagnostics", true),
     runtimeIntrospectionEnabled: configuration.get<boolean>(
       "analysis.enableRuntimeIntrospection",
-      false,
+      true,
     ),
     enablePyxParsing: configuration.get<boolean>("analysis.enablePyxParsing", true),
     indexingExcludeGlobs: configuration.get<string[]>("indexing.exclude", [
