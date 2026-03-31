@@ -66,49 +66,26 @@ class WorkspaceIndex:
         return self._modules
 
     def build(self) -> None:
-        self._modules.clear()
-        self._module_paths.clear()
-        self._resolved_symbol_cache.clear()
-        self._resolved_member_cache.clear()
-        self._document_records.clear()
+        self._reset_runtime_state()
         cache_entries = self._load_cached_entries()
         next_cache_entries: dict[str, dict[str, object]] = {}
-        for root in self._source_roots:
-            if not root.exists():
-                continue
-            for path in root.rglob("*"):
-                if not path.is_file():
-                    continue
-                if path.suffix not in {".py", ".sage", ".pyx", ".pxd", ".pxi"}:
-                    continue
-                if path.suffix in {".pyx", ".pxd", ".pxi"} and not self._enable_pyx:
-                    continue
-                if self._is_excluded(root, path):
-                    continue
-                module_name = module_name_from_path(root, path)
-                if not module_name:
-                    continue
-                source = path.read_text(encoding="utf-8")
-                cache_key = str(path.resolve())
-                fingerprint = file_fingerprint(path)
-                cached_entry = cache_entries.get(cache_key)
-                if _cache_entry_matches(cached_entry, module_name, fingerprint):
-                    record = deserialize_module_record(
-                        cached_entry["record"],
-                        module_name,
-                        path,
-                        source,
-                    )
-                else:
-                    record = parse_module(module_name, path, source)
-                existing = self._modules.get(module_name)
-                self._modules[module_name] = merge_module_records(existing, record) if existing else record
-                self._module_paths[path.resolve()] = module_name
-                next_cache_entries[cache_key] = {
-                    "moduleName": module_name,
-                    "fingerprint": fingerprint,
-                    "record": serialize_module_record(record),
-                }
+        for root, path, module_name in self._iter_indexable_modules():
+            source = path.read_text(encoding="utf-8")
+            cache_key = str(path.resolve())
+            fingerprint = file_fingerprint(path)
+            record = self._load_or_parse_module_record(
+                module_name,
+                path,
+                source,
+                cache_entries.get(cache_key),
+                fingerprint,
+            )
+            self._store_module_record(module_name, path, record)
+            next_cache_entries[cache_key] = {
+                "moduleName": module_name,
+                "fingerprint": fingerprint,
+                "record": serialize_module_record(record),
+            }
         self._write_cached_entries(next_cache_entries)
 
     def module_for_path(self, path: Path) -> Optional[ModuleRecord]:
@@ -123,20 +100,16 @@ class WorkspaceIndex:
         source: str,
         language_id: str,
     ) -> ModuleRecord:
-        cached_document = self._document_records.get(uri)
+        cached_document = self._cached_document_record(uri, source, language_id)
         if cached_document is not None:
-            cached_language_id, cached_source, cached_record = cached_document
-            if cached_language_id == language_id and cached_source == source:
-                return cached_record
+            return cached_document
 
         path = path_from_uri(uri)
         module_name = self._module_paths.get(path.resolve(), f"document::{path.stem}")
         record = parse_module(module_name, path, source)
         if language_id == "sagemath":
-            for candidate in ("sage.all_cmdline", "sage.all"):
-                if candidate in self._modules and candidate not in record.star_imports:
-                    record.star_imports.append(candidate)
-        self._document_records[uri] = (language_id, source, record)
+            self._inject_default_sage_imports(record)
+        self._remember_document_record(uri, source, language_id, record)
         return record
 
     def drop_document(self, uri: str) -> None:
@@ -634,10 +607,7 @@ class WorkspaceIndex:
         ]
 
     def _symbol_cache_key(self, record: ModuleRecord, name: str) -> Optional[tuple[str, str]]:
-        cached_record = self._modules.get(record.module_name)
-        if cached_record is None:
-            return None
-        if cached_record.source != record.source or cached_record.file_path.resolve() != record.file_path.resolve():
+        if not self._is_persisted_module_record(record):
             return None
         return (record.module_name, name)
 
@@ -647,12 +617,97 @@ class WorkspaceIndex:
         owner_name: str,
         attribute: str,
     ) -> Optional[tuple[str, str, str]]:
-        cached_record = self._modules.get(record.module_name)
-        if cached_record is None:
-            return None
-        if cached_record.source != record.source or cached_record.file_path.resolve() != record.file_path.resolve():
+        if not self._is_persisted_module_record(record):
             return None
         return (record.module_name, owner_name, attribute)
+
+    def _reset_runtime_state(self) -> None:
+        self._modules.clear()
+        self._module_paths.clear()
+        self._resolved_symbol_cache.clear()
+        self._resolved_member_cache.clear()
+        self._document_records.clear()
+
+    def _iter_indexable_modules(self) -> list[tuple[Path, Path, str]]:
+        results: list[tuple[Path, Path, str]] = []
+        for root in self._source_roots:
+            if not root.exists():
+                continue
+            for path in root.rglob("*"):
+                if not self._is_indexable_path(root, path):
+                    continue
+                module_name = module_name_from_path(root, path)
+                if module_name:
+                    results.append((root, path, module_name))
+        return results
+
+    def _is_indexable_path(self, root: Path, path: Path) -> bool:
+        if not path.is_file():
+            return False
+        if path.suffix not in {".py", ".sage", ".pyx", ".pxd", ".pxi"}:
+            return False
+        if path.suffix in {".pyx", ".pxd", ".pxi"} and not self._enable_pyx:
+            return False
+        return not self._is_excluded(root, path)
+
+    def _load_or_parse_module_record(
+        self,
+        module_name: str,
+        path: Path,
+        source: str,
+        cached_entry: Optional[dict[str, object]],
+        fingerprint: dict[str, int],
+    ) -> ModuleRecord:
+        if _cache_entry_matches(cached_entry, module_name, fingerprint):
+            return deserialize_module_record(cached_entry["record"], module_name, path, source)
+        return parse_module(module_name, path, source)
+
+    def _store_module_record(
+        self,
+        module_name: str,
+        path: Path,
+        record: ModuleRecord,
+    ) -> None:
+        existing = self._modules.get(module_name)
+        self._modules[module_name] = merge_module_records(existing, record) if existing else record
+        self._module_paths[path.resolve()] = module_name
+
+    def _cached_document_record(
+        self,
+        uri: str,
+        source: str,
+        language_id: str,
+    ) -> Optional[ModuleRecord]:
+        cached_document = self._document_records.get(uri)
+        if cached_document is None:
+            return None
+        cached_language_id, cached_source, cached_record = cached_document
+        if cached_language_id != language_id or cached_source != source:
+            return None
+        return cached_record
+
+    def _remember_document_record(
+        self,
+        uri: str,
+        source: str,
+        language_id: str,
+        record: ModuleRecord,
+    ) -> None:
+        self._document_records[uri] = (language_id, source, record)
+
+    def _inject_default_sage_imports(self, record: ModuleRecord) -> None:
+        for candidate in ("sage.all_cmdline", "sage.all"):
+            if candidate in self._modules and candidate not in record.star_imports:
+                record.star_imports.append(candidate)
+
+    def _is_persisted_module_record(self, record: ModuleRecord) -> bool:
+        cached_record = self._modules.get(record.module_name)
+        if cached_record is None:
+            return False
+        return (
+            cached_record.source == record.source
+            and cached_record.file_path.resolve() == record.file_path.resolve()
+        )
 
     def _cache_file_path(self) -> Path:
         resolved_cache_dir = _resolve_cache_dir(self._cache_dir)
