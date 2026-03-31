@@ -30,6 +30,10 @@ export function createLanguageClient(
   const workspaceData = buildWorkspaceInitializationData(
     workspaceFolders,
     settings.sourceRoots,
+    {
+      interpreterPath: settings.interpreterPath,
+      interpreterArgs: settings.interpreterArgs,
+    },
   );
   const resolvedExtraPaths = resolveConfiguredPaths(workspaceFolders, settings.extraPaths);
   const languageServerSettings = {

@@ -43,6 +43,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const workspaceData = buildWorkspaceInitializationData(
       vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
       settings.sourceRoots,
+      {
+        interpreterPath: settings.interpreterPath,
+        interpreterArgs: settings.interpreterArgs,
+      },
     );
     statusBarItem.text = formatStatusBarText({
       interpreterPath: settings.interpreterPath,
@@ -211,6 +215,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const workspaceData = buildWorkspaceInitializationData(
         vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
         settings.sourceRoots,
+        {
+          interpreterPath: settings.interpreterPath,
+          interpreterArgs: settings.interpreterArgs,
+        },
       );
       void vscode.window.showInformationMessage(
         formatEnvironmentDetails({
