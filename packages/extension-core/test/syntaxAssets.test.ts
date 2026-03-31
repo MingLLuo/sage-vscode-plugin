@@ -13,8 +13,12 @@ test("syntax grammar highlights broad SageMath domains and operators", () => {
     repository?: Record<string, { patterns?: Array<{ match?: string }> }>;
   };
   const supportPatterns = [
+    ...(grammar.repository?.["sage-runtime-helpers"]?.patterns ?? []),
     ...(grammar.repository?.["sage-domains"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-namespaces"]?.patterns ?? []),
     ...(grammar.repository?.["sage-constructors"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-geometry"]?.patterns ?? []),
+    ...(grammar.repository?.["sage-modules"]?.patterns ?? []),
     ...(grammar.repository?.["sage-linear-algebra"]?.patterns ?? []),
     ...(grammar.repository?.["sage-symbolic"]?.patterns ?? []),
     ...(grammar.repository?.["sage-plotting"]?.patterns ?? []),
@@ -34,6 +38,11 @@ test("syntax grammar highlights broad SageMath domains and operators", () => {
   assert.match(patternText, /BooleanFunction/);
   assert.match(patternText, /Partitions/);
   assert.match(patternText, /graphs/);
+  assert.match(patternText, /toric_varieties/);
+  assert.match(patternText, /cached_method/);
+  assert.match(patternText, /UniqueFactory/);
+  assert.match(patternText, /FilteredSimplicialComplex/);
+  assert.match(patternText, /ChowGroup/);
   assert.match(patternText, /sigma/);
   assert.match(patternText, /\^/);
 });
@@ -51,6 +60,9 @@ test("syntax snippets cover common SageMath authoring patterns", () => {
   assert.equal(snippets["Graph Constructor"]?.prefix, "sagegraph");
   assert.equal(snippets["Plot Builder"]?.prefix, "sageplot");
   assert.equal(snippets["Elliptic Curve"]?.prefix, "sageec");
+  assert.equal(snippets["Toric Variety"]?.prefix, "sagetoric");
+  assert.equal(snippets["Number Field"]?.prefix, "sagenf");
+  assert.equal(snippets["Cached Method"]?.prefix, "sagecache");
 });
 
 test("language configuration supports triple quotes and bracket-driven indentation", () => {

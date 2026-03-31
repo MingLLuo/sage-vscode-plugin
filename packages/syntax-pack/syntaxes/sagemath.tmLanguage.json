@@ -7,12 +7,17 @@
     { "include": "#triple-quoted-strings" },
     { "include": "#strings" },
     { "include": "#decorators" },
+    { "include": "#sage-runtime-helpers" },
     { "include": "#preparse-assignment" },
+    { "include": "#factory-assignment" },
     { "include": "#definitions" },
     { "include": "#imports" },
     { "include": "#keywords" },
     { "include": "#sage-domains" },
+    { "include": "#sage-namespaces" },
     { "include": "#sage-constructors" },
+    { "include": "#sage-geometry" },
+    { "include": "#sage-modules" },
     { "include": "#sage-linear-algebra" },
     { "include": "#sage-symbolic" },
     { "include": "#sage-plotting" },
@@ -77,8 +82,24 @@
     "decorators": {
       "patterns": [
         {
+          "name": "storage.type.decorator.cache.sagemath",
+          "match": "^\\s*(@(?:cached_method|cached_function|cached_in_parent_method|cached_property|lazy_attribute))\\b"
+        },
+        {
+          "name": "support.function.decorator.cython.sagemath",
+          "match": "^\\s*(@cython\\.[A-Za-z_][A-Za-z0-9_]*)\\b"
+        },
+        {
           "name": "meta.annotation.sagemath",
           "match": "^\\s*(@[A-Za-z_][A-Za-z0-9_\\.]*)"
+        }
+      ]
+    },
+    "sage-runtime-helpers": {
+      "patterns": [
+        {
+          "name": "support.function.runtime-helper.sagemath",
+          "match": "\\b(lazy_import|lazy_attribute|cached_method|cached_function|cached_in_parent_method|cached_property|UniqueFactory|ClasscallMetaclass|abstract_method)\\b"
         }
       ]
     },
@@ -92,6 +113,20 @@
             "2": { "name": "punctuation.accessor.dot.sagemath" },
             "3": { "name": "variable.parameter.preparse.sagemath" },
             "4": { "name": "keyword.operator.assignment.sagemath" }
+          }
+        }
+      ]
+    },
+    "factory-assignment": {
+      "patterns": [
+        {
+          "name": "meta.assignment.factory.sagemath",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(\\s*=\\s*)([A-Z][A-Za-z0-9_]*Factory)(\\s*\\()",
+          "captures": {
+            "1": { "name": "variable.other.constant.sagemath" },
+            "2": { "name": "keyword.operator.assignment.sagemath" },
+            "3": { "name": "entity.name.type.factory.sagemath" },
+            "4": { "name": "punctuation.definition.parameters.begin.sagemath" }
           }
         }
       ]
@@ -136,7 +171,7 @@
       "patterns": [
         {
           "name": "support.type.ring.sagemath",
-          "match": "\\b(ZZ|QQ|RR|CC|SR|GF|QQbar|AA|CDF|RDF|IF|CIF|Integers|Rationals|ComplexField|RealField|FiniteField)\\b"
+          "match": "\\b(ZZ|QQ|RR|CC|SR|GF|QQbar|AA|CDF|RDF|IF|CIF|Integers|Rationals|ComplexField|RealField|FiniteField|PolynomialRing|LaurentPolynomialRing|OrePolynomialRing)\\b"
         },
         {
           "name": "constant.language.sagemath",
@@ -144,11 +179,35 @@
         }
       ]
     },
+    "sage-namespaces": {
+      "patterns": [
+        {
+          "name": "entity.name.namespace.sagemath",
+          "match": "\\b(graphs|toric_varieties|simplicial_complexes|matroids|mq|interacts|plot3d)\\b"
+        }
+      ]
+    },
     "sage-constructors": {
       "patterns": [
         {
           "name": "support.class.constructor.sagemath",
-          "match": "\\b(PolynomialRing|PowerSeriesRing|LaurentSeriesRing|FractionField|QuadraticField|CyclotomicField|NumberField|MatrixSpace|EllipticCurve|Graph|DiGraph)\\b"
+          "match": "\\b(PolynomialRing|PowerSeriesRing|LaurentSeriesRing|FractionField|QuadraticField|CyclotomicField|NumberField|OrePolynomialRing|MatrixSpace|EllipticCurve|Graph|DiGraph|FreeModule|VectorSpace|SimplicialComplex|FilteredSimplicialComplex|ChowGroup|FreeAbelianMonoid)\\b"
+        }
+      ]
+    },
+    "sage-geometry": {
+      "patterns": [
+        {
+          "name": "support.class.geometry.sagemath",
+          "match": "\\b(ToricVariety|Cone|Fan|Polyhedron|LatticePolytope|ToricPlotter|CPRFanoToricVariety)\\b"
+        }
+      ]
+    },
+    "sage-modules": {
+      "patterns": [
+        {
+          "name": "support.class.modules.sagemath",
+          "match": "\\b(FreeModule|VectorSpace|Module|CombinatorialFreeModule|TensorProduct|ExteriorAlgebra|SymmetricGroupAlgebra)\\b"
         }
       ]
     },
@@ -195,12 +254,8 @@
     "sage-graph-theory": {
       "patterns": [
         {
-          "name": "entity.name.namespace.sagemath",
-          "match": "\\bgraphs\\b"
-        },
-        {
           "name": "support.function.graph-theory.sagemath",
-          "match": "\\b(Graph|DiGraph)\\b"
+          "match": "\\b(Graph|DiGraph|PetersenGraph|CompleteGraph|CycleGraph|PathGraph)\\b"
         }
       ]
     },

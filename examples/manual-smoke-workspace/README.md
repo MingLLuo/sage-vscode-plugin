@@ -92,6 +92,17 @@ Open `src/07_symbolic_and_combinatorics.sage`.
 - Confirm symbolic expressions using `^`, `oo`, and named generators still execute under `Sage: Run Current File`.
 - Check document symbols for `Q`, `z`, `cyclotomic_field`, and `advanced_symbolic_targets`.
 
+### 09 Highlighting Structures
+
+Open `src/08_highlighting_structures.sage`.
+
+- Confirm `toric_varieties`, `ChowGroup`, `PolynomialRing`, `NumberField`, `FreeModule`, and `FilteredSimplicialComplex`
+  now land in distinct visual scopes instead of collapsing into one generic support color.
+- Confirm `@cached_method`, `lazy_import`-style helpers, and factory-style names look different from ordinary function
+  calls when your theme supports the richer scopes.
+- Verify the preparse assignment `R.<u, v>` still highlights the parent name, generators, and assignment operator
+  separately.
+
 ## Layout
 
 - `src`

@@ -35,6 +35,7 @@
 - Environment-first interpreter selection: `Sage: Select Interpreter` now prioritizes complete local-dev and system-Sage profiles instead of making users assemble runtime and Python hosts manually
 - Definition prewarm: opening a Sage document now warms both documentation and definition caches for likely callable targets, reducing first-jump latency alongside first-hover latency
 - Runtime import-root hardening: runtime fallback now receives the resolved language-server Python host plus discovered `sage/src` and `builddir*/src` roots for local checkout scenarios
+- Structure-aware highlighting: grammar and snippets now cover cached decorators, runtime helper names, toric and module namespaces, factory-style assignments, and a dedicated manual smoke file for visually checking heavier Sage source patterns
 
 ## Current Focus
 
@@ -123,3 +124,5 @@
 - Extended document-open prewarming to definitions as well as docs, and added shared request-cache invalidation so repeated jump requests can reuse the same resolved targets.
 - Taught the extension to pass the resolved language-server Python path down to the server environment so runtime-fallback decisions can distinguish local checkout development from stable installed Sage.
 - Taught runtime fallback to expand local checkout import roots with matching `builddir*/src` directories, so compiled native modules remain available when runtime probes are driven from the development Python host.
+- Expanded syntax assets again so `@cached_method`, `lazy_import`, `UniqueFactory`, `toric_varieties`, `ChowGroup`, `FilteredSimplicialComplex`, and related structure-heavy Sage patterns receive stronger, more intentional scopes instead of blending into generic support tokens.
+- Added manual smoke coverage for the new highlighting path through `08_highlighting_structures.sage` and corresponding workspace instructions.

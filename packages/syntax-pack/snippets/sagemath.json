@@ -63,5 +63,30 @@
       "${7:rank_value} = ${1:E}.rank()"
     ],
     "description": "Insert an elliptic-curve scaffold."
+  },
+  "Toric Variety": {
+    "prefix": "sagetoric",
+    "body": [
+      "${1:X} = toric_varieties.${2:P2}()",
+      "${3:fan_data} = ${1:X}.fan()"
+    ],
+    "description": "Insert a toric-variety scaffold using the runtime singleton namespace."
+  },
+  "Number Field": {
+    "prefix": "sagenf",
+    "body": [
+      "R.<${1:x}> = PolynomialRing(${2:QQ})",
+      "${3:K}.<${4:a}> = NumberField(${1:x}^${5:2} + ${6:1})"
+    ],
+    "description": "Insert a number-field scaffold with a polynomial generator."
+  },
+  "Cached Method": {
+    "prefix": "sagecache",
+    "body": [
+      "@cached_method",
+      "def ${1:invariant}(self):",
+      "    ${2:return None}"
+    ],
+    "description": "Insert a cached-method scaffold common in Sage sources."
   }
 }

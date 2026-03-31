@@ -213,3 +213,43 @@ feeding the runtime probe enough import roots to see source plus compiled native
   without relying on the stable installed Sage executable
 - Risks or blockers: some editable or partially configured local Sage development environments may still need extra
   shell activation context beyond what the extension can infer automatically
+
+## Entry 7
+
+- Date: 2026-04-01
+- Task ID: SYN-005
+- Scope: syntax
+- Related milestone: Native source support
+- Commit: `pending`
+
+### Goal
+
+Make the editor-side Sage highlighting feel less generic for structure-heavy source files by surfacing common runtime
+helpers, decorators, namespaces, and factory patterns in addition to broad mathematical domains.
+
+### Decisions
+
+- Decision: treat structure-heavy Sage forms such as `@cached_method`, `lazy_import`, `UniqueFactory`, and
+  `toric_varieties` as dedicated highlighting signals.
+- Reason: these are frequent visual anchors in real Sage sources and deserve stronger differentiation than a single
+  catch-all support scope.
+- Decision: add a dedicated manual smoke file for highlighting validation instead of relying only on automated grammar
+  assertions.
+- Reason: automated tests can confirm the scope patterns exist, but the final usefulness still depends on how a real VS
+  Code theme renders them.
+
+### Verification
+
+- Checks run:
+  - `npm run sync:syntax`
+  - `npm run test --workspace @sage-vscode/extension-core`
+  - `npm run test`
+- Result: synced syntax assets, extension tests, and full repository tests all passed after the richer grammar and
+  snippet set were updated
+
+### Follow-ups
+
+- Next task: add semantic tokens on top of the richer TextMate scopes when theme-independent structure highlighting
+  becomes the next priority
+- Risks or blockers: some themes still collapse custom TextMate scopes into similar colors, so semantic tokens remain
+  the stronger long-term path
