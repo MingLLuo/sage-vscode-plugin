@@ -135,3 +135,81 @@ of coloring almost everything as one generic support token.
 
 - Next task: consider semantic tokens on top of the richer grammar if TextMate scopes alone still look too conservative
 - Risks or blockers: final color separation still depends partly on the active VS Code theme
+
+## Entry 5
+
+- Date: 2026-04-01
+- Task ID: EXT-011
+- Scope: extension
+- Related milestone: Developer workflow
+- Commit: `pending`
+
+### Goal
+
+Reduce interpreter-selection complexity by promoting complete Sage environment profiles instead of making users choose a
+runtime path and a language-server Python host separately.
+
+### Decisions
+
+- Decision: make `Sage: Select Interpreter` environment-first and surface `Local Sage development environment` plus
+  `System Sage (stable)` before any advanced custom-path actions.
+- Reason: the local workflow actually depends on pairing a nearby `sage` checkout with `conda` `sage-dev`, while the
+  installed stable runtime is a separate path; showing those directly is clearer than exposing the underlying split as
+  the first user-facing concept.
+- Decision: selecting an environment profile updates both `sage.interpreter.path` and
+  `sage.languageServer.pythonPath` together.
+- Reason: users should not need to manually coordinate two settings for the common paths that the extension can
+  already infer reliably.
+
+### Verification
+
+- Checks run:
+  - `npm run test --workspace @sage-vscode/extension-core`
+  - `npm run test`
+- Result: the extension test suite now covers local-checkout plus `sage-dev` profile detection and the full repository
+  test path remained green
+
+### Follow-ups
+
+- Next task: keep refining the runtime-side behavior of the detected local development profile as more real Sage
+  checkout environments are tested
+- Risks or blockers: uncommon Sage layouts may still need the advanced custom-path entries
+
+## Entry 6
+
+- Date: 2026-04-01
+- Task ID: LSP-020
+- Scope: lsp
+- Related milestone: Runtime hardening
+- Commit: `pending`
+
+### Goal
+
+Lower first-jump latency and make local-checkout runtime fallback more resilient by warming definition results and
+feeding the runtime probe enough import roots to see source plus compiled native modules.
+
+### Decisions
+
+- Decision: extend document-open prewarm from documentation only to both documentation and definition caches.
+- Reason: the first `Go to Definition` on common call targets should not still pay the full cold-resolution cost after
+  hover prewarm work has already identified the same callables.
+- Decision: pass the resolved language-server Python path into the server environment and expand runtime `PYTHONPATH`
+  with discovered `sage/src` and sibling `builddir*/src` roots.
+- Reason: checkout-based Sage development relies on source plus compiled native artifacts rather than only an installed
+  stable `sage` executable.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_runtime_introspection.py packages/sage-lsp/tests/test_server.py`
+  - `npm run test`
+  - `npm run test:native-smoke`
+- Result: runtime-introspection and server tests passed, repository tests stayed green, and the native smoke suite kept
+  resolving common Sage library symbols against the local checkout
+
+### Follow-ups
+
+- Next task: continue probing whether local `sage-dev` runtime imports can be made fully live for more dynamic symbols
+  without relying on the stable installed Sage executable
+- Risks or blockers: some editable or partially configured local Sage development environments may still need extra
+  shell activation context beyond what the extension can infer automatically

@@ -111,6 +111,10 @@ npm run test:full
 `NumberField`, `Partitions`, and `graphs.PetersenGraph` against a real local Sage source checkout without launching VS
 Code.
 
+`Sage: Select Interpreter` is now environment-first. The primary choices should be `Local Sage development environment`
+for a nearby checkout paired with `conda` `sage-dev`, and `System Sage (stable)` for the installed standalone Sage
+runtime.
+
 `npm run test:extension-host` launches the locally installed VS Code desktop in an unattended background test session.
 The harness copies the smoke workspace into a temp directory, captures extension-host and language-server logs, and
 fails the run on known runtime regressions.

@@ -25,15 +25,16 @@ executable used to run `.sage` files.
 1. Open the repository in VS Code.
 2. Press `F5` and choose `Sage Plugin: Extension Host` for the repository itself, or `Sage Plugin: Smoke Workspace` to open the ready-made sample workspace under `examples/manual-smoke-workspace`.
 3. The repository-level `build` task runs automatically before the extension host starts.
-4. Use `Sage: Select Interpreter` to pick from detected Sage runtimes, detected Python environments, or custom paths.
-5. Sage selections update `sage.interpreter.path` for run commands, the managed REPL terminal, and future Sage-aware runtime context.
-6. Python selections update `sage.languageServer.pythonPath` for the language server; the picker also includes an explicit `auto` reset entry when you want VS Code to go back to automatic Python selection.
-7. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
-8. Set `sage.run.cleanupGeneratedPython = true` if you want terminal-based `.sage` runs to remove generated `.sage.py` helper files automatically on POSIX shells.
-9. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
-10. Leave `sage.analysis.sourceRoots` empty if you want the extension to infer Sage library roots from the selected interpreter path; this is now the default path for docs, definitions, and navigation into Sage itself.
-11. Leave `sage.analysis.enableRuntimeIntrospection = true` if you want the server to fall back to a live Sage runtime for docs, definition jumps, and signature help when static indexing misses a symbol.
-12. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, signature help, document symbols,
+4. Use `Sage: Select Interpreter` to pick a complete detected environment first.
+5. The preferred local-development path is `Local Sage development environment`, which pairs a nearby Sage checkout such as `.../sage/sage` with a detected `conda` `sage-dev` Python host.
+6. The preferred stable-runtime path is `System Sage (stable)`, which pairs the installed Sage executable with the best detected language-server Python host.
+7. The picker still includes advanced actions for custom Sage runtimes, custom language-server Python paths, and an explicit `auto` reset entry when you want VS Code to go back to automatic Python selection.
+8. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
+9. Set `sage.run.cleanupGeneratedPython = true` if you want terminal-based `.sage` runs to remove generated `.sage.py` helper files automatically on POSIX shells.
+10. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
+11. Leave `sage.analysis.sourceRoots` empty if you want the extension to infer Sage library roots from the selected interpreter path; this is now the default path for docs, definitions, and navigation into Sage itself.
+12. Leave `sage.analysis.enableRuntimeIntrospection = true` if you want the server to fall back to a live Sage runtime for docs, definition jumps, and signature help when static indexing misses a symbol.
+13. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, signature help, document symbols,
    workspace symbols, diagnostics, and docs requests.
 
 ## Runtime Split
@@ -43,8 +44,9 @@ executable used to run `.sage` files.
 - `sage.languageServer.pythonPath`
   Controls the Python executable used to run `sage-lsp` itself.
 - `Sage: Select Interpreter`
-  Presents detected Sage runtimes from PATH and common system locations, plus detected Python environments from PATH,
-  workspace virtual environments, and common local installs such as `miniforge3` or `conda` roots.
+  Presents environment-first choices before the advanced path actions. The main built-in profiles are:
+  `Local Sage development environment` for a nearby checkout plus `conda` `sage-dev`, and `System Sage (stable)` for
+  an installed standalone Sage executable plus the best detected Python host for `sage-lsp`.
 - `sage.analysis.sourceRoots`
   When set, these roots are indexed exactly as configured. When left empty, the extension combines workspace-local
   roots with Sage roots inferred from the selected interpreter.
@@ -57,6 +59,17 @@ executable used to run `.sage` files.
 - Why this split exists:
   many Sage distributions bundle an older Python or omit `pygls` and `lsprotocol`, so the language server must be
   able to run in a normal Python environment while still targeting Sage for execution.
+
+## Recommended Profiles
+
+- Local Sage development:
+  choose `Local Sage development environment` when you work against a nearby `sage` checkout and use the `conda`
+  environment named `sage-dev` as the Python host for `sage-lsp`.
+- Stable installed Sage:
+  choose `System Sage (stable)` when you want run commands and runtime-backed docs to target the installed Sage
+  executable instead of the mutable checkout.
+- Advanced overrides:
+  only fall back to the custom path entries when the automatic environment profiles do not match your machine.
 
 If the language server still fails to start, point `sage.languageServer.pythonPath` at the Python where you installed
 `sage-lsp`, `pygls`, and `lsprotocol`.
@@ -75,7 +88,7 @@ If the language server still fails to start, point `sage.languageServer.pythonPa
 
 - Static analysis is intentionally reduced and fixture-backed; it is not yet a full Sage runtime model.
 - Source mapping only handles the first `.sage` transform slice.
-- Interpreter discovery covers PATH, common system locations, workspace virtual environments, and common local Python installs, but it is not exhaustive yet.
+- Interpreter discovery now prioritizes local `sage` checkout plus `sage-dev` and installed system Sage profiles, but unusual layouts may still require the advanced custom-path actions.
 - Runtime-derived source-root discovery covers common source and site-packages layouts, but unusual Sage packaging may still need manual `sage.analysis.sourceRoots`.
 - Runtime fallback currently focuses on docs, definitions, and signature help; completion and richer semantic analysis still rely on static indexing.
 - Notebook and kernel integration are not wired yet.

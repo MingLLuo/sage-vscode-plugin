@@ -32,6 +32,9 @@
 - Native local smoke automation: a non-GUI repository script now validates documentation and source navigation for common Sage library symbols against a real local checkout
 - Documentation prewarm: opening a Sage file now preloads a bounded set of likely callable docs into cache before the first hover request
 - Highlighting depth: Sage grammar now separates algebraic domains, constructors, symbolic work, plotting, graph theory, combinatorics, crypto, number theory, and linear algebra into richer scopes
+- Environment-first interpreter selection: `Sage: Select Interpreter` now prioritizes complete local-dev and system-Sage profiles instead of making users assemble runtime and Python hosts manually
+- Definition prewarm: opening a Sage document now warms both documentation and definition caches for likely callable targets, reducing first-jump latency alongside first-hover latency
+- Runtime import-root hardening: runtime fallback now receives the resolved language-server Python host plus discovered `sage/src` and `builddir*/src` roots for local checkout scenarios
 
 ## Current Focus
 
@@ -97,7 +100,7 @@
 - Fixed loose `.sage` lazy-import alias parsing so smoke-workspace aliases no longer degrade into false unresolved-import diagnostics.
 - Switched diagnostics publication over to the `pygls` `textDocument/publishDiagnostics` API so document open/change events no longer crash the server on missing `publish_diagnostics`.
 - Removed the `import.meta.dirname` dependency from the syntax-sync script so repository bootstrap and `dev:vscode` flows run on Node 20 environments.
-- Reworked `Sage: Select Interpreter` into a detected-candidate picker that surfaces Sage runtimes and Python environments separately, routes Python picks to `sage.languageServer.pythonPath`, and keeps custom plus auto-reset actions in the same flow.
+- Reworked `Sage: Select Interpreter` again into an environment-first picker that promotes `Local Sage development environment` and `System Sage (stable)` before the advanced custom-path actions.
 - Added automatic Sage source-root discovery so the extension can infer `.../src` or nearby `site-packages` roots from the selected runtime and feed them into the language server without manual `sourceRoots` setup.
 - Added runtime-backed documentation and definition fallback through Sage's own introspection helpers so real Sage objects remain navigable when static indexing misses them.
 - Added runtime-backed signature help plus dotted-name fallback, allowing calls such as `graphs.PetersenGraph(...)` to retain docs and signatures instead of collapsing to a bare final identifier.
@@ -117,3 +120,6 @@
 - Added a non-GUI `test:native-smoke` repository script that validates summaries and definition paths for `graphs.PetersenGraph`, `PolynomialRing`, `EllipticCurve`, `matrix`, `NumberField`, and `Partitions` against the local Sage checkout.
 - Added bounded documentation prewarming on document open so common call targets are cached before the first hover request.
 - Reworked Sage grammar scopes so rings and fields, constructors, symbolic functions, plotting, graph theory, combinatorics, crypto, number theory, and linear algebra no longer share one flat generic support scope.
+- Extended document-open prewarming to definitions as well as docs, and added shared request-cache invalidation so repeated jump requests can reuse the same resolved targets.
+- Taught the extension to pass the resolved language-server Python path down to the server environment so runtime-fallback decisions can distinguish local checkout development from stable installed Sage.
+- Taught runtime fallback to expand local checkout import roots with matching `builddir*/src` directories, so compiled native modules remain available when runtime probes are driven from the development Python host.
