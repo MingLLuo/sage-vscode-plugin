@@ -58,9 +58,9 @@ class WorkspaceIndex:
             for path in root.rglob("*"):
                 if not path.is_file():
                     continue
-                if path.suffix not in {".py", ".pyx"}:
+                if path.suffix not in {".py", ".pyx", ".pxd"}:
                     continue
-                if path.suffix == ".pyx" and not self._enable_pyx:
+                if path.suffix in {".pyx", ".pxd"} and not self._enable_pyx:
                     continue
                 if self._is_excluded(root, path):
                     continue
@@ -69,7 +69,8 @@ class WorkspaceIndex:
                     continue
                 source = path.read_text(encoding="utf-8")
                 record = parse_module(module_name, path, source)
-                self._modules[module_name] = record
+                existing = self._modules.get(module_name)
+                self._modules[module_name] = merge_module_records(existing, record) if existing else record
                 self._module_paths[path.resolve()] = module_name
 
     def module_for_path(self, path: Path) -> Optional[ModuleRecord]:
@@ -243,6 +244,35 @@ def module_name_from_path(root: Path, path: Path) -> Optional[str]:
     if parts[-1] == "__init__":
         parts = parts[:-1]
     return ".".join(part for part in parts if part)
+
+
+def merge_module_records(existing: ModuleRecord, candidate: ModuleRecord) -> ModuleRecord:
+    ordered_records = sorted((existing, candidate), key=module_record_precedence)
+    preferred = ordered_records[-1]
+    merged = ModuleRecord(
+        module_name=preferred.module_name,
+        file_path=preferred.file_path,
+        language=preferred.language,
+        source=preferred.source,
+        docstring=preferred.docstring or ordered_records[0].docstring,
+    )
+    for record in ordered_records:
+        merged.symbols.update(record.symbols)
+        merged.bindings.update(record.bindings)
+        for star_import in record.star_imports:
+            if star_import not in merged.star_imports:
+                merged.star_imports.append(star_import)
+    return merged
+
+
+def module_record_precedence(record: ModuleRecord) -> int:
+    return {
+        ".py": 4,
+        ".sage": 4,
+        ".pyx": 3,
+        ".pxd": 2,
+        ".pxi": 1,
+    }.get(record.file_path.suffix, 0)
 
 
 def path_from_uri(uri: str) -> Path:

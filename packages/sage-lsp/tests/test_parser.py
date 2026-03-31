@@ -36,6 +36,40 @@ ZZ = IntegerRing()
     assert record.symbols["ZZ"].kind == "constant"
 
 
+def test_parse_pyx_module_extracts_cimports_and_typed_functions() -> None:
+    source = """
+from sage.rings.integer_ring cimport IntegerRing, ZZ as INTEGER_RING
+cimport sage.libs.gmp.all as gmp_all
+
+cpdef int native_square(int value):
+    return value * value
+
+cdef inline long native_twice(long value):
+    return value * 2
+"""
+    record = parse_module("sage.rings.native_support", Path("native_support.pyx"), source)
+
+    assert record.bindings["IntegerRing"].module_name == "sage.rings.integer_ring"
+    assert record.bindings["IntegerRing"].target_name == "IntegerRing"
+    assert record.bindings["INTEGER_RING"].target_name == "ZZ"
+    assert record.bindings["gmp_all"].target_name is None
+    assert "native_square" in record.symbols
+    assert "native_twice" in record.symbols
+
+
+def test_parse_pxi_module_extracts_inline_symbols() -> None:
+    source = """
+DEF TRACE_LIMIT = 32
+
+cdef inline int included_native_step(int value):
+    return value + 1
+"""
+    record = parse_module("document::native_include", Path("native_include.pxi"), source)
+
+    assert "included_native_step" in record.symbols
+    assert record.symbols["included_native_step"].kind == "function"
+
+
 def test_parse_loose_sage_module_extracts_preparse_assignments_and_imports() -> None:
     source = """
 from sage.functions.all import factorial

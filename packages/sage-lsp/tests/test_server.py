@@ -172,3 +172,56 @@ def test_server_indexes_modules_from_analysis_extra_paths(tmp_path: Path) -> Non
 
     assert server.workspace_index is not None
     assert "helper_mod" in server.workspace_index.modules
+
+
+def test_server_resolves_native_cython_definitions(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    _write_module(source_root, "sage/__init__.py", "")
+    _write_module(source_root, "sage/rings/__init__.py", "")
+    _write_module(
+        source_root,
+        "sage/rings/native_support.pxd",
+        '"""Typed declarations for native support."""\n\ncdef class NativeAccumulator:\n    pass\n\ncpdef int native_step(int value)\n',
+    )
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(source_root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+    uri = Path("/workspace/native_consumer.pyx").as_uri()
+    source = (
+        "from sage.rings.native_support cimport NativeAccumulator, native_step\n"
+        "result = native_step(4)\n"
+        "bridge = NativeAccumulator\n"
+    )
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath-cython", version=1, text=source)
+    )
+
+    hover_handler = server.protocol.fm.features["textDocument/hover"]
+    hover = hover_handler(
+        HoverParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=1, character=10),
+        )
+    )
+    assert hover is not None
+    assert "function native_step" in hover.contents.value
+
+    definition_handler = server.protocol.fm.features["textDocument/definition"]
+    definition = definition_handler(
+        DefinitionParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=2, character=10),
+        )
+    )
+    assert definition is not None
+    assert definition.uri.endswith("native_support.pxd")
+
+
+def _write_module(root: Path, relative_path: str, contents: str) -> None:
+    module_path = root / relative_path
+    module_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path.write_text(contents, encoding="utf-8")

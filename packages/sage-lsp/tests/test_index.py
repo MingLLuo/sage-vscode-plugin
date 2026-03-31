@@ -54,3 +54,64 @@ def test_path_from_uri_handles_windows_drive_uris() -> None:
     resolved = path_from_uri("file:///C:/Users/example/project/example.sage")
 
     assert str(resolved).endswith("C:/Users/example/project/example.sage")
+
+
+def test_workspace_index_merges_native_module_declarations_and_implementation(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "sage/__init__.py", "")
+    _write_module(root, "sage/rings/__init__.py", "")
+    _write_module(
+        root,
+        "sage/rings/native_support.pxd",
+        '"""Native declarations."""\n\ncdef class NativeAccumulator:\n    pass\n\ncpdef int native_step(int value)\n',
+    )
+    _write_module(
+        root,
+        "sage/rings/native_support.pyx",
+        '"""Native implementation."""\n\ncdef class NativeAccumulator:\n    pass\n\nZZ = NativeAccumulator()\n',
+    )
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    record = index.modules["sage.rings.native_support"]
+
+    assert record.file_path.name == "native_support.pyx"
+    assert record.docstring == "Native implementation."
+    assert "NativeAccumulator" in record.symbols
+    assert "native_step" in record.symbols
+    assert "ZZ" in record.symbols
+
+
+def test_workspace_index_resolves_cimported_symbols_from_pxd(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "sage/__init__.py", "")
+    _write_module(root, "sage/rings/__init__.py", "")
+    _write_module(
+        root,
+        "sage/rings/native_support.pxd",
+        "cdef class NativeAccumulator:\n    pass\n\ncpdef int native_step(int value)\n",
+    )
+    _write_module(
+        root,
+        "sage/rings/native_consumer.pyx",
+        "from sage.rings.native_support cimport NativeAccumulator, native_step\n\ncpdef int use_native(int value):\n    return native_step(value)\n",
+    )
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    consumer = index.modules["sage.rings.native_consumer"]
+    accumulator = index.resolve_symbol(consumer, "NativeAccumulator")
+    native_step = index.resolve_symbol(consumer, "native_step")
+
+    assert accumulator is not None
+    assert accumulator.file_path.name == "native_support.pxd"
+    assert native_step is not None
+    assert native_step.file_path.name == "native_support.pxd"
+
+
+def _write_module(root: Path, relative_path: str, contents: str) -> None:
+    module_path = root / relative_path
+    module_path.parent.mkdir(parents=True, exist_ok=True)
+    module_path.write_text(contents, encoding="utf-8")

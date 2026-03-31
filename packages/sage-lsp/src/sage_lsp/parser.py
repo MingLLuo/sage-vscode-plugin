@@ -10,11 +10,10 @@ from .model import ImportBinding, ModuleRecord, SourceRange, SymbolRecord
 
 LAZY_IMPORT_NAMES = {"lazy_import", "_lazy_import"}
 TRIPLE_QUOTE_RE = re.compile(r'^\s*(?P<quote>"""|\'\'\')(?P<body>.*?)(?P=quote)', re.DOTALL)
-PYX_SYMBOL_RE = re.compile(
-    r"^(?P<indent>\s*)(?:(?:cdef|cpdef)\s+)?(?:class|cdef\s+class|def)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
-    re.MULTILINE,
-)
 PYX_ASSIGN_RE = re.compile(r"^(?P<indent>\s*)(?P<name>[A-Z][A-Za-z0-9_]*)\s*=", re.MULTILINE)
+CYTHON_CLASS_RE = re.compile(r"^(?:cdef\s+class|cpdef\s+class|class)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
+CYTHON_FROM_IMPORT_RE = re.compile(r"^from\s+(?P<module>[A-Za-z0-9_\.]+)\s+(?P<kind>cimport|import)\s+(?P<names>.+)$")
+CYTHON_CIMPORT_RE = re.compile(r"^cimport\s+(?P<module>[A-Za-z0-9_\.]+)(?:\s+as\s+(?P<alias>[A-Za-z_][A-Za-z0-9_]*))?$")
 LOOSE_DEF_RE = re.compile(r"^(?:async\s+def|def)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\(")
 LOOSE_CLASS_RE = re.compile(r"^class\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b")
 LOOSE_IMPORT_RE = re.compile(r"^import\s+(?P<module>[A-Za-z0-9_\.]+)(?:\s+as\s+(?P<alias>[A-Za-z_][A-Za-z0-9_]*))?")
@@ -26,7 +25,7 @@ LOOSE_PREPARSE_ASSIGN_RE = re.compile(
 
 
 def parse_module(module_name: str, file_path: Path, source: str) -> ModuleRecord:
-    if file_path.suffix == ".pyx":
+    if file_path.suffix in {".pyx", ".pxd", ".pxi"}:
         return parse_pyx_module(module_name, file_path, source)
     if file_path.suffix == ".sage":
         return parse_loose_module(module_name, file_path, source)
@@ -235,21 +234,69 @@ def parse_pyx_module(module_name: str, file_path: Path, source: str) -> ModuleRe
     if doc_match:
         record.docstring = doc_match.group("body").strip()
 
-    for match in PYX_SYMBOL_RE.finditer(source):
-        line = source.count("\n", 0, match.start()) + 1
-        line_start = source.rfind("\n", 0, match.start()) + 1
-        column = match.start("name") - line_start
-        name = match.group("name")
-        prefix = source[match.start() : match.start("name")]
-        kind = "class" if "class" in prefix else "function"
-        record.symbols[name] = SymbolRecord(
-            name=name,
-            kind=kind,
-            module_name=module_name,
-            file_path=file_path,
-            source_range=SourceRange.from_offsets(line, column, line, column + len(name)),
-            detail=f"{kind} {name}",
-        )
+    for line_number, raw_line in enumerate(source.splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if match := CYTHON_FROM_IMPORT_RE.match(line):
+            imported_module = match.group("module")
+            names = match.group("names").strip()
+            if names == "*":
+                record.star_imports.append(imported_module)
+                continue
+            for item in names.split(","):
+                entry = item.strip()
+                if not entry:
+                    continue
+                alias_name = entry
+                target_name = entry
+                if " as " in entry:
+                    target_name, alias_name = [part.strip() for part in entry.split(" as ", maxsplit=1)]
+                record.bindings[alias_name] = ImportBinding(
+                    alias=alias_name,
+                    module_name=imported_module,
+                    target_name=target_name,
+                    source_range=SourceRange.from_offsets(
+                        line_number,
+                        raw_line.find(alias_name),
+                        line_number,
+                        raw_line.find(alias_name) + len(alias_name),
+                    ),
+                )
+            continue
+
+        if match := CYTHON_CIMPORT_RE.match(line):
+            imported_module = match.group("module")
+            alias = match.group("alias") or imported_module.split(".")[-1]
+            record.bindings[alias] = ImportBinding(
+                alias=alias,
+                module_name=imported_module,
+                target_name=None,
+                source_range=SourceRange.from_offsets(
+                    line_number,
+                    raw_line.find(alias),
+                    line_number,
+                    raw_line.find(alias) + len(alias),
+                ),
+            )
+            continue
+
+        symbol_name, kind = parse_cython_symbol_line(line)
+        if symbol_name and kind:
+            record.symbols[symbol_name] = SymbolRecord(
+                name=symbol_name,
+                kind=kind,
+                module_name=module_name,
+                file_path=file_path,
+                source_range=SourceRange.from_offsets(
+                    line_number,
+                    raw_line.find(symbol_name),
+                    line_number,
+                    raw_line.find(symbol_name) + len(symbol_name),
+                ),
+                detail=f"{kind} {symbol_name}",
+            )
 
     for match in PYX_ASSIGN_RE.finditer(source):
         line = source.count("\n", 0, match.start()) + 1
@@ -269,6 +316,35 @@ def parse_pyx_module(module_name: str, file_path: Path, source: str) -> ModuleRe
         )
 
     return record
+
+
+def parse_cython_symbol_line(line: str) -> tuple[Optional[str], Optional[str]]:
+    if line.startswith(("cdef extern from", "ctypedef ", "include ")):
+        return None, None
+
+    class_match = CYTHON_CLASS_RE.match(line)
+    if class_match is not None:
+        return class_match.group("name"), "class"
+
+    if "(" not in line:
+        return None, None
+
+    prefix = line.split("(", maxsplit=1)[0].strip()
+    if not prefix:
+        return None, None
+
+    if prefix.startswith("async def ") or prefix.startswith("def "):
+        return prefix.split()[-1], "function"
+
+    if prefix.startswith("cpdef "):
+        return prefix.split()[-1], "function"
+
+    if prefix.startswith("cdef "):
+        if prefix.startswith("cdef class "):
+            return prefix.split()[-1], "class"
+        return prefix.split()[-1], "function"
+
+    return None, None
 
 
 def parse_lazy_import_statement(module_name: str, node: ast.stmt) -> list[ImportBinding]:
