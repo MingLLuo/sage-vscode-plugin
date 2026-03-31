@@ -308,7 +308,7 @@ TextMate grammar.
 - Task ID: LSP-022
 - Scope: lsp
 - Related milestone: LSP baseline
-- Commit: `pending`
+- Commit: `8911b0f`
 
 ### Goal
 
