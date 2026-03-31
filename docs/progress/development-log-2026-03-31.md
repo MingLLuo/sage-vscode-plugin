@@ -826,3 +826,38 @@ of stopping at hover and definition only.
 - Next task: add signature help, semantic tokens, and extension-host automation on top of the current baseline
 - Risks or blockers: references and rename are still lexical/static and will need deeper `.sage` source mapping before
   they can match runtime-preparsed code perfectly
+
+## Entry 28
+
+- Date: 2026-03-31
+- Task ID: LSP-010
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `2d00d29`
+
+### Goal
+
+Remove the false unresolved-import errors that appeared when loose `.sage` files used `lazy_import(..., "name", "alias")`
+or the list-based alias form.
+
+### Decisions
+
+- Decision: stop parsing loose-line `lazy_import(...)` calls with ad hoc regex splitting.
+- Reason: the alias form was being misread as two imported names, which broke navigation and surfaced bogus diagnostics.
+- Decision: reuse the AST-based lazy-import parser even for loose `.sage` lines, then relocate source ranges back onto the
+  original line.
+- Reason: this keeps alias handling consistent between Python and loose `.sage` parsing without duplicating argument
+  semantics.
+
+### Verification
+
+- Checks run:
+  - `PYTHONPATH=packages/sage-lsp/src python -m pytest packages/sage-lsp/tests/test_parser.py packages/sage-lsp/tests/test_server.py packages/sage-lsp/tests/test_index.py`
+  - `npm run lint`
+  - `npm run test`
+- Result: alias-based lazy imports now resolve to their underlying symbols and the full repository suite remains green
+
+### Follow-ups
+
+- Next task: keep hardening `.sage` source mapping and higher-level LSP features
+- Risks or blockers: loose `.sage` parsing is still heuristic and will need more work as preparser coverage expands

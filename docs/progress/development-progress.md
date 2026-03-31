@@ -76,3 +76,4 @@
 - Replaced the placeholder syntax grammar with a broader Sage/Cython grammar and expanded the smoke workspace with `.pxd` and `.pxi` fixtures for manual validation.
 - Added a repository-local `dev-vscode.sh` helper plus root npm shortcuts so contributors can bootstrap, build, and open the project in VS Code with a single command.
 - Added a standard LSP baseline slice with workspace symbol search, cross-file references, rename edits, and unresolved-import diagnostics, then covered those request paths with `pygls` tests.
+- Fixed loose `.sage` lazy-import alias parsing so smoke-workspace aliases no longer degrade into false unresolved-import diagnostics.
