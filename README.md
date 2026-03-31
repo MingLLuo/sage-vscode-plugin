@@ -36,9 +36,15 @@ process can evolve incrementally with full Git traceability.
 - Update the progress tracker together with relevant implementation or design work.
 - Add or update design notes whenever an architectural decision moves.
 
+## Documentation Index
+
+- [Developer Guide](./docs/developer-guide.md)
+- [Install and Configure](./docs/install-and-configure.md)
+- [Design Overview](./docs/design/overview.md)
+- [Development Progress](./docs/progress/development-progress.md)
+
 ## Next Steps
 
 1. Finalize process and progress templates.
 2. Land the minimal extension, server, and syntax package scaffolds.
 3. Start milestone-driven implementation from the documented package boundaries.
-
