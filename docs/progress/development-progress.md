@@ -14,6 +14,7 @@
 1. Start the first implementation-facing design note for `.sage` preprocessing.
 2. Add the first real extension-host test path once dependencies are installed.
 3. Add the first server-side hover or health check smoke run.
+4. Fix bootstrap package wiring issues discovered during first dependency install.
 
 ## Milestone Tracker
 
@@ -36,3 +37,4 @@
 - Added the first `sage-lsp` scaffold with a `pygls` entrypoint, server settings model, and basic tests.
 - Added the first `syntax-pack` scaffold plus a sync script that materializes extension-owned runtime assets.
 - Added developer onboarding docs and a bootstrap GitHub Actions workflow aligned with root scripts.
+- First dependency-install pass exposed and isolated a Node workspace wiring issue in the extension package manifest.

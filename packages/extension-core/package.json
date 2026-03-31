@@ -76,7 +76,6 @@
     "test": "npm run build && node --test out/test/**/*.test.js"
   },
   "dependencies": {
-    "@sage-vscode/syntax-pack": "workspace:*",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {

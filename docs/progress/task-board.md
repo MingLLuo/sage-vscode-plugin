@@ -9,3 +9,4 @@
 | LSP-001 | Scaffold minimal pygls server package | LSP scaffold | lsp | done | MingLLuo | Python package exposes a runnable `pygls` server entrypoint. | `docs/design/language-server-boundary.md` | `cde47b1` |
 | SYN-001 | Scaffold syntax assets package | Syntax scaffold | syntax | done | MingLLuo | Package includes language configuration, snippets, grammar placeholders, and extension sync output. | `docs/design/workspace-layout.md` | `e4c641d` |
 | OPS-001 | Add bootstrap CI placeholder | Repository bootstrap | ops | done | MingLLuo | Repository has a non-destructive CI placeholder aligned with root scripts. | `docs/developer-guide.md` | `e7ef736` |
+| OPS-002 | Repair bootstrap npm workspace install | Repository bootstrap | ops | in_progress | MingLLuo | `npm install` succeeds from the repository root without manifest protocol errors. | `docs/developer-guide.md` | pending |
