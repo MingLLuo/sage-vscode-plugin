@@ -133,6 +133,30 @@ result = Solver().compute(3)
     assert record.diagnostics == []
 
 
+def test_parse_preparser_sage_module_merges_loose_and_ast_results() -> None:
+    source = """
+pring.<x> = QQ[]
+
+
+class PolyWorker:
+    def square(self, value):
+        return value^2
+
+
+worker = PolyWorker()
+"""
+    record = parse_module("document::example", Path("example.sage"), source)
+
+    assert record.language == "sage"
+    assert "pring" in record.symbols
+    assert "x" in record.symbols
+    assert "PolyWorker" in record.symbols
+    assert "worker" in record.symbols
+    assert record.member_symbols["PolyWorker"]["square"].kind == "function"
+    assert record.instance_types["worker"] == "PolyWorker"
+    assert record.diagnostics == []
+
+
 def test_parse_python_module_extracts_singleton_member_bindings() -> None:
     source = """
 class GraphGenerators:

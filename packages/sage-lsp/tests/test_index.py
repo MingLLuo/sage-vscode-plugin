@@ -161,6 +161,29 @@ def test_workspace_index_builds_python_like_sage_modules_and_resolves_imports(tm
     assert any(item["name"] == "result" for item in symbols)
 
 
+def test_workspace_index_keeps_method_structure_for_preparser_sage_modules(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(
+        root,
+        "pkg/polys.sage",
+        "pring.<x> = QQ[]\n\nclass PolyWorker:\n    def square(self, value):\n        return value^2\n\nworker = PolyWorker()\nresult = worker.square(x + 1)\n",
+    )
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    record = index.modules["pkg.polys"]
+    symbols = index.document_symbols(record)
+    completions = index.member_completion_items(record, "worker", "sq")
+
+    assert any(item["name"] == "pring" for item in symbols)
+    assert any(item["name"] == "x" for item in symbols)
+    assert any(item["name"] == "PolyWorker" for item in symbols)
+    assert any(item["name"] == "worker" for item in symbols)
+    assert any(item["label"] == "square" for item in completions)
+
+
 def test_workspace_index_diagnostics_report_unresolved_imports() -> None:
     index = WorkspaceIndex([], (), True)
     record = parse_module(

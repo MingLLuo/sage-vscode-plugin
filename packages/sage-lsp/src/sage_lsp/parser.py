@@ -24,7 +24,7 @@ LOOSE_PREPARSE_ASSIGN_RE = re.compile(
     r"^(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.<(?P<symbols>[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)>\s*="
 )
 LOOSE_PREPARSE_VALIDATE_RE = re.compile(
-    r"^(?P<indent>\s*)(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.<(?P<symbols>[^>]+)>(?P<spacing>\s*=)"
+    r"^(?P<indent>\s*)(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.<(?P<symbols>[^>]+)>(?P<spacing>\s*=).*$"
 )
 
 
@@ -37,13 +37,13 @@ def parse_module(module_name: str, file_path: Path, source: str) -> ModuleRecord
 
 
 def parse_sage_module(module_name: str, file_path: Path, source: str) -> ModuleRecord:
+    preprocessed = preprocess_sage_source(source)
     if _has_preparser_assignment(source):
-        record = parse_loose_module(module_name, file_path, source)
+        record = _parse_hybrid_sage_module(module_name, file_path, source, preprocessed)
         record.language = "sage"
         record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source))
         return record
 
-    preprocessed = preprocess_sage_source(source)
     record = parse_python_module(
         module_name,
         file_path,
@@ -54,6 +54,24 @@ def parse_sage_module(module_name: str, file_path: Path, source: str) -> ModuleR
     record.language = "sage"
     record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source))
     return record
+
+
+def _parse_hybrid_sage_module(
+    module_name: str,
+    file_path: Path,
+    source: str,
+    preprocessed,
+) -> ModuleRecord:
+    loose_record = parse_loose_module(module_name, file_path, source)
+    preparser_lines = _preparser_assignment_lines(source)
+    ast_record = parse_python_module(
+        module_name,
+        file_path,
+        source,
+        parsed_source=sanitized_source_for_validation(file_path, source),
+        position_mapper=_generated_to_source_mapper(preprocessed),
+    )
+    return _merge_sage_records(loose_record, ast_record, preparser_lines)
 
 
 def parse_python_module(
@@ -617,7 +635,7 @@ def sanitized_source_for_validation(file_path: Path, source: str) -> str:
 
     generated_text = preprocess_sage_source(source).generated_text
     sanitized_lines = [
-        LOOSE_PREPARSE_VALIDATE_RE.sub(r"\g<indent>\g<parent>\g<spacing>", line)
+        LOOSE_PREPARSE_VALIDATE_RE.sub(r"\g<indent>\g<parent>\g<spacing> None", line)
         for line in generated_text.splitlines()
     ]
     return "\n".join(sanitized_lines) + ("\n" if generated_text.endswith("\n") else "")
@@ -795,6 +813,14 @@ def _has_preparser_assignment(source: str) -> bool:
     return any(LOOSE_PREPARSE_ASSIGN_RE.match(line.strip()) for line in source.splitlines())
 
 
+def _preparser_assignment_lines(source: str) -> set[int]:
+    lines: set[int] = set()
+    for index, line in enumerate(source.splitlines(), start=1):
+        if LOOSE_PREPARSE_ASSIGN_RE.match(line.strip()):
+            lines.add(index - 1)
+    return lines
+
+
 def _generated_to_source_mapper(
     document,
 ) -> Callable[[int, int], tuple[int, int]]:
@@ -803,3 +829,47 @@ def _generated_to_source_mapper(
         return position.line, position.character
 
     return _map
+
+
+def _merge_sage_records(
+    loose_record: ModuleRecord,
+    ast_record: ModuleRecord,
+    preparser_lines: set[int],
+) -> ModuleRecord:
+    merged = ModuleRecord(
+        module_name=loose_record.module_name,
+        file_path=loose_record.file_path,
+        language="sage",
+        source=loose_record.source,
+        docstring=ast_record.docstring or loose_record.docstring,
+        symbols=dict(loose_record.symbols),
+        bindings=dict(loose_record.bindings),
+        star_imports=list(loose_record.star_imports),
+        member_symbols={owner: dict(symbols) for owner, symbols in loose_record.member_symbols.items()},
+        member_bindings={owner: dict(bindings) for owner, bindings in loose_record.member_bindings.items()},
+        instance_types=dict(loose_record.instance_types),
+        diagnostics=list(loose_record.diagnostics),
+    )
+
+    for name, symbol in ast_record.symbols.items():
+        if symbol.source_range.start.line in preparser_lines and name in merged.symbols:
+            continue
+        merged.symbols[name] = symbol
+
+    for name, binding in ast_record.bindings.items():
+        if binding.source_range.start.line in preparser_lines and name in merged.bindings:
+            continue
+        merged.bindings[name] = binding
+
+    for module_name in ast_record.star_imports:
+        if module_name not in merged.star_imports:
+            merged.star_imports.append(module_name)
+
+    for owner_name, symbols in ast_record.member_symbols.items():
+        merged.member_symbols.setdefault(owner_name, {}).update(symbols)
+
+    for owner_name, bindings in ast_record.member_bindings.items():
+        merged.member_bindings.setdefault(owner_name, {}).update(bindings)
+
+    merged.instance_types.update(ast_record.instance_types)
+    return merged
