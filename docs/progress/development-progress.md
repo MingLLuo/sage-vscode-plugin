@@ -77,4 +77,5 @@
 - Added a repository-local `dev-vscode.sh` helper plus root npm shortcuts so contributors can bootstrap, build, and open the project in VS Code with a single command.
 - Added a standard LSP baseline slice with workspace symbol search, cross-file references, rename edits, and unresolved-import diagnostics, then covered those request paths with `pygls` tests.
 - Fixed loose `.sage` lazy-import alias parsing so smoke-workspace aliases no longer degrade into false unresolved-import diagnostics.
+- Switched diagnostics publication over to the `pygls` `textDocument/publishDiagnostics` API so document open/change events no longer crash the server on missing `publish_diagnostics`.
 - Removed the `import.meta.dirname` dependency from the syntax-sync script so repository bootstrap and `dev:vscode` flows run on Node 20 environments.

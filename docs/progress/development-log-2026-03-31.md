@@ -895,3 +895,33 @@ syntax sync step crashing immediately.
 
 - Next task: keep the helper flow stable while extension-host automation coverage is added
 - Risks or blockers: the helper still depends on the `code` CLI being installed when you want it to actually launch VS Code
+
+## Entry 30
+
+- Date: 2026-03-31
+- Task ID: LSP-011
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `3659e98`
+
+### Goal
+
+Stop document open/change from crashing the language server when diagnostics are published through the `pygls` runtime.
+
+### Decisions
+
+- Decision: publish diagnostics through `textDocument/publishDiagnostics` payload objects instead of calling a missing convenience method on the server.
+- Reason: the `pygls` version in the real environment exposes `text_document_publish_diagnostics(...)`, not `publish_diagnostics(...)`.
+
+### Verification
+
+- Checks run:
+  - `PYTHONPATH=packages/sage-lsp/src python -m pytest packages/sage-lsp/tests/test_server.py`
+  - `npm run lint`
+  - `npm run test`
+- Result: diagnostics publication now works on document open/change without raising `AttributeError`, and the full repository suite remains green
+
+### Follow-ups
+
+- Next task: keep tightening runtime behavior exposed by real extension-host testing
+- Risks or blockers: diagnostics are still intentionally conservative and need richer Sage-aware analysis later
