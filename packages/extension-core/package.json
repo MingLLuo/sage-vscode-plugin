@@ -31,6 +31,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "package": "npm run build",
     "test": "npm run build && node --test out/test/**/*.test.js",
+    "test:extension-host": "npm run build && node ./out/test-host/runTest.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -39,6 +40,7 @@
   "devDependencies": {
     "@types/node": "^22.13.10",
     "@types/vscode": "^1.97.0",
+    "@vscode/test-electron": "^2.5.2",
     "typescript": "^5.8.2"
   },
   "contributes": {

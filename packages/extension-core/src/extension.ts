@@ -30,6 +30,9 @@ let replBootstrapped = false;
 let languageClientOperation: Promise<void> | undefined;
 let languageClientRestartQueued = false;
 let languageClientManagedShutdown = false;
+let languageClientLaunchCount = 0;
+let languageClientManagedCloseCount = 0;
+let languageClientUnexpectedCloseCount = 0;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Sage");
@@ -82,6 +85,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           const previousClient = client;
           client = undefined;
           languageClientManagedShutdown = true;
+          languageClientManagedCloseCount += 1;
           try {
             await previousClient.stop();
           } finally {
@@ -92,7 +96,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         try {
           const nextClient = createLanguageClient(context, languageOutputChannel, {
             shouldAutoRestartOnClose: () => !languageClientManagedShutdown,
+            onClose: ({ managedShutdown }) => {
+              if (!managedShutdown) {
+                languageClientUnexpectedCloseCount += 1;
+              }
+            },
           });
+          languageClientLaunchCount += 1;
           client = nextClient;
           await nextClient.start();
           outputChannel.appendLine("Sage language client started.");
@@ -156,6 +166,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("sage.restartLanguageServer", async () => {
       outputChannel.appendLine("Restarting Sage language server.");
       await startLanguageClient();
+    }),
+    vscode.commands.registerCommand("sage.__test.getLifecycleSnapshot", () => ({
+      launchCount: languageClientLaunchCount,
+      managedCloseCount: languageClientManagedCloseCount,
+      unexpectedCloseCount: languageClientUnexpectedCloseCount,
+      managedShutdownActive: languageClientManagedShutdown,
+      restartQueued: languageClientRestartQueued,
+      hasClient: Boolean(client),
+    })),
+    vscode.commands.registerCommand("sage.__test.awaitLanguageClientStable", async () => {
+      if (languageClientOperation) {
+        await languageClientOperation;
+      }
+      return {
+        launchCount: languageClientLaunchCount,
+        managedCloseCount: languageClientManagedCloseCount,
+        unexpectedCloseCount: languageClientUnexpectedCloseCount,
+        managedShutdownActive: languageClientManagedShutdown,
+        restartQueued: languageClientRestartQueued,
+        hasClient: Boolean(client),
+      };
+    }),
+    vscode.commands.registerCommand("sage.__test.restartLanguageServerAndWait", async () => {
+      await startLanguageClient();
+      return {
+        launchCount: languageClientLaunchCount,
+        managedCloseCount: languageClientManagedCloseCount,
+        unexpectedCloseCount: languageClientUnexpectedCloseCount,
+        managedShutdownActive: languageClientManagedShutdown,
+        restartQueued: languageClientRestartQueued,
+        hasClient: Boolean(client),
+      };
     }),
     vscode.commands.registerCommand("sage.runCurrentFile", async () => {
       const editor = vscode.window.activeTextEditor;
@@ -266,6 +308,7 @@ export async function deactivate(): Promise<void> {
   }
   if (client) {
     languageClientManagedShutdown = true;
+    languageClientManagedCloseCount += 1;
     try {
       await client.stop();
       client = undefined;

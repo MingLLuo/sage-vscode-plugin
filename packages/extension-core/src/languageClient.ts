@@ -22,6 +22,7 @@ import { buildWorkspaceInitializationData, resolveConfiguredPaths } from "./work
 
 export interface LanguageClientLifecycle {
   shouldAutoRestartOnClose?: () => boolean;
+  onClose?: (event: { managedShutdown: boolean; shouldRestart: boolean }) => void;
 }
 
 export function createLanguageClient(
@@ -90,6 +91,7 @@ export function createLanguageClient(
       closed: () => {
         const managedShutdown = !(lifecycle.shouldAutoRestartOnClose?.() ?? true);
         const shouldRestart = shouldAutoRestartOnLanguageServerClose(managedShutdown);
+        lifecycle.onClose?.({ managedShutdown, shouldRestart });
         outputChannel.appendLine(
           managedShutdown
             ? "[info] language server connection closed during a managed restart."

@@ -1,6 +1,7 @@
 node_modules/
 dist/
 out/
+packages/extension-core/.vscode-test/
 .DS_Store
 .pytest_cache/
 __pycache__/
