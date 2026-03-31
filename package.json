@@ -8,10 +8,10 @@
     "packages/syntax-pack"
   ],
   "scripts": {
+    "sync:syntax": "node scripts/sync-syntax-assets.mjs",
     "build": "npm run build --workspace @sage-vscode/extension-core && npm run build --workspace @sage-vscode/syntax-pack",
     "lint": "npm run lint --workspace @sage-vscode/extension-core && npm run lint --workspace @sage-vscode/syntax-pack",
     "test": "npm run test --workspace @sage-vscode/extension-core && npm run test:python",
     "test:python": "python -m pytest packages/sage-lsp/tests"
   }
 }
-

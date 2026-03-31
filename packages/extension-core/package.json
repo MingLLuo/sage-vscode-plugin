@@ -9,10 +9,32 @@
     "vscode": "^1.95.0"
   },
   "activationEvents": [
+    "onLanguage:sagemath",
     "onCommand:sage.selectInterpreter",
     "onCommand:sage.showEnvironmentDetails"
   ],
   "contributes": {
+    "languages": [
+      {
+        "id": "sagemath",
+        "aliases": ["SageMath", "sage"],
+        "extensions": [".sage"],
+        "configuration": "./resources/generated/syntax/language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "sagemath",
+        "scopeName": "source.sagemath",
+        "path": "./resources/generated/syntax/syntaxes/sagemath.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "sagemath",
+        "path": "./resources/generated/syntax/snippets/sagemath.json"
+      }
+    ],
     "commands": [
       {
         "command": "sage.selectInterpreter",
@@ -54,6 +76,7 @@
     "test": "npm run build && node --test out/test/**/*.test.js"
   },
   "dependencies": {
+    "@sage-vscode/syntax-pack": "workspace:*",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {
@@ -62,4 +85,3 @@
     "typescript": "^5.7.2"
   }
 }
-

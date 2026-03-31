@@ -1,0 +1,21 @@
+{
+  "name": "SageMath",
+  "scopeName": "source.sagemath",
+  "fileTypes": ["sage"],
+  "patterns": [
+    {
+      "name": "comment.line.number-sign.sagemath",
+      "match": "#.*$"
+    },
+    {
+      "name": "keyword.control.import.sagemath",
+      "match": "\\b(from|import|def|class|return)\\b"
+    },
+    {
+      "name": "constant.numeric.sagemath",
+      "match": "\\b\\d+(?:\\.\\d+)?\\b"
+    }
+  ],
+  "repository": {}
+}
+

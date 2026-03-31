@@ -1,0 +1,11 @@
+{
+  "Sage Function": {
+    "prefix": "sagedef",
+    "body": [
+      "def ${1:name}(${2:args}):",
+      "    ${3:pass}"
+    ],
+    "description": "Insert a minimal Sage or Python function."
+  }
+}
+
