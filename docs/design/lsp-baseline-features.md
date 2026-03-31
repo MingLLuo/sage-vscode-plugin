@@ -19,11 +19,15 @@ The current baseline now includes:
 - rename
 - low-noise unresolved-import diagnostics
 - custom documentation requests
+- dotted singleton-member resolution for common Sage patterns such as `graphs.PetersenGraph`
+- member completion for statically understood singleton APIs
 
 ## Scope
 
 - These features are primarily static and index-driven, with runtime fallback for documentation, definitions, and
   signatures when static resolution misses Sage runtime objects.
+- Static resolution now includes class-body imports, singleton instance aliases, and dotted member traversal so common
+  Sage generator objects remain navigable even when the selected Sage runtime cannot answer introspection requests.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently report unresolved imports instead of trying to approximate a
   full Python or Cython type checker.

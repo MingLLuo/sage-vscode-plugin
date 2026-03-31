@@ -21,4 +21,6 @@ information for documentation, source navigation, or signatures.
 - Runtime fallback currently targets documentation, definition lookups, and signature help.
 - The fallback resolves bare names and dotted names that exist in the selected Sage runtime; it does not model arbitrary
   workspace-local Python state.
+- Runtime subprocesses must be launched with an argv list instead of split positional arguments so the server behaves
+  consistently across Python versions such as 3.12.
 - If the selected runtime cannot import `sage`, the server falls back to its static-only behavior.

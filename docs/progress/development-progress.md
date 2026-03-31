@@ -20,6 +20,8 @@
 - Runtime source-root discovery: selected Sage runtimes now contribute inferred library roots to indexing when no explicit source-root config is present
 - Runtime Sage fallback: docs, definitions, and signature help can now query the selected Sage runtime when static indexing misses
 - Advanced smoke workspace: graph, elliptic-curve, ideal, symbolic, combinatorics, and number-field samples now exercise heavier Sage usage
+- Runtime invocation hardening: runtime Sage introspection now launches subprocesses with argv-safe invocation and direct unit coverage
+- Singleton member resolution: dotted Sage APIs such as `graphs.PetersenGraph` now resolve statically through class-body imports, singleton instances, and member completion
 
 ## Current Focus
 
@@ -88,3 +90,5 @@
 - Added runtime-backed documentation and definition fallback through Sage's own introspection helpers so real Sage objects remain navigable when static indexing misses them.
 - Added runtime-backed signature help plus dotted-name fallback, allowing calls such as `graphs.PetersenGraph(...)` to retain docs and signatures instead of collapsing to a bare final identifier.
 - Expanded the smoke workspace with heavier SageMath scenarios across graph theory, elliptic curves, ideals, symbolic calculus, combinatorics, and number fields.
+- Fixed runtime introspection subprocess launching so Python 3.12 no longer misreads the argument vector as `bufsize` and drops hover or definition requests.
+- Extended static analysis with class-body import handling, singleton instance tracking, dotted member resolution, member completion, and workspace-symbol coverage for common Sage generator objects.

@@ -1102,3 +1102,75 @@ small local helper modules.
 
 - Next task: add extension-host automation that opens the smoke workspace and validates a subset of these flows automatically
 - Risks or blockers: the new smoke files still rely on a working local Sage runtime for execution and live docs checks
+
+## Entry 36
+
+- Date: 2026-03-31
+- Task ID: LSP-014
+- Scope: lsp
+- Related milestone: Runtime hardening
+- Commit: `e78b955`
+
+### Goal
+
+Stop runtime fallback from crashing hover and definition requests on Python 3.12 when the server shells out to Sage for
+introspection.
+
+### Decisions
+
+- Decision: build a single argv list for `subprocess.run(...)` instead of passing the command and argument list as
+  separate positional values.
+- Reason: Python interprets the second positional value as `bufsize`, which broke runtime fallback on newer runtimes.
+- Decision: add direct unit coverage around invocation building and subprocess launch semantics.
+- Reason: request-level tests alone did not pin the subprocess API shape that caused the crash.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_runtime_introspection.py packages/sage-lsp/tests/test_server.py`
+  - `npm run test`
+- Result: runtime lookup no longer raises `TypeError: bufsize must be an integer`, and the full repository test suite remains green
+
+### Follow-ups
+
+- Next task: raise static coverage for Sage dotted singleton APIs so more navigation continues to work even when the runtime itself is unavailable
+- Risks or blockers: runtime fallback still depends on the selected Sage executable being able to import Sage successfully
+
+## Entry 37
+
+- Date: 2026-03-31
+- Task ID: LSP-015
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `0c8dcca`
+
+### Goal
+
+Make real Sage singleton-style APIs such as `graphs.PetersenGraph` support static documentation, definitions, and
+completion instead of depending entirely on runtime fallback.
+
+### Decisions
+
+- Decision: extend the parser model with class-body imports, class member bindings, and singleton instance tracking.
+- Reason: many Sage APIs are exposed through singleton instances whose members are wired up inside class bodies rather
+  than as plain top-level functions.
+- Decision: teach the index to resolve dotted names across modules, singleton instances, and class-owned member
+  bindings, and expose those members in workspace-symbol and completion paths.
+- Reason: users expect graph generators and similar dotted Sage APIs to behave like first-class symbols in the editor.
+- Decision: keep runtime fallback as the secondary path even after static dotted resolution improves.
+- Reason: not every Sage API pattern is statically recoverable, but the common generator style now should be.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_parser.py packages/sage-lsp/tests/test_index.py packages/sage-lsp/tests/test_server.py`
+  - `npm run lint`
+  - `npm run test`
+  - `python -c '... WorkspaceIndex(... \"graphs.PetersenGraph\") ...'` against `/workspace/sage/src`
+- Result: the parser/index/server suites stay green, and a real Sage source-tree probe now resolves `graphs.PetersenGraph`
+  to `sage/graphs/generators/smallgraphs.py` with the summary `Return the Petersen Graph.`
+
+### Follow-ups
+
+- Next task: expand the same dotted-member static model to other Sage singleton families and propagate it into references and rename where feasible
+- Risks or blockers: more dynamic Sage APIs that synthesize attributes at runtime will still require runtime fallback or deeper semantic modeling
