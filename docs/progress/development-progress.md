@@ -6,8 +6,9 @@
 - Repository: upgraded to a usable static-analysis baseline
 - Process tracking: baseline in place
 - Extension package: richer workflow and docs UX added
-- Language server package: static indexing and symbol resolution added
+- Language server package: static indexing, request-level coverage, and config-aware hover behavior added
 - Syntax package: baseline scaffold added and synced into extension resources
+- Runtime hardening: interpreter launch, path resolution, execution targets, and URI handling aligned
 
 ## Current Focus
 
@@ -29,6 +30,7 @@
 | Source mapping v1 | Done | `.sage` caret rewrite, string/comment skipping, bidirectional column maps, and hover preview wiring are committed. |
 | Static source intelligence baseline | Done | Parser, workspace index, lazy import resolution, docs extraction, and LSP-backed symbol features are committed. |
 | Extension workflow baseline | Done | Status bar, environment presentation, run commands, docs panel, and richer settings model are committed. |
+| Runtime hardening | Done | Interpreter-driven LSP launch, workspace-relative path handling, request-level LSP tests, run-target-aware terminals, and hover-doc preference handling are now committed. |
 
 ## Change Log Notes
 
@@ -46,3 +48,7 @@
 - Implemented the first real `.sage` preprocessing module, covered it with Python tests, and surfaced mapping information in the server hover path.
 - Ported a reduced Sage fixture corpus plus parser/index stack into the `pygls` server and verified static hover, completion, definition, symbol, and documentation paths through tests.
 - Upgraded the VS Code client with richer configuration, source-root discovery, run commands, status presentation, documentation rendering, and unit-test coverage.
+- Aligned language-server startup with the configured interpreter, corrected workspace-relative source-root and extra-path resolution, normalized Windows-style file URIs, and fixed the `pygls` server import path used at runtime.
+- Added request-level `pygls` coverage for initialize, hover, definition, completion, document symbols, and custom documentation requests.
+- Taught the extension to manage dedicated run and REPL terminals, honor `sage.run.target`, reset stale REPL state when interpreter settings change, and avoid restarting the language server for run-target-only setting edits.
+- Extended server-side environment parsing to cover documentation, logging, and experimental settings, then made hover output respect the client's documentation-preview preference.

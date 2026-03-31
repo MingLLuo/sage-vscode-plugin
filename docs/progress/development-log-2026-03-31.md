@@ -374,3 +374,128 @@ documentation rendering, run commands, and a stronger settings model.
 
 - Next task: EXT-003
 - Risks or blockers: extension coverage is still unit-heavy rather than extension-host-heavy
+
+## Entry 14
+
+- Date: 2026-03-31
+- Task ID: RUNTIME-001
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `65f2a6a`
+
+### Goal
+
+Close the runtime gap between extension settings and actual server execution by aligning interpreter launch, path resolution,
+shell-safe command construction, and file-URI normalization.
+
+### Decisions
+
+- Decision: derive the language-server launch command from the configured interpreter instead of hardcoding `python3`.
+- Reason: language intelligence and run commands must target the same Sage or Python environment to stay trustworthy.
+- Decision: resolve configured relative source roots and extra paths against workspace folders rather than process cwd.
+- Reason: workspace settings should be portable across machines and editor launches.
+
+### Verification
+
+- Checks run:
+  - `npm run lint`
+  - `python -m pytest packages/sage-lsp/tests`
+  - `npm run test`
+- Result: runtime launch and path-handling fixes landed with the full repository test path green
+
+### Follow-ups
+
+- Next task: LSP-005
+- Risks or blockers: request handlers still needed direct regression coverage
+
+## Entry 15
+
+- Date: 2026-03-31
+- Task ID: LSP-005
+- Scope: lsp
+- Related milestone: Runtime hardening
+- Commit: `39cadbb`
+
+### Goal
+
+Exercise the actual `pygls` request handlers instead of only testing the lower-level parser and index modules.
+
+### Decisions
+
+- Decision: call registered `pygls` features through an initialized in-memory workspace instead of mocking the handlers.
+- Reason: request-level tests should catch runtime wiring mistakes, including protocol registration and import drift.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests`
+  - `npm run test`
+- Result: initialize, hover, definition, completion, document symbols, and custom documentation requests are now covered
+
+### Follow-ups
+
+- Next task: EXT-004
+- Risks or blockers: some extension settings still had no concrete runtime effect
+
+## Entry 16
+
+- Date: 2026-03-31
+- Task ID: EXT-004
+- Scope: extension
+- Related milestone: Runtime hardening
+- Commit: `ffc1d3b`
+
+### Goal
+
+Turn the exposed execution settings into real behavior by honoring `sage.run.target`, managing REPL lifecycle explicitly, and
+avoiding unnecessary language-server restarts.
+
+### Decisions
+
+- Decision: separate run and REPL terminals, and bootstrap the REPL terminal lazily.
+- Reason: file execution and interactive evaluation have different state expectations and should not trample each other.
+- Decision: avoid restarting the language server for run-target-only settings.
+- Reason: execution-target changes are extension-host concerns, not analysis-server concerns.
+
+### Verification
+
+- Checks run:
+  - `npm run lint`
+  - `npm run test`
+- Result: extension command planning and restart filtering are covered by unit tests and the repository test suite stayed green
+
+### Follow-ups
+
+- Next task: LSP-006
+- Risks or blockers: hover preferences still needed to be consumed by the server instead of only flowing through config payloads
+
+## Entry 17
+
+- Date: 2026-03-31
+- Task ID: LSP-006
+- Scope: lsp
+- Related milestone: Runtime hardening
+- Commit: `52f9432`
+
+### Goal
+
+Make server behavior reflect the documentation-related settings already exposed by the client payload.
+
+### Decisions
+
+- Decision: extend the server environment model to parse documentation, logging, and experimental sections now.
+- Reason: the initialization payload should not silently discard stable settings that the client already treats as first-class.
+- Decision: keep hover enabled when documentation previews are disabled, but trim the docstring body.
+- Reason: type or signature detail is still useful even when the user does not want long documentation text in hover.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests`
+  - `npm run test`
+- Result: hover behavior now follows the client preference and the expanded environment parsing is covered by tests
+
+### Follow-ups
+
+- Next task: extend source mapping into diagnostics and navigation
+- Risks or blockers: extension-host coverage and richer `.sage` transforms are still pending

@@ -38,6 +38,10 @@ tracked, and how the current static-analysis baseline should be extended safely.
   Determines which workspace roots should be indexed.
 - `src/languageClient.ts`
   Starts the `pygls` server and sends custom documentation requests.
+- `src/executionPlan.ts`
+  Builds shell-safe run commands and REPL load commands from extension settings.
+- `src/serverRestart.ts`
+  Limits language-server restarts to configuration changes that actually affect analysis behavior.
 - `src/documentationRequest.ts`
   Normalizes documentation payloads into a render-friendly shape.
 - `src/docsPanel.ts`
