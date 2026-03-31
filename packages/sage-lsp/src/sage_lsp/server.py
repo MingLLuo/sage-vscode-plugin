@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional, Tuple
 from lsprotocol.types import (
     CompletionList,
     CompletionParams,
+    DidChangeConfigurationParams,
     DefinitionParams,
     DocumentSymbolParams,
     Hover,
@@ -56,6 +57,10 @@ def create_server() -> SageLanguageServer:
 
     @server.feature("initialized")
     def on_initialized(params: InitializedParams) -> None:
+        del params
+
+    @server.feature("workspace/didChangeConfiguration")
+    def on_did_change_configuration(params: DidChangeConfigurationParams) -> None:
         del params
 
     @server.feature("textDocument/hover")

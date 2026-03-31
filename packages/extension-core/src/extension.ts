@@ -23,6 +23,8 @@ let client: LanguageClient | undefined;
 let replTerminal: vscode.Terminal | undefined;
 let runTerminal: vscode.Terminal | undefined;
 let replBootstrapped = false;
+let languageClientOperation: Promise<void> | undefined;
+let languageClientRestartQueued = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Sage");
@@ -57,22 +59,41 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const startLanguageClient = async (): Promise<void> => {
-    if (client) {
-      await client.stop();
+    languageClientRestartQueued = true;
+    if (languageClientOperation) {
+      await languageClientOperation;
+      return;
     }
 
-    try {
-      client = createLanguageClient(context, languageOutputChannel);
-      await client.start();
-      outputChannel.appendLine("Sage language client started.");
-    } catch (error) {
-      client = undefined;
-      const message = `Sage language server failed to start: ${String(error)}`;
-      outputChannel.appendLine(message);
-      void vscode.window.showErrorMessage(
-        `${message}. Check 'sage.languageServer.pythonPath' and the Sage output channels.`,
-      );
-    }
+    languageClientOperation = (async () => {
+      while (languageClientRestartQueued) {
+        languageClientRestartQueued = false;
+
+        if (client) {
+          const previousClient = client;
+          client = undefined;
+          await previousClient.stop();
+        }
+
+        try {
+          const nextClient = createLanguageClient(context, languageOutputChannel);
+          client = nextClient;
+          await nextClient.start();
+          outputChannel.appendLine("Sage language client started.");
+        } catch (error) {
+          client = undefined;
+          const message = `Sage language server failed to start: ${String(error)}`;
+          outputChannel.appendLine(message);
+          void vscode.window.showErrorMessage(
+            `${message}. Check 'sage.languageServer.pythonPath' and the Sage output channels.`,
+          );
+        }
+      }
+    })().finally(() => {
+      languageClientOperation = undefined;
+    });
+
+    await languageClientOperation;
   };
 
   context.subscriptions.push(
@@ -209,6 +230,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export async function deactivate(): Promise<void> {
+  if (languageClientOperation) {
+    await languageClientOperation;
+  }
   if (client) {
     await client.stop();
     client = undefined;

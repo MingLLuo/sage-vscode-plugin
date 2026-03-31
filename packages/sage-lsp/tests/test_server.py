@@ -56,6 +56,7 @@ def test_server_imports_and_initializes_with_capabilities() -> None:
 
     assert server.workspace_index is not None
     assert "sage.all" in server.workspace_index.modules
+    assert "workspace/didChangeConfiguration" in server.protocol.fm.features
 
 
 def test_server_handlers_resolve_hover_definition_completion_and_documentation() -> None:

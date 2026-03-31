@@ -63,7 +63,6 @@ export function createLanguageClient(
     outputChannel,
     initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData),
     synchronize: {
-      configurationSection: "sage",
       fileEvents: vscode.workspace.createFileSystemWatcher("**/*.sage"),
     },
     errorHandler: {
