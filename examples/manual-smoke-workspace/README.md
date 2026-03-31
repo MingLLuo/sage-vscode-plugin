@@ -1,6 +1,6 @@
 # Manual Smoke Workspace
 
-This workspace is a self-contained set of `.sage`, `.py`, and `.pyx` files for testing the current Sage VS Code
+This workspace is a self-contained set of `.sage`, `.py`, `.pyx`, `.pxd`, and `.pxi` files for testing the current Sage VS Code
 plugin baseline without depending on a full Sage source checkout.
 
 ## What It Covers
@@ -9,10 +9,11 @@ plugin baseline without depending on a full Sage source checkout.
 - Definition jumps into source roots and `analysis.extraPaths`
 - Completion from direct imports and star imports
 - Package imports and re-exports
-- Lightweight `.pyx` indexing
+- Lightweight `.pyx` indexing plus `.pxd` native declaration resolution
 - `.sage` document symbols and preparser-style `R.<x> = ...` assignments
 - Manual runtime checks for caret syntax and REPL execution
 - Static lazy-import resolution in `.sage` files
+- Native-component highlighting for Cython keywords, includes, and typed declarations
 
 ## Recommended Flow
 
@@ -65,9 +66,18 @@ Open `src/05_symbols_and_locals.sage`.
 - Check document symbols for `LocalContainer`, `local_builder`, `GAMMA`, `R`, and `z`.
 - Use completion on the final `loc` prefix to confirm local top-level names appear.
 
+### 06 Native Components and Highlighting
+
+Open `src/cythonish_bridge.pyx`, `src/native_support.pxd`, and `src/native_include.pxi`.
+
+- Confirm `cdef`, `cpdef`, `cimport`, `include`, Cython types, and Sage helpers are highlighted.
+- Use definition on `NativeAccumulator` and `native_step` from `cythonish_bridge.pyx`.
+- Check document symbols in `cythonish_bridge.pyx` for `fast_square`, `StepCounter`, and `stepped_square`.
+- Confirm `native_support.pxd` exposes the declared class and typed functions.
+
 ## Layout
 
 - `src`
-  Main `.sage` files plus local Python and `.pyx` modules indexed as source roots.
+  Main `.sage` files plus local Python, `.pyx`, `.pxd`, and `.pxi` modules indexed as source roots.
 - `vendor`
   Extra-path modules used to verify `sage.analysis.extraPaths`.

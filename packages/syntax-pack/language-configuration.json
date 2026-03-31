@@ -2,6 +2,7 @@
   "comments": {
     "lineComment": "#"
   },
+  "wordPattern": "(-?\\d*\\.\\d\\w*)|([^\\s`~!@#%^&*()=+[\\]{}\\\\|;:'\",.<>/?]+)",
   "brackets": [
     ["(", ")"],
     ["[", "]"],
@@ -28,6 +29,19 @@
       "open": "'",
       "close": "'"
     }
-  ]
+  ],
+  "surroundingPairs": [
+    ["(", ")"],
+    ["[", "]"],
+    ["{", "}"],
+    ["\"", "\""],
+    ["'", "'"]
+  ],
+  "indentationRules": {
+    "increaseIndentPattern": "^.*:\\s*(#.*)?$",
+    "decreaseIndentPattern": "^\\s*(elif|else|except|finally)\\b.*:\\s*(#.*)?$"
+  },
+  "folding": {
+    "offSide": true
+  }
 }
-

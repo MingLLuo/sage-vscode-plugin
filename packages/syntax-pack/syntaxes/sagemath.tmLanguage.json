@@ -1,21 +1,163 @@
 {
   "name": "SageMath",
   "scopeName": "source.sagemath",
-  "fileTypes": ["sage"],
+  "fileTypes": ["sage", "pyx", "pxd", "pxi"],
   "patterns": [
-    {
-      "name": "comment.line.number-sign.sagemath",
-      "match": "#.*$"
-    },
-    {
-      "name": "keyword.control.import.sagemath",
-      "match": "\\b(from|import|def|class|return)\\b"
-    },
-    {
-      "name": "constant.numeric.sagemath",
-      "match": "\\b\\d+(?:\\.\\d+)?\\b"
-    }
+    { "include": "#comments" },
+    { "include": "#triple-quoted-strings" },
+    { "include": "#strings" },
+    { "include": "#decorators" },
+    { "include": "#preparse-assignment" },
+    { "include": "#definitions" },
+    { "include": "#imports" },
+    { "include": "#keywords" },
+    { "include": "#sage-support" },
+    { "include": "#cython-support" },
+    { "include": "#constants" },
+    { "include": "#numbers" }
   ],
-  "repository": {}
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.number-sign.sagemath",
+          "match": "#.*$"
+        }
+      ]
+    },
+    "triple-quoted-strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.multi.double.sagemath",
+          "begin": "\"\"\"",
+          "end": "\"\"\""
+        },
+        {
+          "name": "string.quoted.multi.single.sagemath",
+          "begin": "'''",
+          "end": "'''"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.sagemath",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.sagemath",
+              "match": "\\\\."
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.single.sagemath",
+          "begin": "'",
+          "end": "'",
+          "patterns": [
+            {
+              "name": "constant.character.escape.sagemath",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "decorators": {
+      "patterns": [
+        {
+          "name": "meta.annotation.sagemath",
+          "match": "^\\s*(@[A-Za-z_][A-Za-z0-9_\\.]*)"
+        }
+      ]
+    },
+    "preparse-assignment": {
+      "patterns": [
+        {
+          "name": "meta.assignment.preparse.sagemath",
+          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(\\.)\\<([A-Za-z_][A-Za-z0-9_]*(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*)*)\\>(\\s*=)",
+          "captures": {
+            "1": { "name": "variable.other.readwrite.sagemath" },
+            "2": { "name": "punctuation.accessor.dot.sagemath" },
+            "3": { "name": "variable.parameter.preparse.sagemath" },
+            "4": { "name": "keyword.operator.assignment.sagemath" }
+          }
+        }
+      ]
+    },
+    "definitions": {
+      "patterns": [
+        {
+          "name": "meta.class.definition.sagemath",
+          "match": "^(\\s*)(class|cdef\\s+class|cpdef\\s+class)(\\s+)([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "2": { "name": "keyword.declaration.class.sagemath" },
+            "4": { "name": "entity.name.type.class.sagemath" }
+          }
+        },
+        {
+          "name": "meta.function.definition.sagemath",
+          "match": "^(\\s*)(?:async\\s+def|def|cpdef|cdef)(?:\\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed|long|short|char|int|float|double|void|object|bint|size_t|Py_ssize_t|[A-Za-z_][A-Za-z0-9_\\.\\*\\[\\]]*))*\\s+([A-Za-z_][A-Za-z0-9_]*)(\\s*\\()",
+          "captures": {
+            "2": { "name": "entity.name.function.sagemath" },
+            "3": { "name": "punctuation.definition.parameters.begin.sagemath" }
+          }
+        }
+      ]
+    },
+    "imports": {
+      "patterns": [
+        {
+          "name": "keyword.control.import.sagemath",
+          "match": "\\b(from|import|cimport|include|as)\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.control.flow.sagemath",
+          "match": "\\b(def|class|return|yield|raise|break|continue|pass|if|elif|else|for|while|try|except|finally|with|lambda|and|or|not|in|is|async|await|assert|del|global|nonlocal|cdef|cpdef|cimport|ctypedef|nogil|gil|extern|public|readonly|api|property)\\b"
+        }
+      ]
+    },
+    "sage-support": {
+      "patterns": [
+        {
+          "name": "support.function.sagemath",
+          "match": "\\b(PolynomialRing|PowerSeriesRing|LaurentSeriesRing|MatrixSpace|vector|matrix|var|factorial|sqrt|sin|cos|tan|exp|log|EllipticCurve|NumberField)\\b"
+        },
+        {
+          "name": "support.constant.sagemath",
+          "match": "\\b(ZZ|QQ|RR|CC|SR|GF|QQbar|AA|CDF|RDF|pi|oo|Infinity|Integers|Rationals|ComplexField|RealField)\\b"
+        }
+      ]
+    },
+    "cython-support": {
+      "patterns": [
+        {
+          "name": "storage.type.cython.sagemath",
+          "match": "\\b(bint|char|short|int|long|float|double|void|size_t|Py_ssize_t|mpz_t|mpq_t|mpfr_t|cppclass)\\b"
+        }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        {
+          "name": "constant.language.sagemath",
+          "match": "\\b(True|False|None|NULL)\\b"
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.sagemath",
+          "match": "\\b(?:0x[0-9A-Fa-f]+|\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\b"
+        }
+      ]
+    }
+  }
 }
-
