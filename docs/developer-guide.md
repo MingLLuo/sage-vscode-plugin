@@ -46,11 +46,13 @@ tracked, and how the current static-analysis baseline should be extended safely.
   runtime when `sage.analysis.sourceRoots` is left empty.
 - `src/languageClient.ts`
   Starts the `pygls` server in a dedicated Python runtime, watches Sage/Cython document types, and sends custom
-  documentation requests.
+  documentation requests while suppressing client-library auto-restarts during extension-managed shutdown and restart
+  cycles.
 - `src/executionPlan.ts`
   Builds shell-safe run commands and REPL load commands from extension settings.
 - `src/serverRestart.ts`
-  Limits language-server restarts to configuration changes that actually affect analysis behavior.
+  Limits language-server restarts to configuration changes that actually affect analysis behavior and keeps close/restart
+  policy explicit during managed shutdown.
 - `src/serverLaunch.ts`
   Resolves the Python runtime used to host the language server independently from the Sage executable used for run and
   REPL commands.

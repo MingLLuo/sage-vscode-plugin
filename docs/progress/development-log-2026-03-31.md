@@ -1174,3 +1174,42 @@ completion instead of depending entirely on runtime fallback.
 
 - Next task: expand the same dotted-member static model to other Sage singleton families and propagate it into references and rename where feasible
 - Risks or blockers: more dynamic Sage APIs that synthesize attributes at runtime will still require runtime fallback or deeper semantic modeling
+
+## Entry 38
+
+- Date: 2026-03-31
+- Task ID: EXT-009
+- Scope: extension
+- Related milestone: Runtime hardening
+- Commit: `63dbb59`
+
+### Goal
+
+Stop the VS Code client from treating its own managed stop/restart cycles as server crashes, which was causing duplicate
+launches, cancelled requests, and benign code-0 exits.
+
+### Decisions
+
+- Decision: keep automatic restart for unexpected language-server disconnects, but suppress it while the extension is
+  intentionally stopping the client during restart or deactivate flows.
+- Reason: the extension already owns managed restart sequencing, so a second restart layer only creates races.
+- Decision: keep the restart/close policy in a pure helper that can be unit-tested without importing the VS Code host.
+- Reason: lifecycle policy needs coverage, but the extension's Node test environment should not depend on the `vscode`
+  runtime package.
+
+### Verification
+
+- Checks run:
+  - `npm run lint --workspace @sage-vscode/extension-core`
+  - `npm run test --workspace @sage-vscode/extension-core`
+  - `npm run lint`
+  - `npm run test`
+- Result: extension tests remain green, repository tests remain green, and managed shutdown now routes through
+  `DoNotRestart` instead of spawning a competing second client
+
+### Follow-ups
+
+- Next task: add extension-host automation that exercises configuration-triggered restarts and validates stable
+  connection behavior from the UI layer
+- Risks or blockers: unexpected external process exits should still be monitored in the real extension host to confirm
+  restart behavior stays correct under VS Code's runtime

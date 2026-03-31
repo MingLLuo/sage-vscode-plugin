@@ -22,6 +22,7 @@
 - Advanced smoke workspace: graph, elliptic-curve, ideal, symbolic, combinatorics, and number-field samples now exercise heavier Sage usage
 - Runtime invocation hardening: runtime Sage introspection now launches subprocesses with argv-safe invocation and direct unit coverage
 - Singleton member resolution: dotted Sage APIs such as `graphs.PetersenGraph` now resolve statically through class-body imports, singleton instances, and member completion
+- Managed LSP shutdown: extension-driven stop/restart flows now suppress library-level auto-restart to avoid duplicate launches, cancelled requests, and code-0 exits
 
 ## Current Focus
 
@@ -92,3 +93,4 @@
 - Expanded the smoke workspace with heavier SageMath scenarios across graph theory, elliptic curves, ideals, symbolic calculus, combinatorics, and number fields.
 - Fixed runtime introspection subprocess launching so Python 3.12 no longer misreads the argument vector as `bufsize` and drops hover or definition requests.
 - Extended static analysis with class-body import handling, singleton instance tracking, dotted member resolution, member completion, and workspace-symbol coverage for common Sage generator objects.
+- Suppressed client-library auto-restart during extension-managed language-server shutdown so configuration-triggered restarts no longer produce duplicate launches and spurious code-0 exits.
