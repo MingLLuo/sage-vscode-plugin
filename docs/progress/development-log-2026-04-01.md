@@ -383,3 +383,43 @@ re-parsing every indexed file from scratch.
 - Next task: split hot document state from cached library/workspace state and start moving toward incremental rebuilds
 - Risks or blockers: this cache still re-reads source files and still rebuilds the module list eagerly; it removes
   parse cost first, not the entire indexing cost
+
+## Entry 11
+
+- Date: 2026-04-01
+- Task ID: LSP-024
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `pending`
+
+### Goal
+
+Stop re-parsing the same open document on every hover, definition, completion, and symbol request when the editor
+buffer has not changed.
+
+### Decisions
+
+- Decision: add an open-document overlay cache keyed by document URI, language id, and exact source text.
+- Reason: modern language tools typically treat open buffers as hot state above the colder workspace index, and the
+  same unchanged editor text should not be reparsed for every request.
+- Decision: populate the overlay on open/change and drop it on close.
+- Reason: this keeps live editor state synchronized with the buffer lifecycle and avoids retaining stale document
+  records longer than needed.
+- Decision: publish an empty diagnostics set on close.
+- Reason: once the editor buffer is gone, the server should stop surfacing stale live-buffer diagnostics for it.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+- Result: overlay-cache reuse and invalidation tests passed, full repository tests remained green, native Sage smoke
+  passed, and the real VS Code extension-host smoke also passed after the hot-document layer was added
+
+### Follow-ups
+
+- Next task: make workspace rebuilds more incremental so background file changes do not require a full cold rebuild
+- Risks or blockers: the current overlay cache keys on full source equality, so memory use still scales with open
+  document size until a more compact versioned buffer model is introduced

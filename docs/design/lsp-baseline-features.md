@@ -29,6 +29,7 @@ The current baseline now includes:
 - saved `.sage` modules participating in workspace indexing instead of only live open-document parsing
 - cached symbol and member resolution for indexed modules to reduce repeated definition and documentation lookup cost
 - persistent module-cache reuse for indexed source roots, with automatic invalidation when file size or mtime changes
+- open-document overlay caching so repeated requests against unchanged editor buffers reuse parsed records instead of re-parsing the same text
 
 ## Scope
 
@@ -45,6 +46,8 @@ The current baseline now includes:
   broader split between hot document state and colder library/workspace indexes.
 - Persistent cache writes are best-effort. If the preferred cache directory is unavailable, the server falls back to a
   temporary cache location or disables persistence without breaking analysis.
+- Open documents now act like a hot overlay above the colder workspace/library index, which is closer to how modern
+  language tools separate live editor state from background index state.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.

@@ -43,6 +43,7 @@
 - Extension-host smoke revalidated: the real VS Code smoke harness now passes again under an approval path that permits launching the local app in the background
 - Hybrid preparser parsing: `.sage` files that mix `R.<x>`-style declarations with ordinary Python class/method code now merge loose Sage extraction with AST structure instead of dropping the whole file to the weaker parser
 - Persistent index cache: indexed source roots now reuse serialized module records across rebuilds, invalidate entries when source files change, and fall back safely when the preferred cache location is not writable
+- Open-document overlay cache: unchanged editor buffers now reuse parsed records across hover/definition/completion requests, update on edits, and clean up on close
 
 ## Current Focus
 
@@ -141,3 +142,4 @@
 - Revalidated the real VS Code extension-host smoke flow after the `.sage` parser and semantic-token changes by rerunning the background host against the copied smoke workspace.
 - Added a hybrid `.sage` parse path so preparser-heavy files can keep top-level Sage declarations while regaining AST-derived methods, instance tracking, and member completion for the rest of the module.
 - Added a persistent module-cache baseline for indexed source roots, plus cache invalidation on file changes and automatic fallback when the preferred cache directory cannot be written.
+- Added a hot open-document overlay layer so repeated requests against unchanged editor buffers no longer re-parse the same text, while document-close events now drop that overlay state cleanly.
