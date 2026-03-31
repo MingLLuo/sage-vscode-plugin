@@ -18,6 +18,7 @@ executable used to run `.sage` files.
   extension-host configuration with `F5`.
 - Run `./scripts/dev-vscode.sh --bootstrap --python /path/to/python` when you want the helper script to install Node
   dependencies and editable-install `sage-lsp` before opening VS Code.
+- The sync and dev helper path is compatible with Node 20 and newer; it no longer depends on `import.meta.dirname`.
 
 ## Extension Development Host
 

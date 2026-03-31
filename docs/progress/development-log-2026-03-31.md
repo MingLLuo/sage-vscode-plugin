@@ -861,3 +861,37 @@ or the list-based alias form.
 
 - Next task: keep hardening `.sage` source mapping and higher-level LSP features
 - Risks or blockers: loose `.sage` parsing is still heuristic and will need more work as preparser coverage expands
+
+## Entry 29
+
+- Date: 2026-03-31
+- Task ID: DEV-002
+- Scope: repo
+- Related milestone: Developer workflow
+- Commit: `fc0f838`
+
+### Goal
+
+Fix the `npm run dev:vscode:smoke` bootstrap path so contributors on Node 20 can run the repository helper without the
+syntax sync step crashing immediately.
+
+### Decisions
+
+- Decision: replace `import.meta.dirname` with `fileURLToPath(import.meta.url)` plus `path.dirname(...)` in the sync
+  script.
+- Reason: `import.meta.dirname` is not available in the Node version the user was actually running, while the URL-based
+  form is stable across Node 20 and newer.
+
+### Verification
+
+- Checks run:
+  - `npm run sync:syntax`
+  - `npm run dev:vscode:smoke -- --no-open`
+  - `npm run lint`
+  - `npm run test`
+- Result: syntax sync, build, lint, and the helper-driven smoke path all succeed after the compatibility change
+
+### Follow-ups
+
+- Next task: keep the helper flow stable while extension-host automation coverage is added
+- Risks or blockers: the helper still depends on the `code` CLI being installed when you want it to actually launch VS Code
