@@ -29,6 +29,7 @@ let runTerminal: vscode.Terminal | undefined;
 let replBootstrapped = false;
 let languageClientOperation: Promise<void> | undefined;
 let languageClientRestartQueued = false;
+let languageClientManagedShutdown = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Sage");
@@ -80,11 +81,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         if (client) {
           const previousClient = client;
           client = undefined;
-          await previousClient.stop();
+          languageClientManagedShutdown = true;
+          try {
+            await previousClient.stop();
+          } finally {
+            languageClientManagedShutdown = false;
+          }
         }
 
         try {
-          const nextClient = createLanguageClient(context, languageOutputChannel);
+          const nextClient = createLanguageClient(context, languageOutputChannel, {
+            shouldAutoRestartOnClose: () => !languageClientManagedShutdown,
+          });
           client = nextClient;
           await nextClient.start();
           outputChannel.appendLine("Sage language client started.");
@@ -257,8 +265,13 @@ export async function deactivate(): Promise<void> {
     await languageClientOperation;
   }
   if (client) {
-    await client.stop();
-    client = undefined;
+    languageClientManagedShutdown = true;
+    try {
+      await client.stop();
+      client = undefined;
+    } finally {
+      languageClientManagedShutdown = false;
+    }
   }
 }
 

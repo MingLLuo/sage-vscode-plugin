@@ -14,3 +14,9 @@ export function shouldRestartLanguageServer(
 ): boolean {
   return SERVER_RESTART_SECTIONS.some((section) => affectsConfiguration(section));
 }
+
+export function shouldAutoRestartOnLanguageServerClose(
+  managedShutdown: boolean,
+): boolean {
+  return !managedShutdown;
+}

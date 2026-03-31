@@ -17,11 +17,17 @@ import {
   type DocumentationResult,
 } from "./documentationRequest";
 import { buildLanguageServerLaunch } from "./serverLaunch";
+import { shouldAutoRestartOnLanguageServerClose } from "./serverRestart";
 import { buildWorkspaceInitializationData, resolveConfiguredPaths } from "./workspaceDiscovery";
+
+export interface LanguageClientLifecycle {
+  shouldAutoRestartOnClose?: () => boolean;
+}
 
 export function createLanguageClient(
   context: vscode.ExtensionContext,
   outputChannel: vscode.OutputChannel,
+  lifecycle: LanguageClientLifecycle = {},
 ): LanguageClient {
   const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -82,8 +88,14 @@ export function createLanguageClient(
         return { action: ErrorAction.Continue };
       },
       closed: () => {
-        outputChannel.appendLine("[warn] language server connection closed; restarting.");
-        return { action: CloseAction.Restart };
+        const managedShutdown = !(lifecycle.shouldAutoRestartOnClose?.() ?? true);
+        const shouldRestart = shouldAutoRestartOnLanguageServerClose(managedShutdown);
+        outputChannel.appendLine(
+          managedShutdown
+            ? "[info] language server connection closed during a managed restart."
+            : "[warn] language server connection closed unexpectedly; restarting.",
+        );
+        return { action: shouldRestart ? CloseAction.Restart : CloseAction.DoNotRestart };
       },
     },
   };
