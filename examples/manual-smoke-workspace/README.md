@@ -14,6 +14,7 @@ plugin baseline without depending on a full Sage source checkout.
 - Manual runtime checks for caret syntax and REPL execution
 - Static lazy-import resolution in `.sage` files
 - Native-component highlighting for Cython keywords, includes, and typed declarations
+- Runtime-backed docs and definition fallback for Sage library APIs exposed through dotted access and heavier algebraic objects
 
 ## Recommended Flow
 
@@ -74,6 +75,22 @@ Open `src/cythonish_bridge.pyx`, `src/native_support.pxd`, and `src/native_inclu
 - Use definition on `NativeAccumulator` and `native_step` from `cythonish_bridge.pyx`.
 - Check document symbols in `cythonish_bridge.pyx` for `fast_square`, `StepCounter`, and `stepped_square`.
 - Confirm `native_support.pxd` exposes the declared class and typed functions.
+
+### 07 Runtime Graphs and Number Theory
+
+Open `src/06_runtime_graphs_and_number_theory.sage`.
+
+- Hover and use definition on `graphs.PetersenGraph`, `EllipticCurve`, `ideal`, `factor`, and `sigma`.
+- Confirm dotted names such as `graphs.PetersenGraph` still return documentation instead of dropping to an unknown symbol.
+- Run `Sage: Show Documentation` on `groebner_basis` and `automorphism_group`.
+
+### 08 Symbolic and Combinatorics
+
+Open `src/07_symbolic_and_combinatorics.sage`.
+
+- Hover and use definition on `integrate`, `Partitions`, `SymmetricGroup`, and `NumberField`.
+- Confirm symbolic expressions using `^`, `oo`, and named generators still execute under `Sage: Run Current File`.
+- Check document symbols for `Q`, `z`, `cyclotomic_field`, and `advanced_symbolic_targets`.
 
 ## Layout
 
