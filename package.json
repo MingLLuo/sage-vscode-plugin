@@ -8,6 +8,8 @@
     "packages/syntax-pack"
   ],
   "scripts": {
+    "dev:vscode": "./scripts/dev-vscode.sh",
+    "dev:vscode:smoke": "./scripts/dev-vscode.sh --smoke",
     "sync:syntax": "node scripts/sync-syntax-assets.mjs",
     "build": "npm run build --workspace @sage-vscode/syntax-pack && npm run build --workspace @sage-vscode/extension-core",
     "lint": "npm run lint --workspace @sage-vscode/syntax-pack && npm run lint --workspace @sage-vscode/extension-core",
