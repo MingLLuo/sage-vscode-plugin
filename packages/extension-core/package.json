@@ -16,6 +16,7 @@
   ],
   "activationEvents": [
     "onLanguage:sagemath",
+    "onLanguage:sagemath-cython",
     "onCommand:sage.selectInterpreter",
     "onCommand:sage.restartLanguageServer",
     "onCommand:sage.runCurrentFile",
@@ -52,6 +53,19 @@
           ".sage"
         ],
         "configuration": "./resources/generated/syntax/language-configuration.json"
+      },
+      {
+        "id": "sagemath-cython",
+        "aliases": [
+          "SageMath Cython",
+          "sage-cython"
+        ],
+        "extensions": [
+          ".pyx",
+          ".pxd",
+          ".pxi"
+        ],
+        "configuration": "./resources/generated/syntax/language-configuration.json"
       }
     ],
     "grammars": [
@@ -59,11 +73,20 @@
         "language": "sagemath",
         "scopeName": "source.sagemath",
         "path": "./resources/generated/syntax/syntaxes/sagemath.tmLanguage.json"
+      },
+      {
+        "language": "sagemath-cython",
+        "scopeName": "source.sagemath",
+        "path": "./resources/generated/syntax/syntaxes/sagemath.tmLanguage.json"
       }
     ],
     "snippets": [
       {
         "language": "sagemath",
+        "path": "./resources/generated/syntax/snippets/sagemath.json"
+      },
+      {
+        "language": "sagemath-cython",
         "path": "./resources/generated/syntax/snippets/sagemath.json"
       }
     ],

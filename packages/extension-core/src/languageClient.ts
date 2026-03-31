@@ -59,11 +59,16 @@ export function createLanguageClient(
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ language: "sagemath" }],
+    documentSelector: [{ language: "sagemath" }, { language: "sagemath-cython" }],
     outputChannel,
     initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData),
     synchronize: {
-      fileEvents: vscode.workspace.createFileSystemWatcher("**/*.sage"),
+      fileEvents: [
+        vscode.workspace.createFileSystemWatcher("**/*.sage"),
+        vscode.workspace.createFileSystemWatcher("**/*.pyx"),
+        vscode.workspace.createFileSystemWatcher("**/*.pxd"),
+        vscode.workspace.createFileSystemWatcher("**/*.pxi"),
+      ],
     },
     errorHandler: {
       error: (error, message, count) => {
