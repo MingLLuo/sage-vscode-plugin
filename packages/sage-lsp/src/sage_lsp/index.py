@@ -118,6 +118,26 @@ class WorkspaceIndex:
                 seen.setdefault(name, symbol)
         return [symbol.completion_item() for _, symbol in sorted(seen.items())][:100]
 
+    def member_completion_items(
+        self,
+        record: ModuleRecord,
+        expression: str,
+        prefix: str,
+    ) -> list[dict[str, object]]:
+        base_symbol = self.resolve_symbol(record, expression)
+        if base_symbol is None:
+            return []
+        owner_record = self._record_for_symbol(record, base_symbol)
+        if owner_record is None:
+            return []
+
+        seen: dict[str, SymbolRecord] = {}
+        for name, symbol in sorted(self._resolved_members(owner_record, base_symbol).items()):
+            if prefix and not name.startswith(prefix):
+                continue
+            seen.setdefault(name, symbol)
+        return [symbol.completion_item() for _, symbol in sorted(seen.items())][:100]
+
     def document_symbols(self, record: ModuleRecord) -> list[dict[str, object]]:
         items: list[dict[str, object]] = []
         for name in sorted(self._visible_names(record)):
@@ -162,6 +182,28 @@ class WorkspaceIndex:
                         "containerName": module_name,
                     }
                 )
+            for owner_name in sorted(set(record.member_symbols) | set(record.member_bindings)):
+                for name, symbol in sorted(self._resolved_member_symbols(record, owner_name).items()):
+                    if name.startswith("_"):
+                        continue
+                    haystack = f"{name} {owner_name} {module_name}".casefold()
+                    if needle and needle not in haystack:
+                        continue
+                    identity = symbol_identity(symbol)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    items.append(
+                        {
+                            "name": name,
+                            "kind": document_symbol_kind(symbol.kind),
+                            "location": {
+                                "uri": symbol.file_path.as_uri(),
+                                "range": symbol.source_range.to_lsp(),
+                            },
+                            "containerName": f"{module_name}.{owner_name}",
+                        }
+                    )
         return items[:200]
 
     def reference_locations(
@@ -261,8 +303,9 @@ class WorkspaceIndex:
         if symbol is None:
             return None
         summary, sections = split_docstring(symbol.docstring)
+        display_name = symbol.name if "." in name else name
         return DocumentationResult(
-            name=name,
+            name=display_name,
             kind=symbol.kind,
             module_name=symbol.module_name,
             uri=symbol.file_path.as_uri(),
@@ -295,6 +338,9 @@ class WorkspaceIndex:
             return None
         visited.add(visit_key)
 
+        if "." in name:
+            return self._resolve_dotted_symbol(record, name, visited)
+
         if name in record.symbols:
             return record.symbols[name]
 
@@ -322,6 +368,32 @@ class WorkspaceIndex:
 
         return None
 
+    def _resolve_dotted_symbol(
+        self,
+        record: ModuleRecord,
+        name: str,
+        visited: set[tuple[str, str]],
+    ) -> Optional[SymbolRecord]:
+        parts = [part for part in name.split(".") if part]
+        if not parts:
+            return None
+
+        current_record = record
+        current_symbol = self._resolve_symbol(current_record, parts[0], visited)
+        if current_symbol is None:
+            return None
+
+        for attribute in parts[1:]:
+            owner_record = self._record_for_symbol(current_record, current_symbol)
+            if owner_record is None:
+                return None
+            current_symbol = self._resolve_member_symbol(owner_record, current_symbol, attribute, visited)
+            if current_symbol is None:
+                return None
+            current_record = owner_record
+
+        return current_symbol
+
     def _resolve_binding(
         self,
         binding: ImportBinding,
@@ -331,22 +403,114 @@ class WorkspaceIndex:
         if target_record is None:
             return None
         if binding.target_name is None:
-            return SymbolRecord(
-                name=binding.alias,
-                kind="module",
-                module_name=target_record.module_name,
-                file_path=target_record.file_path,
-                source_range=target_record.symbols.get(binding.alias, SymbolRecord(
-                    name=binding.alias,
-                    kind="module",
-                    module_name=target_record.module_name,
-                    file_path=target_record.file_path,
-                    source_range=binding.source_range,
-                )).source_range,
-                detail=f"module {target_record.module_name}",
-                docstring=target_record.docstring,
-            )
+            return self._symbol_from_module_binding(binding, target_record)
         return self._resolve_symbol(target_record, binding.target_name, visited)
+
+    def _resolve_member_symbol(
+        self,
+        record: ModuleRecord,
+        symbol: SymbolRecord,
+        attribute: str,
+        visited: set[tuple[str, str]],
+    ) -> Optional[SymbolRecord]:
+        if symbol.kind == "module":
+            module_record = self._modules.get(symbol.module_name)
+            if module_record is None:
+                return None
+            return self._resolve_symbol(module_record, attribute, visited)
+
+        owner_name = None
+        if symbol.kind == "class":
+            owner_name = symbol.name
+        else:
+            owner_name = record.instance_types.get(symbol.name)
+
+        if owner_name is None:
+            return None
+        return self._resolve_member_from_owner(record, owner_name, attribute, visited)
+
+    def _resolve_member_from_owner(
+        self,
+        record: ModuleRecord,
+        owner_name: str,
+        attribute: str,
+        visited: set[tuple[str, str]],
+    ) -> Optional[SymbolRecord]:
+        direct_symbol = record.member_symbols.get(owner_name, {}).get(attribute)
+        if direct_symbol is not None:
+            return direct_symbol
+
+        binding = record.member_bindings.get(owner_name, {}).get(attribute)
+        if binding is None:
+            return None
+
+        resolved = self._resolve_binding(binding, visited)
+        if resolved is not None:
+            return resolved
+        target_record = self._modules.get(binding.module_name)
+        if target_record is None:
+            return None
+        return self._symbol_from_module_binding(binding, target_record)
+
+    def _resolved_member_symbols(self, record: ModuleRecord, owner_name: str) -> dict[str, SymbolRecord]:
+        members: dict[str, SymbolRecord] = dict(record.member_symbols.get(owner_name, {}))
+        for name, binding in record.member_bindings.get(owner_name, {}).items():
+            resolved = self._resolve_binding(binding, visited=set())
+            if resolved is not None:
+                members[name] = resolved
+                continue
+            target_record = self._modules.get(binding.module_name)
+            if target_record is not None:
+                members[name] = self._symbol_from_module_binding(binding, target_record)
+        return members
+
+    def _resolved_members(self, record: ModuleRecord, symbol: SymbolRecord) -> dict[str, SymbolRecord]:
+        if symbol.kind == "module":
+            module_record = self._modules.get(symbol.module_name)
+            if module_record is None:
+                return {}
+            members: dict[str, SymbolRecord] = {}
+            for name in self._visible_names(module_record):
+                resolved = self._resolve_symbol(module_record, name, visited=set())
+                if resolved is not None:
+                    members[name] = resolved
+            return members
+
+        owner_name = symbol.name if symbol.kind == "class" else record.instance_types.get(symbol.name)
+        if owner_name is None:
+            return {}
+        return self._resolved_member_symbols(record, owner_name)
+
+    def _record_for_symbol(
+        self,
+        current_record: ModuleRecord,
+        symbol: SymbolRecord,
+    ) -> Optional[ModuleRecord]:
+        if symbol.module_name == current_record.module_name:
+            return current_record
+        return self._modules.get(symbol.module_name)
+
+    def _symbol_from_module_binding(
+        self,
+        binding: ImportBinding,
+        target_record: ModuleRecord,
+    ) -> SymbolRecord:
+        fallback = SymbolRecord(
+            name=binding.alias,
+            kind="module",
+            module_name=target_record.module_name,
+            file_path=target_record.file_path,
+            source_range=binding.source_range,
+        )
+        return SymbolRecord(
+            name=binding.alias,
+            kind="module",
+            module_name=target_record.module_name,
+            file_path=target_record.file_path,
+            source_range=target_record.symbols.get(binding.alias, fallback).source_range,
+            detail=f"module {target_record.module_name}",
+            docstring=target_record.docstring,
+        )
 
     def _is_excluded(self, root: Path, path: Path) -> bool:
         relative = path.relative_to(root).as_posix()
@@ -394,6 +558,11 @@ def merge_module_records(existing: ModuleRecord, candidate: ModuleRecord) -> Mod
     for record in ordered_records:
         merged.symbols.update(record.symbols)
         merged.bindings.update(record.bindings)
+        merged.instance_types.update(record.instance_types)
+        for owner_name, symbols in record.member_symbols.items():
+            merged.member_symbols.setdefault(owner_name, {}).update(symbols)
+        for owner_name, bindings in record.member_bindings.items():
+            merged.member_bindings.setdefault(owner_name, {}).update(bindings)
         for star_import in record.star_imports:
             if star_import not in merged.star_imports:
                 merged.star_imports.append(star_import)

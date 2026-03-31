@@ -95,3 +95,23 @@ helper = factorial
     assert "R" in record.symbols
     assert "x" in record.symbols
     assert "helper" in record.symbols
+
+
+def test_parse_python_module_extracts_singleton_member_bindings() -> None:
+    source = """
+class GraphGenerators:
+    from pkg import smallgraphs
+
+    PetersenGraph = staticmethod(smallgraphs.PetersenGraph)
+
+    def CycleGraph(self, n):
+        return n
+
+graphs = GraphGenerators()
+"""
+    record = parse_python_module("pkg.graph_generators", Path("graph_generators.py"), source)
+
+    assert record.member_bindings["GraphGenerators"]["PetersenGraph"].module_name == "pkg.smallgraphs"
+    assert record.member_bindings["GraphGenerators"]["PetersenGraph"].target_name == "PetersenGraph"
+    assert record.member_symbols["GraphGenerators"]["CycleGraph"].kind == "function"
+    assert record.instance_types["graphs"] == "GraphGenerators"

@@ -158,6 +158,39 @@ def test_iter_identifier_ranges_skips_comments_and_strings() -> None:
     assert len(ranges) == 2
 
 
+def test_workspace_index_resolves_singleton_dotted_members_and_member_completion(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(
+        root,
+        "pkg/smallgraphs.py",
+        'def PetersenGraph():\n    """Build the Petersen graph."""\n    return 10\n',
+    )
+    _write_module(
+        root,
+        "pkg/graph_generators.py",
+        "class GraphGenerators:\n    from pkg import smallgraphs\n\n    PetersenGraph = staticmethod(smallgraphs.PetersenGraph)\n\n    def CycleGraph(self, n):\n        \"\"\"Build a cycle graph.\"\"\"\n        return n\n\ngraphs = GraphGenerators()\n",
+    )
+    _write_module(root, "pkg/consumer.py", "from pkg.graph_generators import graphs\n\nvalue = graphs.PetersenGraph()\n")
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    consumer = index.modules["pkg.consumer"]
+    resolved = index.resolve_symbol(consumer, "graphs.PetersenGraph")
+    documentation = index.documentation_for_symbol(consumer, "graphs.PetersenGraph")
+    completions = index.member_completion_items(consumer, "graphs", "Cy")
+    symbols = index.workspace_symbols("PetersenGraph")
+
+    assert resolved is not None
+    assert resolved.file_path.name == "smallgraphs.py"
+    assert documentation is not None
+    assert documentation.name == "PetersenGraph"
+    assert documentation.summary == "Build the Petersen graph."
+    assert any(item["label"] == "CycleGraph" for item in completions)
+    assert any(str(item["location"]["uri"]).endswith("smallgraphs.py") for item in symbols)
+
+
 def _write_module(root: Path, relative_path: str, contents: str) -> None:
     module_path = root / relative_path
     module_path.parent.mkdir(parents=True, exist_ok=True)

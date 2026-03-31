@@ -92,7 +92,7 @@ def create_server() -> SageLanguageServer:
         documentation = _documentation_for_request(
             server,
             resolved["record"],
-            str(resolved["name"]),
+            str(resolved.get("static_name") or resolved["name"]),
             str(resolved.get("runtime_name") or resolved["name"]),
         )
         if documentation is None:
@@ -114,7 +114,10 @@ def create_server() -> SageLanguageServer:
             return None
 
         symbol = (
-            server.workspace_index.resolve_symbol(resolved["record"], resolved["name"])
+            server.workspace_index.resolve_symbol(
+                resolved["record"],
+                str(resolved.get("static_name") or resolved["name"]),
+            )
             if server.workspace_index is not None
             else None
         )
@@ -137,7 +140,15 @@ def create_server() -> SageLanguageServer:
         if record is None:
             return CompletionList(is_incomplete=False, items=[])
 
-        prefix = current_prefix(text or record.source, params.position.line, params.position.character)
+        dotted_target, prefix = completion_target_at_position(
+            text or record.source,
+            params.position.line,
+            params.position.character,
+        )
+        if dotted_target and server.workspace_index is not None:
+            items = server.workspace_index.member_completion_items(record, dotted_target, prefix)
+            return CompletionList(is_incomplete=False, items=items)
+
         items = server.workspace_index.completion_items(record, prefix)
         return CompletionList(is_incomplete=False, items=items)
 
@@ -242,6 +253,7 @@ def create_server() -> SageLanguageServer:
             return None
 
         name = params.get("symbol")
+        runtime_name: Optional[str] = name if isinstance(name, str) else None
         if not isinstance(name, str):
             position = params.get("position")
             if not isinstance(position, dict):
@@ -250,12 +262,12 @@ def create_server() -> SageLanguageServer:
             character = position.get("character")
             if not isinstance(line, int) or not isinstance(character, int):
                 return None
-            _, runtime_name, _ = symbol_at_position(text or record.source, line, character)
-            name = runtime_name
+            _, static_name, runtime_name, _ = symbol_at_position(text or record.source, line, character)
+            name = static_name or runtime_name
             if name is None:
                 return None
 
-        documentation = _documentation_for_request(server, record, name, name)
+        documentation = _documentation_for_request(server, record, name, runtime_name or name)
         return documentation.to_payload() if documentation is not None else None
 
     return server
@@ -405,7 +417,7 @@ def _resolve_request_symbol(
     if record is None:
         return None
 
-    name, runtime_name, source_range = symbol_at_position(
+    name, static_name, runtime_name, source_range = symbol_at_position(
         text or record.source,
         position.line,
         position.character,
@@ -416,6 +428,7 @@ def _resolve_request_symbol(
     return {
         "record": record,
         "name": name,
+        "static_name": static_name,
         "runtime_name": runtime_name,
         "range": source_range,
     }
@@ -425,13 +438,47 @@ def symbol_at_position(
     text: str,
     line: int,
     character: int,
-) -> Tuple[Optional[str], Optional[str], Optional[Range]]:
+) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[Range]]:
     dotted_name, dotted_range = dotted_word_at_position(text, line, character)
     if dotted_name is not None and dotted_range is not None:
-        return dotted_name.split(".")[-1], dotted_name, dotted_range
+        return dotted_name.split(".")[-1], dotted_name, dotted_name, dotted_range
 
     name, source_range = word_at_position(text, line, character)
-    return name, name, source_range
+    return name, name, name, source_range
+
+
+def completion_target_at_position(
+    text: str,
+    line: int,
+    character: int,
+) -> Tuple[Optional[str], str]:
+    lines = text.splitlines()
+    if line < 0 or line >= len(lines):
+        return None, ""
+
+    prefix = lines[line][: max(character, 0)]
+    if not prefix:
+        return None, ""
+
+    start = len(prefix)
+    while start > 0 and _is_dotted_word_char(prefix[start - 1]):
+        start -= 1
+
+    candidate = prefix[start:]
+    if "." not in candidate:
+        return None, current_prefix(text, line, character)
+
+    base, member_prefix = candidate.rsplit(".", maxsplit=1)
+    if not base:
+        return None, ""
+
+    parts = base.split(".")
+    if not all(part and _is_word_char(part[0]) and all(_is_word_char(char) for char in part) for part in parts):
+        return None, ""
+    if member_prefix and not all(_is_word_char(char) for char in member_prefix):
+        return None, ""
+
+    return base, member_prefix
 
 
 def call_expression_at_position(

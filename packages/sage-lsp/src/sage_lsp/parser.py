@@ -64,6 +64,7 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                 detail=f"class {node.name}",
                 docstring=ast.get_docstring(node),
             )
+            _collect_class_members(record, module_name, file_path, node)
             continue
 
         if isinstance(node, ast.Assign):
@@ -77,6 +78,9 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                         source_range=node_range(target),
                         detail=f"variable {target.id}",
                     )
+                    instance_type = class_instance_target(record, node.value)
+                    if instance_type is not None:
+                        record.instance_types[target.id] = instance_type
             continue
 
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
@@ -89,6 +93,9 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                 source_range=node_range(target),
                 detail=f"variable {target.id}",
             )
+            instance_type = class_instance_target(record, node.value)
+            if instance_type is not None:
+                record.instance_types[target.id] = instance_type
             continue
 
         if isinstance(node, ast.ImportFrom):
@@ -125,6 +132,178 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
                 record.bindings[item.alias] = item
 
     return record
+
+
+def _collect_class_members(
+    record: ModuleRecord,
+    module_name: str,
+    file_path: Path,
+    node: ast.ClassDef,
+) -> None:
+    owner_name = node.name
+    member_symbols = record.member_symbols.setdefault(owner_name, {})
+    member_bindings = record.member_bindings.setdefault(owner_name, {})
+    class_bindings: dict[str, ImportBinding] = {}
+
+    for item in node.body:
+        if isinstance(item, ast.ImportFrom):
+            imported_module = resolve_imported_module(module_name, item.module, item.level)
+            if imported_module is None:
+                continue
+            for alias in item.names:
+                if alias.name == "*":
+                    continue
+                imported_name = alias.asname or alias.name
+                class_bindings[imported_name] = ImportBinding(
+                    alias=imported_name,
+                    module_name=imported_module,
+                    target_name=alias.name,
+                    source_range=node_range(item),
+                )
+            continue
+
+        if isinstance(item, ast.Import):
+            for alias in item.names:
+                imported_name = alias.asname or alias.name.split(".")[-1]
+                class_bindings[imported_name] = ImportBinding(
+                    alias=imported_name,
+                    module_name=alias.name,
+                    target_name=None,
+                    source_range=node_range(item),
+                )
+            continue
+
+        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            member_symbols[item.name] = SymbolRecord(
+                name=item.name,
+                kind="function",
+                module_name=module_name,
+                file_path=file_path,
+                source_range=node_range(item),
+                detail=f"function {owner_name}.{item.name}",
+                docstring=ast.get_docstring(item),
+            )
+            continue
+
+        if isinstance(item, ast.Assign):
+            for target in item.targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                binding = member_binding_from_expression(
+                    record,
+                    module_name,
+                    target.id,
+                    item.value,
+                    node_range(target),
+                    class_bindings,
+                )
+                if binding is not None:
+                    member_bindings[target.id] = binding
+                    continue
+                member_symbols.setdefault(
+                    target.id,
+                    SymbolRecord(
+                        name=target.id,
+                        kind="constant" if target.id.isupper() else "variable",
+                        module_name=module_name,
+                        file_path=file_path,
+                        source_range=node_range(target),
+                        detail=f"attribute {owner_name}.{target.id}",
+                    ),
+                )
+            continue
+
+        if isinstance(item, ast.AnnAssign) and isinstance(item.target, ast.Name):
+            target = item.target
+            binding = member_binding_from_expression(
+                record,
+                module_name,
+                target.id,
+                item.value,
+                node_range(target),
+                class_bindings,
+            )
+            if binding is not None:
+                member_bindings[target.id] = binding
+                continue
+            member_symbols.setdefault(
+                target.id,
+                SymbolRecord(
+                    name=target.id,
+                    kind="constant" if target.id.isupper() else "variable",
+                    module_name=module_name,
+                    file_path=file_path,
+                    source_range=node_range(target),
+                    detail=f"attribute {owner_name}.{target.id}",
+                ),
+            )
+
+
+def member_binding_from_expression(
+    record: ModuleRecord,
+    module_name: str,
+    alias: str,
+    value: Optional[ast.AST],
+    source_range: SourceRange,
+    scope_bindings: Optional[dict[str, ImportBinding]] = None,
+) -> Optional[ImportBinding]:
+    dotted_reference = dotted_reference_from_expression(value)
+    if dotted_reference is None:
+        return None
+
+    parts = dotted_reference.split(".")
+    head = parts[0]
+    binding = (scope_bindings or {}).get(head) or record.bindings.get(head)
+    if binding is None:
+        return None
+
+    target_module_name = binding.module_name
+    if binding.target_name is None:
+        target_name = ".".join(parts[1:]) or None
+    elif parts[1:] and binding.target_name[:1].islower():
+        target_module_name = f"{binding.module_name}.{binding.target_name}"
+        target_name = ".".join(parts[1:]) or None
+    else:
+        target_name = ".".join([binding.target_name, *parts[1:]]) if parts[1:] else binding.target_name
+
+    return ImportBinding(
+        alias=alias,
+        module_name=target_module_name,
+        target_name=target_name,
+        source_range=source_range,
+        is_lazy=binding.is_lazy,
+    )
+
+
+def class_instance_target(record: ModuleRecord, value: Optional[ast.AST]) -> Optional[str]:
+    if not isinstance(value, ast.Call):
+        return None
+
+    target = dotted_reference_from_expression(value.func)
+    if target is None:
+        return None
+
+    if target in record.symbols and record.symbols[target].kind == "class":
+        return target
+    return None
+
+
+def dotted_reference_from_expression(value: Optional[ast.AST]) -> Optional[str]:
+    if isinstance(value, ast.Call):
+        if isinstance(value.func, ast.Name) and value.func.id in {"staticmethod", "classmethod"} and len(value.args) == 1:
+            return dotted_reference_from_expression(value.args[0])
+        return dotted_reference_from_expression(value.func)
+
+    if isinstance(value, ast.Name):
+        return value.id
+
+    if isinstance(value, ast.Attribute):
+        parent = dotted_reference_from_expression(value.value)
+        if parent is None:
+            return None
+        return f"{parent}.{value.attr}"
+
+    return None
 
 
 def parse_loose_module(module_name: str, file_path: Path, source: str) -> ModuleRecord:

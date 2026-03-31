@@ -248,6 +248,63 @@ def test_server_resolves_native_cython_definitions(tmp_path: Path) -> None:
     assert definition.uri.endswith("native_support.pxd")
 
 
+def test_server_resolves_static_dotted_members_and_member_completion(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    _write_module(source_root, "pkg/__init__.py", "")
+    _write_module(
+        source_root,
+        "pkg/smallgraphs.py",
+        'def PetersenGraph():\n    """Build the Petersen graph."""\n    return 10\n',
+    )
+    _write_module(
+        source_root,
+        "pkg/graph_generators.py",
+        "class GraphGenerators:\n    from pkg import smallgraphs\n\n    PetersenGraph = staticmethod(smallgraphs.PetersenGraph)\n\n    def CycleGraph(self, n):\n        \"\"\"Build a cycle graph.\"\"\"\n        return n\n\ngraphs = GraphGenerators()\n",
+    )
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(source_root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+    uri = Path("/workspace/consumer.sage").as_uri()
+    source = "from pkg.graph_generators import graphs\n\nvalue = graphs.PetersenGraph()\nnext_value = graphs.Cy\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    hover_handler = server.protocol.fm.features["textDocument/hover"]
+    hover = hover_handler(
+        HoverParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=2, character=19),
+        )
+    )
+    assert hover is not None
+    assert "Build the Petersen graph." in hover.contents.value
+
+    definition_handler = server.protocol.fm.features["textDocument/definition"]
+    definition = definition_handler(
+        DefinitionParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=2, character=19),
+        )
+    )
+    assert definition is not None
+    assert definition.uri.endswith("smallgraphs.py")
+
+    completion_handler = server.protocol.fm.features["textDocument/completion"]
+    completion = completion_handler(
+        CompletionParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=3, character=22),
+        )
+    )
+    labels = {item["label"] if isinstance(item, dict) else item.label for item in completion.items}
+    assert "CycleGraph" in labels
+
+
 def test_server_provides_workspace_symbols_references_and_rename(tmp_path: Path) -> None:
     source_root = tmp_path / "src"
     _write_module(source_root, "pkg/__init__.py", "")

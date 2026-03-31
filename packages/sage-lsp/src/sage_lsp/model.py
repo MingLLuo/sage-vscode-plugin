@@ -81,6 +81,9 @@ class ModuleRecord:
     symbols: dict[str, SymbolRecord] = field(default_factory=dict)
     bindings: dict[str, ImportBinding] = field(default_factory=dict)
     star_imports: list[str] = field(default_factory=list)
+    member_symbols: dict[str, dict[str, SymbolRecord]] = field(default_factory=dict)
+    member_bindings: dict[str, dict[str, ImportBinding]] = field(default_factory=dict)
+    instance_types: dict[str, str] = field(default_factory=dict)
 
 
 def completion_kind(kind: str) -> int:
