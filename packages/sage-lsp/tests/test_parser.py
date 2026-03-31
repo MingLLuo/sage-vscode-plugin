@@ -86,7 +86,7 @@ cdef inline int included_native_step(int value):
 def test_parse_loose_sage_module_extracts_preparse_assignments_and_imports() -> None:
     source = """
 from sage.functions.all import factorial
-R.<x> = PolynomialRing(QQ)
+R.<x, y> = PolynomialRing(QQ)
 helper = factorial
 """
     record = parse_module("document::example", Path("example.sage"), source)
@@ -94,6 +94,7 @@ helper = factorial
     assert "factorial" in record.bindings
     assert "R" in record.symbols
     assert "x" in record.symbols
+    assert "y" in record.symbols
     assert "helper" in record.symbols
 
 

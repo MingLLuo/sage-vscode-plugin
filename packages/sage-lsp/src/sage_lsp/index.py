@@ -267,8 +267,15 @@ class WorkspaceIndex:
         return changes
 
     def diagnostics_for_record(self, record: ModuleRecord) -> list[dict[str, object]]:
-        diagnostics: list[dict[str, object]] = []
-        seen: set[tuple[int, int, str]] = set()
+        diagnostics: list[dict[str, object]] = list(record.diagnostics)
+        seen: set[tuple[int, int, str]] = {
+            (
+                int(entry["range"]["start"]["line"]),
+                int(entry["range"]["start"]["character"]),
+                str(entry["message"]),
+            )
+            for entry in diagnostics
+        }
         for binding in record.bindings.values():
             target_record = self._modules.get(binding.module_name)
             message: Optional[str] = None

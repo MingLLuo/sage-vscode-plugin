@@ -149,6 +149,45 @@ def test_workspace_index_diagnostics_report_unresolved_imports() -> None:
     assert any("also_missing" in entry["message"] for entry in diagnostics)
 
 
+def test_workspace_index_diagnostics_report_python_syntax_errors() -> None:
+    index = WorkspaceIndex([], (), True)
+    record = parse_module(
+        "document::broken_python",
+        Path("broken.py"),
+        "def broken(:\n    return 1\n",
+    )
+
+    diagnostics = index.diagnostics_for_record(record)
+
+    assert any(entry["message"].startswith("Syntax error:") for entry in diagnostics)
+
+
+def test_workspace_index_diagnostics_allow_valid_sage_preparser_syntax() -> None:
+    index = WorkspaceIndex([], (), True)
+    record = parse_module(
+        "document::valid_sage",
+        Path("valid.sage"),
+        "R.<x> = PolynomialRing(QQ)\nvalue = x^2 + 1\n",
+    )
+
+    diagnostics = index.diagnostics_for_record(record)
+
+    assert diagnostics == []
+
+
+def test_workspace_index_diagnostics_report_invalid_sage_syntax() -> None:
+    index = WorkspaceIndex([], (), True)
+    record = parse_module(
+        "document::invalid_sage",
+        Path("invalid.sage"),
+        "R.<x> = PolynomialRing(QQ)\nif True print(x)\n",
+    )
+
+    diagnostics = index.diagnostics_for_record(record)
+
+    assert any(entry["message"].startswith("Syntax error:") for entry in diagnostics)
+
+
 def test_iter_identifier_ranges_skips_comments_and_strings() -> None:
     ranges = iter_identifier_ranges(
         'helper = 1\nprint(helper)\n# helper\ntext = "helper"\n',

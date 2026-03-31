@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from .model import ImportBinding, ModuleRecord, SourceRange, SymbolRecord
+from .source_map import preprocess_sage_source
 
 
 LAZY_IMPORT_NAMES = {"lazy_import", "_lazy_import"}
@@ -20,7 +21,10 @@ LOOSE_IMPORT_RE = re.compile(r"^import\s+(?P<module>[A-Za-z0-9_\.]+)(?:\s+as\s+(
 LOOSE_FROM_IMPORT_RE = re.compile(r"^from\s+(?P<module>[A-Za-z0-9_\.]+)\s+import\s+(?P<names>.+)$")
 LOOSE_ASSIGN_RE = re.compile(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=")
 LOOSE_PREPARSE_ASSIGN_RE = re.compile(
-    r"^(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.<(?P<symbol>[A-Za-z_][A-Za-z0-9_]*)>\s*="
+    r"^(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.<(?P<symbols>[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)>\s*="
+)
+LOOSE_PREPARSE_VALIDATE_RE = re.compile(
+    r"^(?P<indent>\s*)(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.<(?P<symbols>[^>]+)>(?P<spacing>\s*=)"
 )
 
 
@@ -28,7 +32,9 @@ def parse_module(module_name: str, file_path: Path, source: str) -> ModuleRecord
     if file_path.suffix in {".pyx", ".pxd", ".pxi"}:
         return parse_pyx_module(module_name, file_path, source)
     if file_path.suffix == ".sage":
-        return parse_loose_module(module_name, file_path, source)
+        record = parse_loose_module(module_name, file_path, source)
+        record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source))
+        return record
     return parse_python_module(module_name, file_path, source)
 
 
@@ -36,8 +42,10 @@ def parse_python_module(module_name: str, file_path: Path, source: str) -> Modul
     record = ModuleRecord(module_name=module_name, file_path=file_path, language="python", source=source)
     try:
         tree = ast.parse(source, filename=str(file_path))
-    except SyntaxError:
-        return parse_loose_module(module_name, file_path, source)
+    except SyntaxError as error:
+        record = parse_loose_module(module_name, file_path, source)
+        record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source, syntax_error=error))
+        return record
 
     record.docstring = ast.get_docstring(tree)
 
@@ -381,8 +389,8 @@ def parse_loose_module(module_name: str, file_path: Path, source: str) -> Module
 
         if match := LOOSE_PREPARSE_ASSIGN_RE.match(line):
             parent = match.group("parent")
-            symbol = match.group("symbol")
-            for name in (parent, symbol):
+            symbols = [symbol.strip() for symbol in match.group("symbols").split(",")]
+            for name in [parent, *symbols]:
                 record.symbols[name] = SymbolRecord(
                     name=name,
                     kind="variable",
@@ -495,6 +503,59 @@ def parse_pyx_module(module_name: str, file_path: Path, source: str) -> ModuleRe
         )
 
     return record
+
+
+def syntax_diagnostics_for_source(
+    file_path: Path,
+    source: str,
+    syntax_error: Optional[SyntaxError] = None,
+) -> list[dict[str, object]]:
+    active_error = syntax_error
+    if active_error is None:
+        try:
+            ast.parse(sanitized_source_for_validation(file_path, source), filename=str(file_path))
+        except SyntaxError as error:
+            active_error = error
+
+    if active_error is None:
+        return []
+
+    line_number = active_error.lineno or 1
+    character = max((active_error.offset or 1) - 1, 0)
+    source_lines = source.splitlines()
+    source_line = source_lines[line_number - 1] if 0 < line_number <= len(source_lines) else ""
+    end_character = min(len(source_line), character + max(1, highlighted_span(active_error)))
+    return [
+        {
+            "range": SourceRange.from_offsets(
+                line_number,
+                character,
+                line_number,
+                end_character,
+            ).to_lsp(),
+            "severity": 1,
+            "source": "sage-lsp",
+            "message": f"Syntax error: {active_error.msg}",
+        }
+    ]
+
+
+def sanitized_source_for_validation(file_path: Path, source: str) -> str:
+    if file_path.suffix != ".sage":
+        return source
+
+    generated_text = preprocess_sage_source(source).generated_text
+    sanitized_lines = [
+        LOOSE_PREPARSE_VALIDATE_RE.sub(r"\g<indent>\g<parent>\g<spacing>", line)
+        for line in generated_text.splitlines()
+    ]
+    return "\n".join(sanitized_lines) + ("\n" if generated_text.endswith("\n") else "")
+
+
+def highlighted_span(error: SyntaxError) -> int:
+    if error.end_offset is not None and error.offset is not None and error.end_offset > error.offset:
+        return error.end_offset - error.offset
+    return 1
 
 
 def parse_cython_symbol_line(line: str) -> tuple[Optional[str], Optional[str]]:
