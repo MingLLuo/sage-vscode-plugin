@@ -3,18 +3,18 @@
 ## Status Snapshot
 
 - Date: 2026-03-31
-- Repository: bootstrap complete and locally validated
+- Repository: upgraded to a usable static-analysis baseline
 - Process tracking: baseline in place
-- Extension package: baseline scaffold added
-- Language server package: baseline scaffold added
+- Extension package: richer workflow and docs UX added
+- Language server package: static indexing and symbol resolution added
 - Syntax package: baseline scaffold added and synced into extension resources
 
 ## Current Focus
 
 1. Extend source mapping beyond caret rewrite into more `.sage` constructs.
-2. Add the first real extension-host test path beyond the placeholder test.
-3. Convert preprocessing output into future diagnostics and navigation plumbing.
-4. Begin real Sage-aware feature work on top of the validated scaffold.
+2. Feed source mapping into diagnostics, references, and rename paths.
+3. Add extension-host integration tests beyond the current unit suite.
+4. Layer runtime-aware Sage introspection on top of the static index where useful.
 
 ## Milestone Tracker
 
@@ -27,6 +27,8 @@
 | LSP scaffold | Done | Minimal `pygls` package, entrypoint, and server settings model are committed. |
 | Syntax scaffold | Done | Syntax package, sync script, and generated extension assets are committed. |
 | Source mapping v1 | Done | `.sage` caret rewrite, string/comment skipping, bidirectional column maps, and hover preview wiring are committed. |
+| Static source intelligence baseline | Done | Parser, workspace index, lazy import resolution, docs extraction, and LSP-backed symbol features are committed. |
+| Extension workflow baseline | Done | Status bar, environment presentation, run commands, docs panel, and richer settings model are committed. |
 
 ## Change Log Notes
 
@@ -42,3 +44,5 @@
 - Installed Node and Python dependencies locally, corrected bootstrap lifecycle typing, and verified `npm run build`, `npm run lint`, and `npm run test`.
 - Accepted the first concrete `.sage` mapping slice around caret-to-power rewrite with bidirectional line-local column maps.
 - Implemented the first real `.sage` preprocessing module, covered it with Python tests, and surfaced mapping information in the server hover path.
+- Ported a reduced Sage fixture corpus plus parser/index stack into the `pygls` server and verified static hover, completion, definition, symbol, and documentation paths through tests.
+- Upgraded the VS Code client with richer configuration, source-root discovery, run commands, status presentation, documentation rendering, and unit-test coverage.

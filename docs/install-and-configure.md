@@ -12,12 +12,12 @@
 
 1. Open the repository in VS Code.
 2. Launch the extension development configuration.
-3. Use `Sage: Select Interpreter` to point the extension at the Python executable that can import `sage_lsp`.
-4. Open or create a `.sage` file to exercise the bootstrap language registration.
+3. Use `Sage: Select Interpreter` to point the extension at the Sage executable used by run and REPL commands.
+4. Open or create a `.sage` file to exercise hover, completion, definition, document symbols, and docs requests.
 
 ## Current Limits
 
-- The repository currently provides only a scaffolded language server, not full Sage semantics.
+- Static analysis is intentionally reduced and fixture-backed; it is not yet a full Sage runtime model.
+- Source mapping only handles the first `.sage` transform slice.
 - Runtime Sage interpreter discovery is still manual.
 - Notebook and kernel integration are not wired yet.
-

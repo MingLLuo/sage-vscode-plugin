@@ -1,8 +1,8 @@
 # Sage VS Code Plugin
 
 `Sage VS Code Plugin` is an independent monorepo for a SageMath-focused development experience in Visual Studio Code.
-The repository starts from a minimal VS Code LSP client scaffold plus a `pygls` server scaffold so architecture and
-process can evolve incrementally with full Git traceability.
+It now includes a usable static-analysis baseline: a richer VS Code client, a `pygls` language server with workspace
+indexing, and Sage-aware `.sage` preprocessing primitives.
 
 ## Goals
 
@@ -19,9 +19,11 @@ process can evolve incrementally with full Git traceability.
 
 ## Current Status
 
-- Repository bootstrap is in progress.
-- Process tracking and design templates are being established before feature work expands.
-- Package scaffolds are intentionally minimal until the first implementation milestones are committed.
+- Repository bootstrap is complete and locally validated.
+- The extension provides interpreter selection, status presentation, run commands, and a documentation panel.
+- The language server provides static hover, completion, definition, document symbols, documentation requests, and
+  reduced Sage fixture-backed source indexing.
+- `.sage` source mapping v1 currently rewrites standalone exponent carets while preserving bidirectional column maps.
 
 ## Reference Inputs
 
@@ -45,6 +47,6 @@ process can evolve incrementally with full Git traceability.
 
 ## Next Steps
 
-1. Finalize process and progress templates.
-2. Land the minimal extension, server, and syntax package scaffolds.
-3. Start milestone-driven implementation from the documented package boundaries.
+1. Extend `.sage` preprocessing beyond the initial caret rewrite.
+2. Feed source mapping into diagnostics and navigation paths.
+3. Add deeper integration tests and runtime-aware fallbacks.

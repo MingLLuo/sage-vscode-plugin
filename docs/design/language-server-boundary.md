@@ -4,8 +4,10 @@
 
 - Accept LSP requests over stdio through `pygls`.
 - Own analysis-side configuration and environment normalization.
-- Provide minimal health, hover, and future source-intelligence entrypoints.
-- Remain the place where `.sage` preprocessing and source mapping logic will eventually live.
+- Parse Python, loose `.sage`, and lightweight `.pyx` source into a shared symbol model.
+- Build a static workspace index and resolve symbols through imports, star imports, and lazy imports.
+- Provide hover, completion, definition, document symbols, and custom documentation lookup.
+- Remain the place where `.sage` preprocessing and source mapping logic continue to evolve.
 
 ## Explicit Non-Responsibilities
 
@@ -13,8 +15,11 @@
 - Owning syntax grammar assets
 - Hardcoding local Sage source checkout paths
 
-## Bootstrap Capability
+## Current Capability
 
-The first server revision only needs to prove that the repository can host a valid Python package, start a `pygls`
-server process, and expose typed extension points for later Sage-specific analysis.
+The current server revision already hosts:
 
+- a `pygls` transport and request surface
+- a reduced Sage fixture-backed static index
+- `.sage` loose parsing and first-pass source mapping
+- documentation extraction and custom docs payloads

@@ -308,3 +308,69 @@ Land the first real `.sage` preprocessing feature by rewriting caret exponent sy
 
 - Next task: LSP-003
 - Risks or blockers: only caret rewrite is supported, and hover currently uses preprocessing only for preview rather than full diagnostics/navigation
+
+## Entry 12
+
+- Date: 2026-03-31
+- Task ID: LSP-004
+- Scope: lsp
+- Related milestone: Static source intelligence baseline
+- Commit: `7ec87db`
+
+### Goal
+
+Move the language server from a narrow scaffold to a usable static-analysis baseline by porting parser, workspace index,
+fixture corpus, and richer symbol-resolution request handling into the `pygls` server.
+
+### Decisions
+
+- Decision: reuse the proven local static-index architecture instead of rebuilding parser and import-resolution logic from scratch.
+- Reason: the nearby repository already validated this shape against reduced Sage source fixtures.
+- Decision: keep `pygls` as the transport layer while replacing the analysis core underneath it.
+- Reason: transport and analysis are separate concerns, and `pygls` remains a good fit for the editor-facing protocol layer.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests`
+  - `npm run build`
+  - `npm run test`
+- Result: Python parser/index/source-map suite passed with 11 tests; repository build and full test path remained green
+
+### Follow-ups
+
+- Next task: EXT-002
+- Risks or blockers: diagnostics, references, and rename are still pending
+
+## Entry 13
+
+- Date: 2026-03-31
+- Task ID: EXT-002
+- Scope: extension
+- Related milestone: Extension workflow baseline
+- Commit: `2b5c899`
+
+### Goal
+
+Upgrade the VS Code client from a thin bootstrap shell into a richer editor workflow with environment presentation,
+documentation rendering, run commands, and a stronger settings model.
+
+### Decisions
+
+- Decision: port the stronger local extension-side configuration and documentation modules into this repository.
+- Reason: these modules already fit the current monorepo structure and materially improve usability.
+- Decision: keep syntax asset generation rooted in this repository's existing `resources/generated` layout.
+- Reason: the current syntax package and root sync workflow were already stable and tested.
+
+### Verification
+
+- Checks run:
+  - `npm run build`
+  - `npm run lint`
+  - `npm run test`
+- Result: extension unit tests passed with 11 tests and the repository-wide build/lint/test path stayed green
+
+### Follow-ups
+
+- Next task: EXT-003
+- Risks or blockers: extension coverage is still unit-heavy rather than extension-host-heavy
