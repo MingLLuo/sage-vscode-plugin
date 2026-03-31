@@ -25,6 +25,7 @@ The current baseline now includes:
 - member completion for statically understood singleton APIs
 - completion responses serialized as concrete LSP `CompletionItem` objects under real clients
 - Python-like `.sage` parsing through the AST path when no preparser assignment is present
+- hybrid `.sage` parsing that merges preparser-aware top-level extraction with AST-driven class/method/import analysis
 - saved `.sage` modules participating in workspace indexing instead of only live open-document parsing
 - cached symbol and member resolution for indexed modules to reduce repeated definition and documentation lookup cost
 
@@ -35,6 +36,8 @@ The current baseline now includes:
 - Python-heavy `.sage` files now stay on the richer Python AST path unless they use Sage preparser assignment syntax
   such as `R.<x, y> = ...`; that keeps class, method, import, and assignment tracking closer to ordinary Python-editor
   behavior for mixed Sage/Python projects.
+- Preparser-heavy `.sage` files now keep their generator declarations from the loose parser while still regaining AST
+  structure for the rest of the file through a sanitized hybrid parse.
 - Static resolution now includes class-body imports, singleton instance aliases, and dotted member traversal so common
   Sage generator objects remain navigable even when the selected Sage runtime cannot answer introspection requests.
 - Indexed-module resolution caches currently target repeated symbol and member lookups; this is a first step toward a

@@ -301,3 +301,42 @@ TextMate grammar.
 - Next task: persist the Sage library/workspace index so restart cost drops on large trees
 - Risks or blockers: preparser-heavy `.sage` files still fall back to the loose parser until source mapping grows past
   caret rewrite and can safely support more transformed constructs
+
+## Entry 9
+
+- Date: 2026-04-01
+- Task ID: LSP-022
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `pending`
+
+### Goal
+
+Recover AST-level structure for `.sage` files that mix Sage preparser assignment syntax with otherwise ordinary Python
+class, method, and import code.
+
+### Decisions
+
+- Decision: keep preparser declarations from the loose parser, but parse a sanitized version of the same file through
+  the Python AST path and merge the two records.
+- Reason: preparser lines such as `pring.<x> = QQ[]` are still not safe to map fully through the AST path, but they
+  should not force the rest of the file to lose methods, instance tracking, and member completion.
+- Decision: sanitize preparser assignment lines down to a valid placeholder assignment during AST parsing.
+- Reason: this makes heavily Sage-flavored top-level declarations legal Python for structural parsing without needing a
+  full preparser implementation first.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_parser.py packages/sage-lsp/tests/test_index.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+- Result: targeted parser/index tests, repository tests, native Sage smoke, and real VS Code extension-host smoke all
+  passed after the hybrid `.sage` parse path was introduced
+
+### Follow-ups
+
+- Next task: broaden sanitized/preprocessed parsing to more Sage preparser forms without sacrificing range accuracy
+- Risks or blockers: preparser lines themselves still rely on the loose parser for symbol ranges and do not yet expose
+  a full transformed-AST mapping model
