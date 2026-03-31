@@ -5,15 +5,24 @@ import { readSettings } from "./configuration";
 import { DocumentationPanel } from "./docsPanel";
 import { renderDocumentationMarkdown } from "./documentationRequest";
 import {
+  buildInterpreterCommand,
+  buildReplLoadCommand,
+  buildRunFileCommand,
+  shouldRunInRepl,
+} from "./executionPlan";
+import {
   formatEnvironmentDetails,
   formatStatusBarText,
   formatStatusBarTooltip,
 } from "./environmentPresentation";
 import { createLanguageClient, requestDocumentation } from "./languageClient";
-import { buildShellCommand } from "./runtimeCommand";
+import { shouldRestartLanguageServer } from "./serverRestart";
 import { buildWorkspaceInitializationData } from "./workspaceDiscovery";
 
 let client: LanguageClient | undefined;
+let replTerminal: vscode.Terminal | undefined;
+let runTerminal: vscode.Terminal | undefined;
+let replBootstrapped = false;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const outputChannel = vscode.window.createOutputChannel("Sage");
@@ -58,6 +67,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   context.subscriptions.push(
+    vscode.window.onDidCloseTerminal((terminal) => {
+      if (replTerminal === terminal) {
+        replTerminal = undefined;
+        replBootstrapped = false;
+      }
+      if (runTerminal === terminal) {
+        runTerminal = undefined;
+      }
+    }),
     vscode.commands.registerCommand("sage.selectInterpreter", async () => {
       const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
       const selection = await vscode.window.showInputBox({
@@ -73,6 +91,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await vscode.workspace
         .getConfiguration("sage")
         .update("interpreter.path", selection, vscode.ConfigurationTarget.Workspace);
+      resetReplTerminal();
       outputChannel.appendLine(`Updated Sage interpreter path to: ${selection}`);
       updateStatusBar();
       await startLanguageClient();
@@ -88,14 +107,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
-      const terminal = getOrCreateTerminal();
-      terminal.sendText(
-        buildShellCommand([
-          settings.interpreterPath,
-          ...settings.interpreterArgs,
-          editor.document.uri.fsPath,
-        ]),
-      );
+      const terminal = shouldRunInRepl(settings.runTarget)
+        ? ensureReplTerminal(settings)
+        : getOrCreateRunTerminal();
+      const command = shouldRunInRepl(settings.runTarget)
+        ? buildReplLoadCommand(editor.document.uri.fsPath)
+        : buildRunFileCommand(settings, editor.document.uri.fsPath);
+      terminal.sendText(command, true);
       terminal.show(true);
     }),
     vscode.commands.registerCommand("sage.runSelection", async () => {
@@ -105,14 +123,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       const selection = editor.document.getText(editor.selection) || editor.document.lineAt(editor.selection.active.line).text;
-      const terminal = getOrCreateTerminal();
+      const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
+      const terminal = ensureReplTerminal(settings);
       terminal.sendText(selection, true);
       terminal.show(true);
     }),
     vscode.commands.registerCommand("sage.startRepl", async () => {
       const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
-      const terminal = getOrCreateTerminal();
-      terminal.sendText(buildShellCommand([settings.interpreterPath, ...settings.interpreterArgs]), true);
+      const terminal = ensureReplTerminal(settings);
       terminal.show(true);
     }),
     vscode.commands.registerCommand("sage.showDocumentation", async () => {
@@ -163,6 +181,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!event.affectsConfiguration("sage")) {
         return;
       }
+      if (event.affectsConfiguration("sage.interpreter.path") || event.affectsConfiguration("sage.interpreter.args")) {
+        resetReplTerminal();
+      }
+      updateStatusBar();
+      if (shouldRestartLanguageServer((section) => event.affectsConfiguration(section))) {
+        await startLanguageClient();
+      }
+    }),
+    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
       updateStatusBar();
       await startLanguageClient();
     }),
@@ -179,7 +206,34 @@ export async function deactivate(): Promise<void> {
   }
 }
 
-function getOrCreateTerminal(): vscode.Terminal {
-  return vscode.window.terminals.find((terminal) => terminal.name === "Sage REPL")
-    ?? vscode.window.createTerminal("Sage REPL");
+function ensureReplTerminal(settings: {
+  interpreterPath: string;
+  interpreterArgs: readonly string[];
+}): vscode.Terminal {
+  if (!replTerminal) {
+    replTerminal = vscode.window.createTerminal("Sage REPL");
+    replBootstrapped = false;
+  }
+
+  if (!replBootstrapped) {
+    replTerminal.sendText(buildInterpreterCommand(settings), true);
+    replBootstrapped = true;
+  }
+
+  return replTerminal;
+}
+
+function getOrCreateRunTerminal(): vscode.Terminal {
+  if (!runTerminal) {
+    runTerminal = vscode.window.createTerminal("Sage Run");
+  }
+  return runTerminal;
+}
+
+function resetReplTerminal(): void {
+  if (replTerminal) {
+    replTerminal.dispose();
+    replTerminal = undefined;
+  }
+  replBootstrapped = false;
 }
