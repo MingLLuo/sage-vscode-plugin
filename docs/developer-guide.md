@@ -23,6 +23,9 @@ tracked, and how the current static-analysis baseline should be extended safely.
   Milestone status and task-level tracking.
 - `.vscode`
   Repository-local launch and task definitions for starting the extension development host with `F5`.
+- `examples/manual-smoke-workspace`
+  Self-contained manual smoke-test workspace used to exercise hover, definition, completion, docs, `.pyx`, and
+  `.sage` cases.
 
 ## Working Rules
 
@@ -77,6 +80,7 @@ npm run test
 - Press `F5` in this repository and choose `Sage Plugin: Extension Host`.
 - The repository-level `build` task runs first, then VS Code launches the extension from `packages/extension-core`.
 - The launch configuration opens the current repository as the first workspace in the extension host.
+- Use `Sage Plugin: Smoke Workspace` when you want the extension host to open the curated sample files directly.
 
 ## Verification Strategy
 

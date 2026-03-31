@@ -561,3 +561,35 @@ Make extension debugging first-class in the repository by providing a local `F5`
 
 - Next task: add extension-host smoke coverage
 - Risks or blockers: launch configuration still opens the current repository as the default workspace in the extension host
+
+## Entry 20
+
+- Date: 2026-03-31
+- Task ID: QA-001
+- Scope: examples
+- Related milestone: Manual smoke workspace
+- Commit: `517ef2b`
+
+### Goal
+
+Ship a ready-made workspace full of `.sage`-oriented examples so manual testing does not depend on inventing ad hoc files every
+time the extension changes.
+
+### Decisions
+
+- Decision: make the smoke workspace self-contained with local Python and `.pyx` modules plus an extra-path `vendor` directory.
+- Reason: manual testing should stay reproducible even when a full Sage source checkout is unavailable.
+- Decision: add a dedicated `Sage Plugin: Smoke Workspace` launch configuration.
+- Reason: the fastest way to use manual examples is to open them directly in the extension host, not by navigating there later.
+
+### Verification
+
+- Checks run:
+  - `python -m py_compile examples/manual-smoke-workspace/src/local_docs.py examples/manual-smoke-workspace/src/package_demo/__init__.py examples/manual-smoke-workspace/src/package_demo/polynomials.py examples/manual-smoke-workspace/vendor/external_series.py`
+  - `PYTHONPATH=packages/sage-lsp/src python - <<'PY' ... WorkspaceIndex([root / 'src', root / 'vendor'], (), True) ... PY`
+- Result: sample Python modules compile and the language-server index discovers the source-root, package, extra-path, and `.pyx` modules
+
+### Follow-ups
+
+- Next task: add extension-host smoke coverage
+- Risks or blockers: the source-mapping sample includes future-facing cases that exceed the current editor-side mapping integration

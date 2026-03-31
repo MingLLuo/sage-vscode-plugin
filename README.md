@@ -44,6 +44,7 @@ indexing, and Sage-aware `.sage` preprocessing primitives.
 - [Install and Configure](./docs/install-and-configure.md)
 - [Design Overview](./docs/design/overview.md)
 - [Development Progress](./docs/progress/development-progress.md)
+- [Manual Smoke Workspace](./examples/manual-smoke-workspace/README.md)
 
 ## Next Steps
 

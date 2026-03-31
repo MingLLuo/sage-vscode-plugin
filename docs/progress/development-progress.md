@@ -10,6 +10,7 @@
 - Syntax package: baseline scaffold added and synced into extension resources
 - Runtime hardening: interpreter launch, path resolution, execution targets, and URI handling aligned
 - Local debugging: repository-level VS Code launch and task scaffolding added
+- Manual testing assets: curated smoke workspace added
 
 ## Current Focus
 
@@ -32,6 +33,7 @@
 | Static source intelligence baseline | Done | Parser, workspace index, lazy import resolution, docs extraction, and LSP-backed symbol features are committed. |
 | Extension workflow baseline | Done | Status bar, environment presentation, run commands, docs panel, and richer settings model are committed. |
 | Local debugging baseline | Done | Repository-local `F5` launch, prelaunch build task, and source-map-enabled extension builds are committed. |
+| Manual smoke workspace | Done | Curated `.sage`, `.py`, and `.pyx` examples plus a dedicated extension-host launch target are committed. |
 | Runtime hardening | Done | Interpreter-driven LSP launch, workspace-relative path handling, request-level LSP tests, run-target-aware terminals, and hover-doc preference handling are now committed. |
 
 ## Change Log Notes
@@ -56,3 +58,4 @@
 - Extended server-side environment parsing to cover documentation, logging, and experimental settings, then made hover output respect the client's documentation-preview preference.
 - Wired resolved `analysis.extraPaths` into both language-server initialization payloads and server-side indexing so external source roots affect analysis instead of only process import state.
 - Added repository-local `.vscode` launch and task definitions so `F5` starts the extension development host after a root build, and enabled source maps for direct extension-side TypeScript debugging.
+- Added a curated manual smoke-test workspace with source-root modules, extra-path modules, `.pyx` coverage, lazy-import cases, source-mapping examples, and a dedicated extension-host launch target.
