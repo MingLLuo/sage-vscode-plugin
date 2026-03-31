@@ -26,6 +26,7 @@
 | Extension scaffold | Done | Minimal VS Code client package, commands, configuration model, and language client wiring are committed. |
 | LSP scaffold | Done | Minimal `pygls` package, entrypoint, and server settings model are committed. |
 | Syntax scaffold | Done | Syntax package, sync script, and generated extension assets are committed. |
+| Source mapping v1 | In progress | First `.sage` preprocessing slice is being defined around caret rewrite and bidirectional column maps. |
 
 ## Change Log Notes
 
@@ -39,3 +40,4 @@
 - Added developer onboarding docs and a bootstrap GitHub Actions workflow aligned with root scripts.
 - First dependency-install pass exposed and isolated a Node workspace wiring issue in the extension package manifest.
 - Installed Node and Python dependencies locally, corrected bootstrap lifecycle typing, and verified `npm run build`, `npm run lint`, and `npm run test`.
+- Accepted the first concrete `.sage` mapping slice around caret-to-power rewrite with bidirectional line-local column maps.
