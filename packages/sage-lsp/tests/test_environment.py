@@ -1,27 +1,35 @@
-from sage_lsp.environment import ServerSettings
+from sage_lsp.environment import SageEnvironment
 
 
-def test_server_settings_defaults() -> None:
-    settings = ServerSettings.from_initialization_options({})
-
-    assert settings.interpreter_path == "python"
-    assert settings.analysis_source_roots == []
-    assert settings.log_level == "info"
-    assert settings.workspace_trust_mode == "restricted"
-
-
-def test_server_settings_normalizes_values() -> None:
-    settings = ServerSettings.from_initialization_options(
+def test_environment_from_initialize_options() -> None:
+    environment = SageEnvironment.from_initialize_options(
         {
-            "interpreterPath": "sage -python",
-            "analysisSourceRoots": ["src", 3],
-            "logLevel": "debug",
-            "workspaceTrustMode": "trusted",
+            "interpreter": {
+                "path": "/opt/sage/sage",
+                "pythonPath": "/opt/sage/python",
+                "args": ["-python"],
+            },
+            "analysis": {
+                "mode": "full",
+                "enableDiagnostics": False,
+                "enableRuntimeIntrospection": True,
+                "enablePyxParsing": False,
+                "extraPaths": ["/workspace/src"],
+                "stubPaths": ["/workspace/stubs"],
+            },
+            "workspace": {
+                "rootUri": "file:///workspace",
+                "folders": ["file:///workspace"],
+                "sourceRoots": ["/workspace/src"],
+                "exclude": ["**/.venv"],
+            },
         }
     )
 
-    assert settings.interpreter_path == "sage -python"
-    assert settings.analysis_source_roots == ["src", "3"]
-    assert settings.log_level == "debug"
-    assert settings.workspace_trust_mode == "trusted"
-
+    assert str(environment.interpreter.sage_path) == "/opt/sage/sage"
+    assert str(environment.interpreter.python_path) == "/opt/sage/python"
+    assert environment.analysis.mode == "full"
+    assert environment.analysis.enable_diagnostics is False
+    assert environment.analysis.enable_pyx_parsing is False
+    assert environment.workspace.root_uri == "file:///workspace"
+    assert environment.workspace.source_roots == ("/workspace/src",)
