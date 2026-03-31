@@ -2,7 +2,7 @@
 
 ## Status Snapshot
 
-- Date: 2026-03-31
+- Date: 2026-04-01
 - Repository: upgraded to a usable static-analysis baseline
 - Process tracking: baseline in place
 - Extension package: richer workflow and docs UX added
@@ -28,6 +28,8 @@
 - Editor assets: Sage-specific highlighting, snippets, triple-quoted editing, and operator coverage now target broader SageMath workflows
 - Conservative syntax diagnostics: Python and `.sage` files now surface syntax errors without flagging valid preparser constructs such as `^` or `R.<x, y>`
 - Terminal cleanup: run commands can optionally remove generated `.sage.py` files after standalone terminal execution
+- Native library docs generalization: static indexing now inherits factory docstrings, `.pyx` functions contribute hover docs, and runtime metadata enriches static documentation without discarding local source paths
+- Native local smoke automation: a non-GUI repository script now validates documentation and source navigation for common Sage library symbols against a real local checkout
 
 ## Current Focus
 
@@ -35,7 +37,7 @@
 2. Feed source mapping into diagnostics, references, and rename paths.
 3. Deepen runtime-aware Sage introspection beyond docs/definitions/signatures where useful.
 4. Add semantic tokens and richer diagnostics on top of the current LSP baseline.
-5. Decide whether runtime signature help should become a required smoke-test guarantee or remain best-effort.
+5. Re-enable extension-host native-library smoke under an approval path that permits local VS Code launches, then keep the non-GUI native smoke as the fast default.
 
 ## Milestone Tracker
 
@@ -58,6 +60,7 @@
 | Developer workflow | Done | A helper script now prepares the repository and opens VS Code with the local launch configs ready to use. |
 | LSP baseline | Done | Workspace symbols, references, rename, and conservative diagnostics now sit alongside hover, completion, definition, and document symbols. |
 | Editor authoring baseline | Done | Syntax assets, snippets, triple-quoted editing, terminal cleanup, and background extension-host smoke automation now support richer Sage authoring workflows. |
+| Native library documentation baseline | Done | Common Sage library constructors and `.pyx` functions now expose documentation and source paths through merged static/runtime analysis plus local smoke coverage. |
 
 ## Change Log Notes
 
@@ -105,3 +108,8 @@
 - Expanded Sage grammar, snippets, and language configuration so common rings, fields, graphs, plots, symbolic functions, operators, and triple-quoted authoring flows are covered by automated syntax-asset tests.
 - Added conservative syntax diagnostics for Python and `.sage` documents, including valid-preparser exceptions for caret exponentiation and multi-generator `R.<x, y>` declarations.
 - Added an optional run-command cleanup toggle for generated `.sage.py` files and deepened the extension-host smoke harness to cover references, rename, symbols, native Cython navigation, and optional native Sage source-tree lookups.
+- Hardened runtime introspection with an isolated writable Sage home plus a longer timeout so common library lookups stop failing during cache initialization or slower import paths.
+- Merged runtime documentation back into static documentation when runtime signatures are richer, keeping local source paths while improving hover details for constructors such as `PolynomialRing`.
+- Extended static documentation extraction so factory-style assignments such as `EllipticCurve = EllipticCurveFactory(...)` inherit class docstrings even when runtime introspection is unavailable.
+- Taught `.pyx` parsing to extract function docstrings, allowing common native APIs such as `matrix` to surface hover documentation directly from source.
+- Added a non-GUI `test:native-smoke` repository script that validates summaries and definition paths for `graphs.PetersenGraph`, `PolynomialRing`, `EllipticCurve`, `matrix`, `NumberField`, and `Partitions` against the local Sage checkout.

@@ -102,9 +102,14 @@ Automated verification:
 
 ```bash
 npm run test
+npm run test:native-smoke
 npm run test:extension-host
 npm run test:full
 ```
+
+`npm run test:native-smoke` validates common library symbols such as `PolynomialRing`, `EllipticCurve`, `matrix`,
+`NumberField`, `Partitions`, and `graphs.PetersenGraph` against a real local Sage source checkout without launching VS
+Code.
 
 `npm run test:extension-host` launches the locally installed VS Code desktop in an unattended background test session.
 The harness copies the smoke workspace into a temp directory, captures extension-host and language-server logs, and
@@ -123,6 +128,7 @@ fails the run on known runtime regressions.
 - Python-facing work should keep `npm run test:python` green.
 - Syntax work should keep `npm run sync:syntax` and syntax package checks green.
 - Cross-cutting changes should keep the full `npm run test` path green before commit.
+- Native Sage library work should also keep `npm run test:native-smoke` green when a local Sage checkout is present.
 - Extension-host behavior that depends on the real VS Code client lifecycle should also keep `npm run test:extension-host`
   green.
 - The extension-host smoke suite now covers hover, definition, completion, references, rename, document/workspace
