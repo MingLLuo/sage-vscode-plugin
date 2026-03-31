@@ -2,9 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 from typing import Optional
 
 from .environment import SageEnvironment
@@ -129,11 +131,14 @@ class RuntimeIntrospector:
         command: Optional[str],
         args: tuple[str, ...] = (),
         enabled: bool = False,
+        timeout_seconds: int = 6,
     ) -> None:
         self._command = command
         self._args = args
         self._enabled = enabled and bool(command)
+        self._timeout_seconds = timeout_seconds
         self._cache: dict[str, Optional[RuntimeSymbolResult]] = {}
+        self._runtime_environment = build_runtime_environment()
 
     @classmethod
     def from_environment(cls, environment: SageEnvironment) -> "RuntimeIntrospector":
@@ -168,7 +173,8 @@ class RuntimeIntrospector:
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=3,
+                timeout=self._timeout_seconds,
+                env=self._runtime_environment,
             )
         except OSError:
             return None
@@ -230,3 +236,15 @@ def parse_runtime_introspection_output(stdout: str) -> Optional[RuntimeSymbolRes
         file_path=Path(file_path) if isinstance(file_path, str) and file_path else None,
         line=line if isinstance(line, int) else None,
     )
+
+
+def build_runtime_environment(base_environment: Optional[dict[str, str]] = None) -> dict[str, str]:
+    environment = dict(base_environment or os.environ)
+    runtime_home = Path(tempfile.gettempdir()) / "sage-lsp-runtime-home"
+    dot_sage = runtime_home / ".sage"
+    runtime_home.mkdir(parents=True, exist_ok=True)
+    dot_sage.mkdir(parents=True, exist_ok=True)
+    environment["HOME"] = str(runtime_home)
+    environment["DOT_SAGE"] = str(dot_sage)
+    environment.setdefault("XDG_CACHE_HOME", str(runtime_home / ".cache"))
+    return environment

@@ -230,6 +230,51 @@ def test_workspace_index_resolves_singleton_dotted_members_and_member_completion
     assert any(str(item["location"]["uri"]).endswith("smallgraphs.py") for item in symbols)
 
 
+def test_workspace_index_uses_factory_class_docstrings_for_assigned_callables(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(
+        root,
+        "pkg/constructors.py",
+        'class EllipticCurveFactory:\n    """Construct an elliptic curve."""\n\n    def __call__(self, *args, **kwargs):\n        return args, kwargs\n\nEllipticCurve = EllipticCurveFactory()\n',
+    )
+    _write_module(root, "pkg/consumer.py", "from pkg.constructors import EllipticCurve\n\nvalue = EllipticCurve([0, 0, 1, -1, 0])\n")
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    consumer = index.modules["pkg.consumer"]
+    documentation = index.documentation_for_symbol(consumer, "EllipticCurve")
+    definition = index.resolve_symbol(consumer, "EllipticCurve")
+
+    assert documentation is not None
+    assert documentation.docstring == "Construct an elliptic curve."
+    assert documentation.summary == "Construct an elliptic curve."
+    assert definition is not None
+    assert definition.file_path.name == "constructors.py"
+
+
+def test_workspace_index_uses_pyx_function_docstrings_for_documentation(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "sage/__init__.py", "")
+    _write_module(root, "sage/matrix/__init__.py", "")
+    _write_module(
+        root,
+        "sage/matrix/constructor.pyx",
+        'def matrix(*args, **kwds):\n    """\n    Create a matrix.\n    """\n    return args, kwds\n',
+    )
+    _write_module(root, "sage/all.py", "from sage.matrix.constructor import matrix\n")
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    module = index.modules["sage.all"]
+    documentation = index.documentation_for_symbol(module, "matrix")
+
+    assert documentation is not None
+    assert documentation.summary == "Create a matrix."
+
+
 def _write_module(root: Path, relative_path: str, contents: str) -> None:
     module_path = root / relative_path
     module_path.parent.mkdir(parents=True, exist_ok=True)

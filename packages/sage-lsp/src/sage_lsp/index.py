@@ -309,7 +309,12 @@ class WorkspaceIndex:
         symbol = self.resolve_symbol(record, name)
         if symbol is None:
             return None
-        summary, sections = split_docstring(symbol.docstring)
+        docstring = symbol.docstring
+        if docstring is None:
+            documentation_proxy = self._documentation_proxy_symbol(record, symbol)
+            if documentation_proxy is not None:
+                docstring = documentation_proxy.docstring
+        summary, sections = split_docstring(docstring)
         display_name = symbol.name if "." in name else name
         return DocumentationResult(
             name=display_name,
@@ -318,7 +323,7 @@ class WorkspaceIndex:
             uri=symbol.file_path.as_uri(),
             detail=symbol.detail,
             summary=summary,
-            docstring=symbol.docstring,
+            docstring=docstring,
             markers=(
                 f"kind:{symbol.kind}",
                 f"module:{symbol.module_name}",
@@ -496,6 +501,24 @@ class WorkspaceIndex:
         if symbol.module_name == current_record.module_name:
             return current_record
         return self._modules.get(symbol.module_name)
+
+    def _documentation_proxy_symbol(
+        self,
+        current_record: ModuleRecord,
+        symbol: SymbolRecord,
+    ) -> Optional[SymbolRecord]:
+        if symbol.kind != "variable":
+            return None
+        owner_record = self._record_for_symbol(current_record, symbol)
+        if owner_record is None:
+            return None
+        instance_type = owner_record.instance_types.get(symbol.name)
+        if instance_type is None:
+            return None
+        proxy_symbol = owner_record.symbols.get(instance_type)
+        if proxy_symbol is None or not proxy_symbol.docstring:
+            return None
+        return proxy_symbol
 
     def _symbol_from_module_binding(
         self,

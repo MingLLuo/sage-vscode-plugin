@@ -22,7 +22,8 @@ from lsprotocol.types import (
 from pygls.workspace import Workspace
 
 from sage_lsp.runtime_introspection import RuntimeSymbolResult
-from sage_lsp.server import create_server
+from sage_lsp.server import _merge_documentation_with_runtime, create_server
+from sage_lsp.index import DocumentationResult
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "sage_src_lite" / "src"
@@ -180,6 +181,63 @@ def test_server_hover_omits_docstring_when_hover_docs_disabled() -> None:
 
     assert hover is not None
     assert hover.contents.value == "function sqrt"
+
+
+def test_merge_documentation_with_runtime_prefers_runtime_signature_and_static_source() -> None:
+    merged = _merge_documentation_with_runtime(
+        DocumentationResult(
+            name="PolynomialRing",
+            kind="function",
+            module_name="sage.rings.polynomial.polynomial_ring_constructor",
+            uri=Path("/workspace/sage/rings/polynomial/polynomial_ring_constructor.py").as_uri(),
+            detail="function PolynomialRing",
+            summary="Static summary.",
+            docstring="Static summary.\n\nMore static documentation.",
+            markers=("kind:function",),
+        ),
+        RuntimeSymbolResult(
+            name="PolynomialRing",
+            kind="function",
+            detail="PolynomialRing(base_ring, *args, **kwds)",
+            module_name="sage.rings.polynomial.polynomial_ring_constructor",
+            docstring="Return the globally unique univariate or multivariate polynomial ring.",
+            file_path=Path("/runtime/sage/rings/polynomial/polynomial_ring_constructor.py"),
+            line=60,
+        ),
+    )
+
+    assert merged.detail == "PolynomialRing(base_ring, *args, **kwds)"
+    assert merged.uri.endswith("workspace/sage/rings/polynomial/polynomial_ring_constructor.py")
+    assert merged.docstring == "Static summary.\n\nMore static documentation."
+
+
+def test_merge_documentation_with_runtime_uses_runtime_doc_for_weak_static_symbols() -> None:
+    merged = _merge_documentation_with_runtime(
+        DocumentationResult(
+            name="EllipticCurve",
+            kind="variable",
+            module_name="sage.schemes.elliptic_curves.constructor",
+            uri=Path("/workspace/sage/schemes/elliptic_curves/constructor.py").as_uri(),
+            detail="variable EllipticCurve",
+            summary=None,
+            docstring=None,
+            markers=("kind:variable",),
+        ),
+        RuntimeSymbolResult(
+            name="EllipticCurve",
+            kind="function",
+            detail="EllipticCurve(*args, **kwds)",
+            module_name="sage.schemes.elliptic_curves.constructor",
+            docstring="Construct an elliptic curve.",
+            file_path=Path("/runtime/sage/schemes/elliptic_curves/constructor.py"),
+            line=42,
+        ),
+    )
+
+    assert merged.kind == "function"
+    assert merged.detail == "EllipticCurve(*args, **kwds)"
+    assert merged.summary == "Construct an elliptic curve."
+    assert merged.docstring == "Construct an elliptic curve."
 
 
 def test_server_indexes_modules_from_analysis_extra_paths(tmp_path: Path) -> None:

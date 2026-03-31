@@ -4,6 +4,7 @@ import subprocess
 from sage_lsp.runtime_introspection import (
     RuntimeIntrospector,
     RuntimeSymbolResult,
+    build_runtime_environment,
     parse_runtime_introspection_output,
 )
 
@@ -46,7 +47,7 @@ def test_runtime_introspector_lookup_invokes_subprocess_with_argv(monkeypatch) -
     expected_argv = introspector._build_invocation("graphs.PetersenGraph")  # noqa: SLF001 - unit test
     assert expected_argv is not None
 
-    def fake_run(argv, *, check, capture_output, text, timeout):
+    def fake_run(argv, *, check, capture_output, text, timeout, env):
         calls.append(
             {
                 "argv": argv,
@@ -54,6 +55,7 @@ def test_runtime_introspector_lookup_invokes_subprocess_with_argv(monkeypatch) -
                 "capture_output": capture_output,
                 "text": text,
                 "timeout": timeout,
+                "env": env,
             }
         )
         return subprocess.CompletedProcess(
@@ -75,6 +77,15 @@ def test_runtime_introspector_lookup_invokes_subprocess_with_argv(monkeypatch) -
             "check": False,
             "capture_output": True,
             "text": True,
-            "timeout": 3,
+            "timeout": 6,
+            "env": introspector._runtime_environment,
         }
     ]
+
+
+def test_build_runtime_environment_uses_temp_home_and_dot_sage(tmp_path: Path) -> None:
+    environment = build_runtime_environment({"HOME": str(tmp_path / "original-home")})
+
+    assert environment["HOME"].endswith("sage-lsp-runtime-home")
+    assert environment["DOT_SAGE"].endswith("sage-lsp-runtime-home/.sage")
+    assert environment["XDG_CACHE_HOME"].endswith("sage-lsp-runtime-home/.cache")

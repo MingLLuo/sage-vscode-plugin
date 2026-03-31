@@ -346,13 +346,14 @@ def _documentation_for_request(
         if server.workspace_index is not None
         else None
     )
-    if documentation is not None:
-        return documentation
-
     runtime_symbol = server.runtime_introspector.lookup(runtime_name or name)
+    if documentation is None:
+        if runtime_symbol is None:
+            return None
+        return _documentation_from_runtime_symbol(runtime_symbol)
     if runtime_symbol is None:
-        return None
-    return _documentation_from_runtime_symbol(runtime_symbol)
+        return documentation
+    return _merge_documentation_with_runtime(documentation, runtime_symbol)
 
 
 def _documentation_from_runtime_symbol(symbol: RuntimeSymbolResult) -> DocumentationResult:
@@ -374,6 +375,61 @@ def _documentation_from_runtime_symbol(symbol: RuntimeSymbolResult) -> Documenta
         ),
         sections=sections,
     )
+
+
+def _merge_documentation_with_runtime(
+    documentation: DocumentationResult,
+    runtime_symbol: RuntimeSymbolResult,
+) -> DocumentationResult:
+    runtime_documentation = _documentation_from_runtime_symbol(runtime_symbol)
+    detail = (
+        runtime_documentation.detail
+        if _should_prefer_runtime_detail(documentation, runtime_documentation)
+        else documentation.detail
+    )
+    docstring = documentation.docstring or runtime_documentation.docstring
+    summary, sections = split_docstring(docstring)
+
+    return DocumentationResult(
+        name=documentation.name,
+        kind=_merged_symbol_kind(documentation.kind, runtime_documentation.kind),
+        module_name=documentation.module_name or runtime_documentation.module_name,
+        uri=documentation.uri or runtime_documentation.uri,
+        detail=detail,
+        summary=summary if docstring else documentation.summary or runtime_documentation.summary,
+        docstring=docstring,
+        markers=documentation.markers or runtime_documentation.markers,
+        sections=sections if docstring else documentation.sections or runtime_documentation.sections,
+    )
+
+
+def _merged_symbol_kind(static_kind: str, runtime_kind: str) -> str:
+    if static_kind == "variable" and runtime_kind != "variable":
+        return runtime_kind
+    return static_kind or runtime_kind
+
+
+def _should_prefer_runtime_detail(
+    documentation: DocumentationResult,
+    runtime_documentation: DocumentationResult,
+) -> bool:
+    static_detail = documentation.detail.strip()
+    runtime_detail = runtime_documentation.detail.strip()
+    if not runtime_detail:
+        return False
+    if not static_detail:
+        return True
+
+    static_name = documentation.name.split(".")[-1]
+    if static_detail in {
+        f"{documentation.kind} {documentation.name}",
+        f"{documentation.kind} {static_name}",
+    }:
+        return True
+
+    if "(" in runtime_detail and "(" not in static_detail:
+        return True
+    return False
 
 
 def _location_from_runtime_symbol(symbol: RuntimeSymbolResult) -> Location:

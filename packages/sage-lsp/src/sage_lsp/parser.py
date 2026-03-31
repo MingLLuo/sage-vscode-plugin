@@ -420,6 +420,7 @@ def parse_pyx_module(module_name: str, file_path: Path, source: str) -> ModuleRe
     doc_match = TRIPLE_QUOTE_RE.search(source)
     if doc_match:
         record.docstring = doc_match.group("body").strip()
+    source_lines = source.splitlines()
 
     for line_number, raw_line in enumerate(source.splitlines(), start=1):
         line = raw_line.strip()
@@ -483,6 +484,7 @@ def parse_pyx_module(module_name: str, file_path: Path, source: str) -> ModuleRe
                     raw_line.find(symbol_name) + len(symbol_name),
                 ),
                 detail=f"{kind} {symbol_name}",
+                docstring=extract_block_docstring(source_lines, line_number),
             )
 
     for match in PYX_ASSIGN_RE.finditer(source):
@@ -503,6 +505,49 @@ def parse_pyx_module(module_name: str, file_path: Path, source: str) -> ModuleRe
         )
 
     return record
+
+
+def extract_block_docstring(source_lines: list[str], definition_line: int) -> Optional[str]:
+    line_index = definition_line - 1
+    if line_index < 0 or line_index >= len(source_lines):
+        return None
+
+    base_indent = leading_indent(source_lines[line_index])
+    index = line_index + 1
+    while index < len(source_lines):
+        candidate = source_lines[index]
+        stripped = candidate.strip()
+        if not stripped:
+            index += 1
+            continue
+        if leading_indent(candidate) <= base_indent:
+            return None
+        return parse_triple_quoted_block(source_lines, index)
+    return None
+
+
+def parse_triple_quoted_block(source_lines: list[str], start_index: int) -> Optional[str]:
+    opener_line = source_lines[start_index].lstrip()
+    if not opener_line.startswith(('"""', "'''")):
+        return None
+
+    quote = opener_line[:3]
+    remainder = opener_line[3:]
+    if quote in remainder:
+        return remainder.split(quote, maxsplit=1)[0].strip()
+
+    body_lines = [remainder]
+    for line in source_lines[start_index + 1 :]:
+        if quote in line:
+            prefix, _ = line.split(quote, maxsplit=1)
+            body_lines.append(prefix)
+            return "\n".join(body_lines).strip()
+        body_lines.append(line)
+    return None
+
+
+def leading_indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
 
 
 def syntax_diagnostics_for_source(

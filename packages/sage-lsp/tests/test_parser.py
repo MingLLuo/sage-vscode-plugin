@@ -70,6 +70,19 @@ cdef inline long native_twice(long value):
     assert "native_twice" in record.symbols
 
 
+def test_parse_pyx_module_extracts_function_docstrings() -> None:
+    source = '''
+def matrix(*args, **kwds):
+    """
+    Create a matrix.
+    """
+    return args, kwds
+'''
+    record = parse_module("sage.matrix.constructor", Path("constructor.pyx"), source)
+
+    assert record.symbols["matrix"].docstring == "Create a matrix."
+
+
 def test_parse_pxi_module_extracts_inline_symbols() -> None:
     source = """
 DEF TRACE_LIMIT = 32
