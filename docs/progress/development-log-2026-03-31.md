@@ -965,3 +965,40 @@ instead of forcing every selection through a blank input box.
 - Next task: add extension-host smoke coverage around runtime selection and actual language-server startup
 - Risks or blockers: local interpreter discovery still focuses on common filesystem layouts and does not yet enumerate
   every environment manager
+
+## Entry 32
+
+- Date: 2026-03-31
+- Task ID: EXT-008
+- Scope: extension
+- Related milestone: Runtime hardening
+- Commit: `5e4319e`
+
+### Goal
+
+Make real Sage library navigation work without requiring users to hand-configure `sage.analysis.sourceRoots` before
+hover, definition, and docs can see Sage's own sources.
+
+### Decisions
+
+- Decision: extend workspace discovery with interpreter-derived Sage roots when explicit source roots are absent.
+- Reason: the selected runtime is the strongest local signal for where Sage's importable sources actually live.
+- Decision: combine two discovery strategies: filesystem heuristics first, then a short runtime import probe.
+- Reason: local source checkouts should resolve instantly from path layout, while packaged Sage installs still need a
+  reliable fallback.
+- Decision: keep explicit `sage.analysis.sourceRoots` authoritative.
+- Reason: manual configuration must remain the escape hatch for unusual layouts and reproducible debugging.
+
+### Verification
+
+- Checks run:
+  - `npm run lint`
+  - `npm run test`
+  - manual probe with `buildWorkspaceInitializationData(...)` against `/workspace/sage/sage`
+- Result: the extension test suite stays green, and the local Sage runtime now contributes
+  `/workspace/sage/src` automatically to the language-server source roots
+
+### Follow-ups
+
+- Next task: add runtime doc/source fallback for symbols that still cannot be resolved statically
+- Risks or blockers: packaged Sage distributions with unusual layouts may still require manual source-root overrides

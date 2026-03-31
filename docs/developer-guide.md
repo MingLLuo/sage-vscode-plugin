@@ -42,7 +42,8 @@ tracked, and how the current static-analysis baseline should be extended safely.
 - `src/configuration.ts`
   Reads VS Code settings into the stable `SageSettings` model.
 - `src/workspaceDiscovery.ts`
-  Determines which workspace roots should be indexed.
+  Determines which workspace roots should be indexed and augments them with Sage roots derived from the selected
+  runtime when `sage.analysis.sourceRoots` is left empty.
 - `src/languageClient.ts`
   Starts the `pygls` server in a dedicated Python runtime, watches Sage/Cython document types, and sends custom
   documentation requests.

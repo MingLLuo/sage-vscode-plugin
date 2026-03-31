@@ -17,6 +17,7 @@
 - VS Code dev helper: one-command repository prep and launch script added
 - Standard LSP baseline: workspace symbols, references, rename, and unresolved-import diagnostics now work through the server
 - Interpreter discovery: `Sage: Select Interpreter` now pre-populates Sage and Python candidates from the local machine and routes them to the correct settings
+- Runtime source-root discovery: selected Sage runtimes now contribute inferred library roots to indexing when no explicit source-root config is present
 
 ## Current Focus
 
@@ -81,3 +82,4 @@
 - Switched diagnostics publication over to the `pygls` `textDocument/publishDiagnostics` API so document open/change events no longer crash the server on missing `publish_diagnostics`.
 - Removed the `import.meta.dirname` dependency from the syntax-sync script so repository bootstrap and `dev:vscode` flows run on Node 20 environments.
 - Reworked `Sage: Select Interpreter` into a detected-candidate picker that surfaces Sage runtimes and Python environments separately, routes Python picks to `sage.languageServer.pythonPath`, and keeps custom plus auto-reset actions in the same flow.
+- Added automatic Sage source-root discovery so the extension can infer `.../src` or nearby `site-packages` roots from the selected runtime and feed them into the language server without manual `sourceRoots` setup.
