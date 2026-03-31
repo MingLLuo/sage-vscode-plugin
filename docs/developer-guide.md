@@ -42,11 +42,14 @@ tracked, and how the current static-analysis baseline should be extended safely.
 - `src/workspaceDiscovery.ts`
   Determines which workspace roots should be indexed.
 - `src/languageClient.ts`
-  Starts the `pygls` server and sends custom documentation requests.
+  Starts the `pygls` server in a dedicated Python runtime and sends custom documentation requests.
 - `src/executionPlan.ts`
   Builds shell-safe run commands and REPL load commands from extension settings.
 - `src/serverRestart.ts`
   Limits language-server restarts to configuration changes that actually affect analysis behavior.
+- `src/serverLaunch.ts`
+  Resolves the Python runtime used to host the language server independently from the Sage executable used for run and
+  REPL commands.
 - `src/documentationRequest.ts`
   Normalizes documentation payloads into a render-friendly shape.
 - `src/docsPanel.ts`

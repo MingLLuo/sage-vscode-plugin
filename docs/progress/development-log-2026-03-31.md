@@ -593,3 +593,38 @@ time the extension changes.
 
 - Next task: add extension-host smoke coverage
 - Risks or blockers: the source-mapping sample includes future-facing cases that exceed the current editor-side mapping integration
+
+## Entry 21
+
+- Date: 2026-03-31
+- Task ID: RUNTIME-002
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `6c445bd`
+
+### Goal
+
+Fix the extension-host startup failure caused by launching `sage-lsp` inside Sage's bundled Python, which lacked
+`pygls` and rejected newer Python syntax used by the server code.
+
+### Decisions
+
+- Decision: separate the language-server host Python from `sage.interpreter.path` and expose it as `sage.languageServer.pythonPath`.
+- Reason: running the editor-side LSP transport inside Sage itself is brittle and unnecessarily couples static tooling to Sage's bundled Python environment.
+- Decision: remove Python 3.10+/3.11+-only syntax from the server code and relax packaging metadata to Python 3.9+.
+- Reason: even when Sage is not used to host the server, the source tree should remain importable from common Sage Python builds.
+
+### Verification
+
+- Checks run:
+  - `npm run lint`
+  - `npm run test`
+  - `PYTHONPYCACHEPREFIX=/tmp/sage-lsp-pycache /workspace/sage/sage -python -m py_compile packages/sage-lsp/src/sage_lsp/*.py`
+  - `PYTHONPATH=packages/sage-lsp/src python - <<'PY' ... from sage_lsp.server import create_server ... PY`
+  - `PYTHONPYCACHEPREFIX=/tmp/sage-lsp-pycache PYTHONPATH=packages/sage-lsp/src /workspace/sage/sage -python - <<'PY' ... from sage_lsp.environment import SageEnvironment ... PY`
+- Result: the repository test suite stayed green, the normal Python environment can host the `pygls` server, and Sage's Python 3.9 can now parse and import the server-side modules used for shared logic
+
+### Follow-ups
+
+- Next task: add extension-host smoke coverage
+- Risks or blockers: users may still need to set `sage.languageServer.pythonPath` explicitly when VS Code is launched without access to the intended Python environment

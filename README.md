@@ -21,6 +21,7 @@ indexing, and Sage-aware `.sage` preprocessing primitives.
 
 - Repository bootstrap is complete and locally validated.
 - The extension provides interpreter selection, status presentation, run commands, and a documentation panel.
+- The extension now launches the language server with a dedicated Python runtime instead of assuming Sage's bundled Python can host `pygls`.
 - The language server provides static hover, completion, definition, document symbols, documentation requests, and
   reduced Sage fixture-backed source indexing.
 - `.sage` source mapping v1 currently rewrites standalone exponent carets while preserving bidirectional column maps.
