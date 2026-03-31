@@ -340,3 +340,46 @@ class, method, and import code.
 - Next task: broaden sanitized/preprocessed parsing to more Sage preparser forms without sacrificing range accuracy
 - Risks or blockers: preparser lines themselves still rely on the loose parser for symbol ranges and do not yet expose
   a full transformed-AST mapping model
+
+## Entry 10
+
+- Date: 2026-04-01
+- Task ID: LSP-023
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `pending`
+
+### Goal
+
+Reduce rebuild cost for large Sage source trees by reusing parsed module records across server restarts instead of
+re-parsing every indexed file from scratch.
+
+### Decisions
+
+- Decision: persist serialized `ModuleRecord` data per indexed file and reuse it when the file's size and nanosecond
+  mtime are unchanged.
+- Reason: this keeps the first cache layer simple, deterministic, and cheap to validate while still cutting out the
+  parse step on warm rebuilds.
+- Decision: keep source text out of the persistent payload and continue reading files on rebuild.
+- Reason: the current symbol/reference paths still rely on live source text, and avoiding stored source keeps the
+  cache smaller and simpler.
+- Decision: treat persistence as best-effort and fall back to a temporary directory or no persistence if the preferred
+  cache location cannot be written.
+- Reason: the cache should never become a new startup failure mode.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py -q`
+  - `python -m pytest packages/sage-lsp/tests/test_index.py packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+- Result: persistent-cache reuse and invalidation tests passed, repository tests stayed green, native Sage smoke passed,
+  and the real VS Code extension-host smoke still passed after the cache layer was added
+
+### Follow-ups
+
+- Next task: split hot document state from cached library/workspace state and start moving toward incremental rebuilds
+- Risks or blockers: this cache still re-reads source files and still rebuilds the module list eagerly; it removes
+  parse cost first, not the entire indexing cost

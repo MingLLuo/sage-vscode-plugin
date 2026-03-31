@@ -28,6 +28,7 @@ The current baseline now includes:
 - hybrid `.sage` parsing that merges preparser-aware top-level extraction with AST-driven class/method/import analysis
 - saved `.sage` modules participating in workspace indexing instead of only live open-document parsing
 - cached symbol and member resolution for indexed modules to reduce repeated definition and documentation lookup cost
+- persistent module-cache reuse for indexed source roots, with automatic invalidation when file size or mtime changes
 
 ## Scope
 
@@ -42,6 +43,8 @@ The current baseline now includes:
   Sage generator objects remain navigable even when the selected Sage runtime cannot answer introspection requests.
 - Indexed-module resolution caches currently target repeated symbol and member lookups; this is a first step toward a
   broader split between hot document state and colder library/workspace indexes.
+- Persistent cache writes are best-effort. If the preferred cache directory is unavailable, the server falls back to a
+  temporary cache location or disables persistence without breaking analysis.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.
