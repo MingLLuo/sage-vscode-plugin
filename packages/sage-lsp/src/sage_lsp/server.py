@@ -148,8 +148,10 @@ def create_server() -> SageLanguageServer:
 
 def _rebuild_index(server: SageLanguageServer) -> None:
     source_roots = [coerce_path(entry) for entry in server.environment.workspace.source_roots if entry]
+    source_roots.extend(coerce_path(entry) for entry in server.environment.analysis.extra_paths if entry)
+    deduped_roots = list(dict.fromkeys(root.resolve() for root in source_roots))
     server.workspace_index = WorkspaceIndex(
-        source_roots=source_roots,
+        source_roots=deduped_roots,
         excluded_globs=server.environment.workspace.excluded_globs,
         enable_pyx=server.environment.analysis.enable_pyx_parsing,
     )

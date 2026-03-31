@@ -151,3 +151,23 @@ def test_server_hover_omits_docstring_when_hover_docs_disabled() -> None:
 
     assert hover is not None
     assert hover.contents.value == "function sqrt"
+
+
+def test_server_indexes_modules_from_analysis_extra_paths(tmp_path: Path) -> None:
+    package_root = tmp_path / "vendor"
+    package_root.mkdir()
+    module_path = package_root / "helper_mod.py"
+    module_path.write_text("answer = 42\n", encoding="utf-8")
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(FIXTURE_ROOT)]},
+            "analysis": {
+                "enablePyxParsing": True,
+                "extraPaths": [str(package_root)],
+            },
+        }
+    )
+
+    assert server.workspace_index is not None
+    assert "helper_mod" in server.workspace_index.modules

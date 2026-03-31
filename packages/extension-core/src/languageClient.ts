@@ -32,6 +32,10 @@ export function createLanguageClient(
     settings.sourceRoots,
   );
   const resolvedExtraPaths = resolveConfiguredPaths(workspaceFolders, settings.extraPaths);
+  const languageServerSettings = {
+    ...settings,
+    extraPaths: resolvedExtraPaths,
+  };
   const launch = buildLanguageServerLaunch(settings.interpreterPath, settings.interpreterArgs);
 
   const serverOptions: ServerOptions = {
@@ -49,7 +53,7 @@ export function createLanguageClient(
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ language: "sagemath" }],
     outputChannel,
-    initializationOptions: buildInitializationOptions(settings, workspaceData),
+    initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData),
     synchronize: {
       configurationSection: "sage",
       fileEvents: vscode.workspace.createFileSystemWatcher("**/*.sage"),
