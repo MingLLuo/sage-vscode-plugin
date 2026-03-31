@@ -7,7 +7,8 @@ let client: LanguageClient | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   client = createLanguageClient(context);
-  context.subscriptions.push(client.start());
+  context.subscriptions.push(client);
+  await client.start();
 
   context.subscriptions.push(
     vscode.commands.registerCommand("sage.selectInterpreter", async () => {
@@ -47,4 +48,3 @@ export async function deactivate(): Promise<void> {
   await client?.stop();
   client = undefined;
 }
-
