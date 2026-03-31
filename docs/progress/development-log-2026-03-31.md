@@ -251,7 +251,7 @@ Fix the first TypeScript build error exposed by the newly installed toolchain.
 - Task ID: OPS-004
 - Scope: repo
 - Related milestone: Repository bootstrap
-- Commit: pending
+- Commit: `5285b09`
 
 ### Goal
 

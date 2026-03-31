@@ -11,4 +11,4 @@
 | OPS-001 | Add bootstrap CI placeholder | Repository bootstrap | ops | done | MingLLuo | Repository has a non-destructive CI placeholder aligned with root scripts. | `docs/developer-guide.md` | `e7ef736` |
 | OPS-002 | Repair bootstrap npm workspace install | Repository bootstrap | ops | done | MingLLuo | `npm install` succeeds from the repository root without manifest protocol errors. | `docs/developer-guide.md` | `9ccef30` |
 | OPS-003 | Fix bootstrap build failures | Repository bootstrap | ops | done | MingLLuo | `npm run build` completes from the repository root after initial TypeScript and wiring fixes. | `docs/developer-guide.md` | `211c49c` |
-| OPS-004 | Validate local bootstrap toolchain | Repository bootstrap | ops | done | MingLLuo | Root `npm install`, Python editable install, `npm run build`, `npm run lint`, and `npm run test` all succeed locally. | `docs/developer-guide.md` | pending |
+| OPS-004 | Validate local bootstrap toolchain | Repository bootstrap | ops | done | MingLLuo | Root `npm install`, Python editable install, `npm run build`, `npm run lint`, and `npm run test` all succeed locally. | `docs/developer-guide.md` | `5285b09` |
