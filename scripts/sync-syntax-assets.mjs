@@ -1,7 +1,9 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const root = path.resolve(import.meta.dirname, "..");
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(scriptDir, "..");
 const sourceDir = path.join(root, "packages", "syntax-pack");
 const targetDir = path.join(root, "packages", "extension-core", "resources", "generated", "syntax");
 const checkOnly = process.argv.includes("--check");
@@ -44,4 +46,3 @@ for (const relativePath of files) {
 
 const generatedEntries = readdirSync(targetDir);
 console.log(`Synced syntax assets into ${targetDir}: ${generatedEntries.join(", ")}`);
-
