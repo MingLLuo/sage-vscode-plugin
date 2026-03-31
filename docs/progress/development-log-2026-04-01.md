@@ -347,7 +347,7 @@ class, method, and import code.
 - Task ID: LSP-023
 - Scope: lsp
 - Related milestone: LSP baseline
-- Commit: `pending`
+- Commit: `a1ae742`
 
 ### Goal
 
