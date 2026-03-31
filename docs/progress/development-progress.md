@@ -30,6 +30,8 @@
 - Terminal cleanup: run commands can optionally remove generated `.sage.py` files after standalone terminal execution
 - Native library docs generalization: static indexing now inherits factory docstrings, `.pyx` functions contribute hover docs, and runtime metadata enriches static documentation without discarding local source paths
 - Native local smoke automation: a non-GUI repository script now validates documentation and source navigation for common Sage library symbols against a real local checkout
+- Documentation prewarm: opening a Sage file now preloads a bounded set of likely callable docs into cache before the first hover request
+- Highlighting depth: Sage grammar now separates algebraic domains, constructors, symbolic work, plotting, graph theory, combinatorics, crypto, number theory, and linear algebra into richer scopes
 
 ## Current Focus
 
@@ -113,3 +115,5 @@
 - Extended static documentation extraction so factory-style assignments such as `EllipticCurve = EllipticCurveFactory(...)` inherit class docstrings even when runtime introspection is unavailable.
 - Taught `.pyx` parsing to extract function docstrings, allowing common native APIs such as `matrix` to surface hover documentation directly from source.
 - Added a non-GUI `test:native-smoke` repository script that validates summaries and definition paths for `graphs.PetersenGraph`, `PolynomialRing`, `EllipticCurve`, `matrix`, `NumberField`, and `Partitions` against the local Sage checkout.
+- Added bounded documentation prewarming on document open so common call targets are cached before the first hover request.
+- Reworked Sage grammar scopes so rings and fields, constructors, symbolic functions, plotting, graph theory, combinatorics, crypto, number theory, and linear algebra no longer share one flat generic support scope.
