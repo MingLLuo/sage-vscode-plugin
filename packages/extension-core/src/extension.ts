@@ -140,8 +140,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         workspaceFolders: vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
       });
       const picked = await vscode.window.showQuickPick(detectedOptions, {
-        title: "Select Sage runtime or language-server Python",
-        placeHolder: "Choose a detected Sage runtime for execution or a Python runtime for the language server.",
+        title: "Select Sage environment",
+        placeHolder: "Choose a complete Sage environment, or fall back to the advanced path actions below.",
         matchOnDescription: true,
         matchOnDetail: true,
       });
@@ -150,18 +150,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      const update = await resolveInterpreterConfigurationUpdate(picked, settings);
-      if (!update) {
+      const updates = await resolveInterpreterConfigurationUpdate(picked, settings);
+      if (!updates || updates.length === 0) {
         return;
       }
 
-      await vscode.workspace
-        .getConfiguration("sage")
-        .update(update.section, update.value, vscode.ConfigurationTarget.Workspace);
-      if (update.section === "interpreter.path") {
+      let shouldResetRepl = false;
+      for (const update of updates) {
+        await vscode.workspace
+          .getConfiguration("sage")
+          .update(update.section, update.value, vscode.ConfigurationTarget.Workspace);
+        outputChannel.appendLine(`Updated sage.${update.section} to: ${update.value}`);
+        shouldResetRepl ||= update.section === "interpreter.path";
+      }
+      if (shouldResetRepl) {
         resetReplTerminal();
       }
-      outputChannel.appendLine(`Updated sage.${update.section} to: ${update.value}`);
     }),
     vscode.commands.registerCommand("sage.restartLanguageServer", async () => {
       outputChannel.appendLine("Restarting Sage language server.");
@@ -328,9 +332,9 @@ export async function deactivate(): Promise<void> {
 async function resolveInterpreterConfigurationUpdate(
   picked: InterpreterCandidate,
   settings: ReturnType<typeof readSettings>,
-): Promise<{ section: "interpreter.path" | "languageServer.pythonPath"; value: string } | undefined> {
+): Promise<Array<{ section: "interpreter.path" | "languageServer.pythonPath"; value: string }> | undefined> {
   if (picked.selectionTarget === "languageServerAuto") {
-    return { section: "languageServer.pythonPath", value: "auto" };
+    return [{ section: "languageServer.pythonPath", value: "auto" }];
   }
 
   if (picked.selectionTarget === "runtimeCustom") {
@@ -342,7 +346,7 @@ async function resolveInterpreterConfigurationUpdate(
     if (!selection) {
       return undefined;
     }
-    return { section: "interpreter.path", value: selection };
+    return [{ section: "interpreter.path", value: selection }];
   }
 
   if (picked.selectionTarget === "languageServerCustom") {
@@ -354,16 +358,18 @@ async function resolveInterpreterConfigurationUpdate(
     if (!selection) {
       return undefined;
     }
-    return { section: "languageServer.pythonPath", value: selection };
+    return [{ section: "languageServer.pythonPath", value: selection }];
+  }
+
+  if (picked.updates && picked.updates.length > 0) {
+    return picked.updates;
   }
 
   if (!picked.interpreterPath) {
     return undefined;
   }
 
-  return picked.selectionTarget === "runtime"
-    ? { section: "interpreter.path", value: picked.interpreterPath }
-    : { section: "languageServer.pythonPath", value: picked.interpreterPath };
+  return [{ section: "interpreter.path", value: picked.interpreterPath }];
 }
 
 function ensureReplTerminal(settings: {

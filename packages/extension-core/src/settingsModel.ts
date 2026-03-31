@@ -27,6 +27,7 @@ export interface LanguageServerInitializationOptions {
   interpreter: {
     path: string;
     args: string[];
+    pythonPath?: string;
   };
   analysis: {
     mode: AnalysisMode;
@@ -63,11 +64,13 @@ export interface WorkspaceInitializationInput {
 export function buildInitializationOptions(
   settings: SageSettings,
   workspace: WorkspaceInitializationInput,
+  resolvedLanguageServerPythonPath?: string,
 ): LanguageServerInitializationOptions {
   return {
     interpreter: {
       path: settings.interpreterPath,
       args: settings.interpreterArgs,
+      ...(resolvedLanguageServerPythonPath ? { pythonPath: resolvedLanguageServerPythonPath } : {}),
     },
     analysis: {
       mode: settings.analysisMode,

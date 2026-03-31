@@ -4,14 +4,20 @@ import path from "node:path";
 import * as vscode from "vscode";
 
 export type InterpreterSelectionTarget =
-  | "runtime"
-  | "languageServer"
+  | "environment"
   | "runtimeCustom"
   | "languageServerCustom"
   | "languageServerAuto";
 
+export interface InterpreterConfigurationUpdate {
+  section: "interpreter.path" | "languageServer.pythonPath";
+  value: string;
+}
+
 export interface InterpreterCandidate extends vscode.QuickPickItem {
   interpreterPath?: string;
+  languageServerPythonPath?: string;
+  updates?: InterpreterConfigurationUpdate[];
   selectionTarget: InterpreterSelectionTarget;
 }
 
@@ -24,10 +30,11 @@ interface DiscoveryInput {
   homeDir?: string;
 }
 
-interface RawCandidate {
-  path: string;
+interface EnvironmentProfile {
+  runtimePath: string;
+  languageServerPythonPath: string;
+  kind: "current" | "localDev" | "system";
   source: string;
-  selectionTarget: "runtime" | "languageServer";
 }
 
 const COMMON_SAGE_PATHS = [
@@ -50,99 +57,77 @@ const COMMON_HOME_PYTHON_DIRS = [
   "anaconda3",
 ];
 
-const COMMON_WORKSPACE_PYTHON_DIRS = [
-  ".venv",
-  "venv",
-  "env",
-];
+const PREFERRED_DEV_ENV_NAMES = ["sage-dev"];
 
 export function discoverInterpreterCandidates(input: DiscoveryInput): InterpreterCandidate[] {
   const environment = input.environment ?? process.env;
   const homeDir = input.homeDir ?? os.homedir();
-  const candidates: RawCandidate[] = [];
+  const profiles: EnvironmentProfile[] = [];
+
+  const preferredLanguageServerPython =
+    input.languageServerPythonPath && input.languageServerPythonPath !== "auto"
+      ? input.languageServerPythonPath
+      : resolvePreferredLanguageServerPython(environment, input.envPath, homeDir);
+  const localDevelopmentPython = discoverLocalDevelopmentPython(environment, homeDir);
 
   if (input.currentPath) {
-    candidates.push({
-      path: input.currentPath,
-      source: "Configured for Sage execution",
-      selectionTarget: "runtime",
+    const currentUsesLocalDevelopmentPython =
+      input.languageServerPythonPath === "auto"
+      && isLocalSageCheckout(input.currentPath)
+      && Boolean(localDevelopmentPython);
+    profiles.push({
+      runtimePath: input.currentPath,
+      languageServerPythonPath:
+        currentUsesLocalDevelopmentPython
+          ? localDevelopmentPython!
+          : input.languageServerPythonPath === "auto"
+            ? preferredLanguageServerPython
+          : input.languageServerPythonPath,
+      kind: currentUsesLocalDevelopmentPython ? "localDev" : "current",
+      source: "Current workspace configuration",
     });
   }
 
-  if (input.languageServerPythonPath && input.languageServerPythonPath !== "auto") {
-    candidates.push({
-      path: input.languageServerPythonPath,
-      source: "Configured for the language server",
-      selectionTarget: "languageServer",
+  const localDevelopmentRuntimes = dedupe(
+    [
+      ...input.workspaceFolders.flatMap((folder) => discoverWorkspaceRuntimeCandidates(folder)),
+      input.currentPath,
+    ].filter((candidate) => isLocalSageCheckout(candidate)),
+  );
+  for (const runtimePath of localDevelopmentRuntimes) {
+    if (!localDevelopmentPython) {
+      continue;
+    }
+    profiles.push({
+      runtimePath,
+      languageServerPythonPath: localDevelopmentPython,
+      kind: "localDev",
+      source: "Detected local Sage checkout with conda env sage-dev",
     });
   }
 
-  const pathCommands: Array<[string, "runtime" | "languageServer"]> = [
-    ["sage", "runtime"],
-    ["python3", "languageServer"],
-    ["python", "languageServer"],
-  ];
-  for (const [command, selectionTarget] of pathCommands) {
-    const resolved = findExecutableOnPath(command, input.envPath);
-    if (resolved) {
-      candidates.push({ path: resolved, source: "Detected on PATH", selectionTarget });
-    }
+  const systemSageRuntimes = dedupe(
+    [
+      findExecutableOnPath("sage", input.envPath),
+      ...COMMON_SAGE_PATHS,
+      input.currentPath && !isLocalSageCheckout(input.currentPath) ? input.currentPath : "",
+    ].filter(
+      (candidate): candidate is string =>
+        typeof candidate === "string" && candidate.length > 0 && pathExists(candidate),
+    ),
+  ).filter((candidate) => !isLocalSageCheckout(candidate));
+
+  for (const runtimePath of systemSageRuntimes) {
+    profiles.push({
+      runtimePath,
+      languageServerPythonPath: preferredLanguageServerPython,
+      kind: "system",
+      source: "Detected stable Sage runtime",
+    });
   }
 
-  for (const candidatePath of COMMON_SAGE_PATHS) {
-    if (pathExists(candidatePath)) {
-      candidates.push({
-        path: candidatePath,
-        source: "Detected in common system locations",
-        selectionTarget: "runtime",
-      });
-    }
-  }
-
-  for (const candidatePath of COMMON_PYTHON_PATHS) {
-    if (pathExists(candidatePath)) {
-      candidates.push({
-        path: candidatePath,
-        source: "Detected in common system locations",
-        selectionTarget: "languageServer",
-      });
-    }
-  }
-
-  for (const candidatePath of discoverManagedEnvironmentCandidates(environment, homeDir)) {
-    if (pathExists(candidatePath)) {
-      candidates.push({
-        path: candidatePath,
-        source: "Detected from local Python environments",
-        selectionTarget: "languageServer",
-      });
-    }
-  }
-
-  for (const workspaceFolder of input.workspaceFolders) {
-    for (const candidatePath of discoverWorkspaceRuntimeCandidates(workspaceFolder)) {
-      if (pathExists(candidatePath)) {
-        candidates.push({
-          path: candidatePath,
-          source: "Detected near the workspace",
-          selectionTarget: "runtime",
-        });
-      }
-    }
-
-    for (const candidatePath of discoverWorkspacePythonCandidates(workspaceFolder)) {
-      if (pathExists(candidatePath)) {
-        candidates.push({
-          path: candidatePath,
-          source: "Detected from workspace virtual environments",
-          selectionTarget: "languageServer",
-        });
-      }
-    }
-  }
-
-  const items = dedupeCandidates(candidates).map((candidate) =>
-    toQuickPickItem(candidate, input.currentPath, input.languageServerPythonPath),
+  const items = dedupeProfiles(profiles).map((profile) =>
+    toQuickPickItem(profile, input.currentPath, input.languageServerPythonPath, preferredLanguageServerPython),
   );
   items.push(
     {
@@ -167,16 +152,19 @@ export function discoverInterpreterCandidates(input: DiscoveryInput): Interprete
   return items;
 }
 
-function dedupeCandidates(candidates: RawCandidate[]): RawCandidate[] {
+function dedupeProfiles(profiles: EnvironmentProfile[]): EnvironmentProfile[] {
   const seen = new Set<string>();
-  const unique: RawCandidate[] = [];
-  for (const candidate of candidates) {
-    const key = `${candidate.selectionTarget}:${normalizeCandidateKey(candidate.path)}`;
+  const unique: EnvironmentProfile[] = [];
+  for (const profile of profiles) {
+    if (!profile.runtimePath || !profile.languageServerPythonPath) {
+      continue;
+    }
+    const key = `${normalizeCandidateKey(profile.runtimePath)}::${normalizeCandidateKey(profile.languageServerPythonPath)}`;
     if (seen.has(key)) {
       continue;
     }
     seen.add(key);
-    unique.push(candidate);
+    unique.push(profile);
   }
   return unique;
 }
@@ -186,48 +174,41 @@ function normalizeCandidateKey(candidatePath: string): string {
 }
 
 function toQuickPickItem(
-  candidate: RawCandidate,
+  profile: EnvironmentProfile,
   currentRuntimePath: string,
   currentLanguageServerPythonPath: string,
+  preferredLanguageServerPython: string,
 ): InterpreterCandidate {
+  const effectiveCurrentLanguageServerPython =
+    currentLanguageServerPythonPath === "auto"
+      ? preferredLanguageServerPython
+      : currentLanguageServerPythonPath;
   const isCurrent =
-    candidate.selectionTarget === "runtime"
-      ? candidate.path === currentRuntimePath
-      : candidate.path === currentLanguageServerPythonPath;
-  const label = buildLabel(candidate, isCurrent);
-  const settingName =
-    candidate.selectionTarget === "runtime"
-      ? "sage.interpreter.path"
-      : "sage.languageServer.pythonPath";
+    profile.runtimePath === currentRuntimePath
+    && profile.languageServerPythonPath === effectiveCurrentLanguageServerPython;
+
   return {
-    label,
-    description: candidate.path,
-    detail: `${candidate.source}. Updates ${settingName}.`,
-    interpreterPath: candidate.path,
-    selectionTarget: candidate.selectionTarget,
+    label: buildLabel(profile, isCurrent),
+    description: profile.runtimePath,
+    detail: `${profile.source}. Language server Python: ${profile.languageServerPythonPath}.`,
+    interpreterPath: profile.runtimePath,
+    languageServerPythonPath: profile.languageServerPythonPath,
+    updates: [
+      { section: "interpreter.path", value: profile.runtimePath },
+      { section: "languageServer.pythonPath", value: profile.languageServerPythonPath },
+    ],
+    selectionTarget: "environment",
   };
 }
 
-function buildLabel(candidate: RawCandidate, isCurrent: boolean): string {
-  if (candidate.selectionTarget === "runtime") {
-    if (classifyInterpreter(candidate.path) === "sage") {
-      return isCurrent ? "Current Sage runtime" : "Detected Sage runtime";
-    }
-    return isCurrent ? "Current execution runtime" : "Detected execution runtime";
+function buildLabel(profile: EnvironmentProfile, isCurrent: boolean): string {
+  if (profile.kind === "localDev") {
+    return isCurrent ? "Current local Sage development environment" : "Local Sage development environment";
   }
-
-  return isCurrent ? "Current language-server Python" : "Detected language-server Python";
-}
-
-function classifyInterpreter(candidatePath: string): "sage" | "python" | "interpreter" {
-  const base = path.basename(candidatePath).toLowerCase();
-  if (base.startsWith("sage")) {
-    return "sage";
+  if (profile.kind === "system") {
+    return isCurrent ? "Current system Sage environment" : "System Sage (stable)";
   }
-  if (base.startsWith("python")) {
-    return "python";
-  }
-  return "interpreter";
+  return isCurrent ? "Current Sage environment" : "Detected Sage environment";
 }
 
 function discoverWorkspaceRuntimeCandidates(workspaceFolder: string): string[] {
@@ -240,12 +221,53 @@ function discoverWorkspaceRuntimeCandidates(workspaceFolder: string): string[] {
   ];
 }
 
-function discoverWorkspacePythonCandidates(workspaceFolder: string): string[] {
-  return COMMON_WORKSPACE_PYTHON_DIRS.map((directory) =>
-    process.platform === "win32"
-      ? path.join(workspaceFolder, directory, "Scripts", "python.exe")
-      : path.join(workspaceFolder, directory, "bin", "python"),
-  );
+function discoverLocalDevelopmentPython(
+  environment: NodeJS.ProcessEnv,
+  homeDir: string,
+): string | undefined {
+  const activeCondaPrefix = environment.CONDA_PREFIX;
+  if (activeCondaPrefix && PREFERRED_DEV_ENV_NAMES.includes(path.basename(activeCondaPrefix))) {
+    const candidate = resolvePythonFromPrefix(activeCondaPrefix);
+    if (pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  for (const root of COMMON_HOME_PYTHON_DIRS) {
+    for (const envName of PREFERRED_DEV_ENV_NAMES) {
+      const candidate = resolvePythonFromPrefix(path.join(homeDir, root, "envs", envName));
+      if (pathExists(candidate)) {
+        return candidate;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function resolvePreferredLanguageServerPython(
+  environment: NodeJS.ProcessEnv,
+  envPath: string | undefined,
+  homeDir: string,
+): string {
+  const environmentVariables = [
+    environment.SAGE_LSP_PYTHON,
+    resolvePythonFromPrefix(environment.VIRTUAL_ENV),
+    resolvePythonFromPrefix(environment.CONDA_PREFIX),
+    findExecutableOnPath("python3", envPath),
+    findExecutableOnPath("python", envPath),
+    ...COMMON_PYTHON_PATHS,
+    ...discoverManagedEnvironmentCandidates(environment, homeDir),
+    discoverLocalDevelopmentPython(environment, homeDir),
+  ];
+
+  for (const candidate of environmentVariables) {
+    if (candidate && pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return "python";
 }
 
 function discoverManagedEnvironmentCandidates(
@@ -253,17 +275,6 @@ function discoverManagedEnvironmentCandidates(
   homeDir: string,
 ): string[] {
   const candidates: string[] = [];
-
-  const environmentVariables = [
-    environment.SAGE_LSP_PYTHON,
-    resolvePythonFromPrefix(environment.VIRTUAL_ENV),
-    resolvePythonFromPrefix(environment.CONDA_PREFIX),
-  ];
-  for (const candidate of environmentVariables) {
-    if (candidate) {
-      candidates.push(candidate);
-    }
-  }
 
   for (const directory of COMMON_HOME_PYTHON_DIRS) {
     candidates.push(resolvePythonFromPrefix(path.join(homeDir, directory)));
@@ -274,6 +285,11 @@ function discoverManagedEnvironmentCandidates(
       ? path.join(homeDir, ".pyenv", "pyenv-win", "shims", "python.exe")
       : path.join(homeDir, ".pyenv", "shims", "python3");
   candidates.push(pyenvShim);
+
+  const activeCondaPrefix = environment.CONDA_PREFIX;
+  if (activeCondaPrefix) {
+    candidates.push(resolvePythonFromPrefix(activeCondaPrefix));
+  }
 
   return candidates.filter(Boolean);
 }
@@ -288,6 +304,17 @@ function resolvePythonFromPrefix(prefix: string | undefined): string {
   }
 
   return path.join(prefix, "bin", "python");
+}
+
+function isLocalSageCheckout(candidatePath: string): boolean {
+  if (!candidatePath || !pathExists(candidatePath)) {
+    return false;
+  }
+
+  const resolvedPath = path.resolve(candidatePath);
+  const runtimeRoot = path.dirname(resolvedPath);
+  return entryExists(path.join(runtimeRoot, "src", "bin", "sage"))
+    || entryExists(path.join(runtimeRoot, "src", "sage"));
 }
 
 function findExecutableOnPath(command: string, envPath = process.env.PATH): string | undefined {
@@ -312,12 +339,27 @@ function findExecutableOnPath(command: string, envPath = process.env.PATH): stri
   return undefined;
 }
 
+function dedupe(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
 function pathExists(candidatePath: string): boolean {
   if (!candidatePath) {
     return false;
   }
   try {
     return existsSync(candidatePath) && statSync(candidatePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function entryExists(candidatePath: string): boolean {
+  if (!candidatePath) {
+    return false;
+  }
+  try {
+    return existsSync(candidatePath);
   } catch {
     return false;
   }

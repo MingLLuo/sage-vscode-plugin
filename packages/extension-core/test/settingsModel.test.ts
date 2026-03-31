@@ -26,15 +26,20 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
   };
 
   assert.deepEqual(
-    buildInitializationOptions(settings, {
-      rootUri: "file:///workspace",
-      folders: ["file:///workspace"],
-      sourceRoots: ["file:///workspace/src"],
-    }),
+    buildInitializationOptions(
+      settings,
+      {
+        rootUri: "file:///workspace",
+        folders: ["file:///workspace"],
+        sourceRoots: ["file:///workspace/src"],
+      },
+      "/opt/python/bin/python3",
+    ),
     {
       interpreter: {
         path: "/opt/sage/bin/sage",
         args: ["--python"],
+        pythonPath: "/opt/python/bin/python3",
       },
       analysis: {
         mode: "full",
@@ -84,6 +89,8 @@ test("buildLanguageServerLaunch falls back to a dedicated python runtime for Sag
     languageServerPythonArgs: ["-X", "utf8"],
     environment: { CONDA_PREFIX: "/opt/conda" },
     platform: "linux",
+    homeDir: "/Users/example",
+    exists: (candidate) => candidate === "/opt/conda/bin/python",
   }), {
     command: "/opt/conda/bin/python",
     args: ["-X", "utf8", "-m", "sage_lsp"],
@@ -108,7 +115,30 @@ test("resolveDefaultLanguageServerPython prefers explicit environment overrides"
     "/override/python",
   );
   assert.equal(
-    resolveDefaultLanguageServerPython({ VIRTUAL_ENV: "/venv" }, "linux"),
+    resolveDefaultLanguageServerPython(
+      { VIRTUAL_ENV: "/venv" },
+      "linux",
+      {
+        homeDir: "/Users/example",
+        exists: (candidate) => candidate === "/venv/bin/python",
+      },
+    ),
     "/venv/bin/python",
+  );
+});
+
+test("resolveDefaultLanguageServerPython prefers the local sage-dev python for checkout runtimes", () => {
+  assert.equal(
+    resolveDefaultLanguageServerPython(
+      {},
+      "linux",
+      {
+        interpreterPath: "/workspace/sage/sage",
+        homeDir: "/Users/example",
+        exists: (candidate) => candidate === "/workspace/sage/src/bin/sage"
+          || candidate === "/Users/example/miniforge3/envs/sage-dev/bin/python",
+      },
+    ),
+    "/Users/example/miniforge3/envs/sage-dev/bin/python",
   );
 });

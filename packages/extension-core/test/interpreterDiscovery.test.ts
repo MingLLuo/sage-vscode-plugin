@@ -6,55 +6,66 @@ import path from "node:path";
 
 import { discoverInterpreterCandidates } from "../src/interpreterDiscovery";
 
-test("discoverInterpreterCandidates lists Sage runtimes, Python runtimes, and manual actions", () => {
+test("discoverInterpreterCandidates prioritizes local development and system Sage environments", () => {
   const tempRoot = mkdtempSync(path.join(os.tmpdir(), "sage-discovery-"));
   const binDir = path.join(tempRoot, "bin");
   const workspaceDir = path.join(tempRoot, "workspace");
   const siblingSageDir = path.join(tempRoot, "sage");
-  const workspaceVenvPython = path.join(workspaceDir, ".venv", "bin", "python");
   const pathPython = path.join(binDir, "python3");
   const pathSage = path.join(binDir, "sage");
   const workspaceSage = path.join(siblingSageDir, "sage");
   const homeDir = path.join(tempRoot, "home");
+  const sageDevPython = path.join(homeDir, "miniforge3", "envs", "sage-dev", "bin", "python");
   const homePython = path.join(homeDir, "miniforge3", "bin", "python");
+  const workspaceSageBootstrap = path.join(siblingSageDir, "src", "bin", "sage");
+  const workspaceSagePackage = path.join(siblingSageDir, "src", "sage", "__init__.py");
 
   writeExecutable(pathPython);
   writeExecutable(pathSage);
   writeExecutable(workspaceSage);
-  writeExecutable(workspaceVenvPython);
+  writeExecutable(workspaceSageBootstrap);
   writeExecutable(homePython);
+  writeExecutable(sageDevPython);
+  writeExecutable(workspaceSagePackage);
 
   const items = discoverInterpreterCandidates({
-    currentPath: "/opt/current/sage",
-    languageServerPythonPath: "/opt/custom/python",
+    currentPath: workspaceSage,
+    languageServerPythonPath: "auto",
     workspaceFolders: [workspaceDir],
     envPath: binDir,
     homeDir,
+    environment: {},
   });
 
-  assertCandidate(items, "/opt/current/sage", "runtime", "Current Sage runtime");
-  assertCandidate(items, "/opt/custom/python", "languageServer", "Current language-server Python");
-  assertCandidate(items, pathSage, "runtime", "Detected Sage runtime");
-  assertCandidate(items, pathPython, "languageServer", "Detected language-server Python");
-  assertCandidate(items, workspaceSage, "runtime", "Detected Sage runtime");
-  assertCandidate(items, workspaceVenvPython, "languageServer", "Detected language-server Python");
-  assertCandidate(items, homePython, "languageServer", "Detected language-server Python");
+  assertEnvironmentCandidate(
+    items,
+    workspaceSage,
+    sageDevPython,
+    "Local Sage development environment",
+  );
+  assertEnvironmentCandidate(
+    items,
+    pathSage,
+    pathPython,
+    "System Sage (stable)",
+  );
   assert.ok(items.some((item) => item.selectionTarget === "runtimeCustom"));
   assert.ok(items.some((item) => item.selectionTarget === "languageServerCustom"));
   assert.ok(items.some((item) => item.selectionTarget === "languageServerAuto"));
 });
 
-function assertCandidate(
+function assertEnvironmentCandidate(
   items: ReturnType<typeof discoverInterpreterCandidates>,
   interpreterPath: string,
-  selectionTarget: "runtime" | "languageServer",
+  languageServerPythonPath: string,
   label: string,
 ): void {
   assert.ok(
     items.some(
       (item) =>
         item.interpreterPath === interpreterPath
-        && item.selectionTarget === selectionTarget
+        && item.languageServerPythonPath === languageServerPythonPath
+        && item.selectionTarget === "environment"
         && item.label === label,
     ),
   );

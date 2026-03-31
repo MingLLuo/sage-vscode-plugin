@@ -52,6 +52,7 @@ export function createLanguageClient(
     interpreterArgs: settings.interpreterArgs,
     languageServerPythonPath: settings.languageServerPythonPath,
     languageServerPythonArgs: settings.languageServerPythonArgs,
+    homeDir: process.env.HOME,
   });
   outputChannel.appendLine(
     `[info] starting language server with: ${launch.command} ${launch.args.join(" ")}`,
@@ -72,7 +73,7 @@ export function createLanguageClient(
   const clientOptions: LanguageClientOptions = {
     documentSelector: [{ language: "sagemath" }, { language: "sagemath-cython" }],
     outputChannel,
-    initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData),
+    initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData, launch.command),
     synchronize: {
       fileEvents: [
         vscode.workspace.createFileSystemWatcher("**/*.sage"),
