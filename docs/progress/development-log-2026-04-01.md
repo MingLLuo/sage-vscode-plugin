@@ -423,3 +423,37 @@ buffer has not changed.
 - Next task: make workspace rebuilds more incremental so background file changes do not require a full cold rebuild
 - Risks or blockers: the current overlay cache keys on full source equality, so memory use still scales with open
   document size until a more compact versioned buffer model is introduced
+
+## Entry 12
+
+- Date: 2026-04-01
+- Task ID: LSP-025
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `pending`
+
+### Goal
+
+Improve readability and maintainability of the recent indexing and document-cache code without changing behavior.
+
+### Decisions
+
+- Decision: extract smaller helper methods for resetting runtime state, iterating indexable modules, loading or parsing
+  module records, storing parsed records, and handling open-document overlays.
+- Reason: the recent warm-cache and hot-overlay features had made `WorkspaceIndex.build()` and `parse_document()`
+  harder to read than they needed to be.
+- Decision: keep the refactor behavior-preserving and verify it with the existing test suite instead of changing the
+  indexing model again in the same step.
+- Reason: readability work is only useful if it reduces future change risk without creating fresh regressions.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+- Result: targeted index/server tests and the full repository test suite passed after the helper extraction refactor
+
+### Follow-ups
+
+- Next task: continue replacing repeated ad hoc indexing logic with clearer hot-document versus cold-index boundaries
+- Risks or blockers: `server.py` still carries a lot of feature wiring and could use a similar readability pass later

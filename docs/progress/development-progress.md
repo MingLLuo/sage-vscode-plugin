@@ -44,6 +44,7 @@
 - Hybrid preparser parsing: `.sage` files that mix `R.<x>`-style declarations with ordinary Python class/method code now merge loose Sage extraction with AST structure instead of dropping the whole file to the weaker parser
 - Persistent index cache: indexed source roots now reuse serialized module records across rebuilds, invalidate entries when source files change, and fall back safely when the preferred cache location is not writable
 - Open-document overlay cache: unchanged editor buffers now reuse parsed records across hover/definition/completion requests, update on edits, and clean up on close
+- Index readability cleanup: recent warm-cache and hot-overlay logic is now split into smaller helpers so the indexing path is easier to follow and maintain
 
 ## Current Focus
 
@@ -143,3 +144,4 @@
 - Added a hybrid `.sage` parse path so preparser-heavy files can keep top-level Sage declarations while regaining AST-derived methods, instance tracking, and member completion for the rest of the module.
 - Added a persistent module-cache baseline for indexed source roots, plus cache invalidation on file changes and automatic fallback when the preferred cache directory cannot be written.
 - Added a hot open-document overlay layer so repeated requests against unchanged editor buffers no longer re-parse the same text, while document-close events now drop that overlay state cleanly.
+- Refactored the recent index/cache code into clearer helper functions so warm-cache loading, module storage, document overlays, and cache-eligibility checks are easier to reason about without changing behavior.
