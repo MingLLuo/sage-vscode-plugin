@@ -266,6 +266,60 @@ async function verifyNativeSageLibraryNavigation(
     "expected workspace symbols to include the native PetersenGraph implementation",
   );
 
+  const polynomialRingPosition = positionOfNth(document, "PolynomialRing", 1);
+  const polynomialRingHovers =
+    (await vscode.commands.executeCommand<vscode.Hover[]>(
+      "vscode.executeHoverProvider",
+      uri,
+      polynomialRingPosition,
+    )) ?? [];
+  assert.ok(
+    polynomialRingHovers.some((hover) =>
+      normalizeWhitespace(renderHoverContents(hover)).includes(
+        "globally unique univariate or multivariate polynomial ring",
+      ),
+    ),
+    "expected native Sage hover docs for PolynomialRing",
+  );
+
+  const polynomialRingDefinitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      uri,
+      polynomialRingPosition,
+    )) ?? [];
+  assert.ok(
+    polynomialRingDefinitions.some((definition) => definitionUri(definition).fsPath.endsWith("sage/rings/polynomial/polynomial_ring_constructor.py")),
+    "expected PolynomialRing to resolve into the Sage polynomial ring constructor sources",
+  );
+
+  const ellipticCurvePosition = positionOfNth(document, "EllipticCurve([", 1);
+  const ellipticCurveHovers =
+    (await vscode.commands.executeCommand<vscode.Hover[]>(
+      "vscode.executeHoverProvider",
+      uri,
+      ellipticCurvePosition,
+    )) ?? [];
+  assert.ok(
+    ellipticCurveHovers.some((hover) =>
+      normalizeWhitespace(renderHoverContents(hover)).includes("Construct an elliptic curve."),
+    ),
+    "expected native Sage hover docs for EllipticCurve",
+  );
+
+  const ellipticCurveDefinitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      uri,
+      ellipticCurvePosition,
+    )) ?? [];
+  assert.ok(
+    ellipticCurveDefinitions.some((definition) =>
+      definitionUri(definition).fsPath.endsWith("sage/schemes/elliptic_curves/constructor.py"),
+    ),
+    "expected EllipticCurve to resolve into the Sage elliptic curve constructor sources",
+  );
+
   if (!nativeSageExecutable) {
     return;
   }
@@ -356,6 +410,10 @@ function renderHoverContents(hover: vscode.Hover): string {
       return String(entry);
     })
     .join("\n");
+}
+
+function normalizeWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
 }
 
 function definitionUri(location: vscode.Location | vscode.LocationLink): vscode.Uri {

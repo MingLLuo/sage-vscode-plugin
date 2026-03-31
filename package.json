@@ -14,6 +14,7 @@
     "build": "npm run build --workspace @sage-vscode/syntax-pack && npm run build --workspace @sage-vscode/extension-core",
     "lint": "npm run lint --workspace @sage-vscode/syntax-pack && npm run lint --workspace @sage-vscode/extension-core",
     "test": "npm run test --workspace @sage-vscode/syntax-pack && npm run test --workspace @sage-vscode/extension-core && npm run test:python",
+    "test:native-smoke": "PYTHONPATH=packages/sage-lsp/src python scripts/native_sage_smoke.py",
     "test:extension-host": "npm run test:extension-host --workspace @sage-vscode/extension-core",
     "test:full": "npm run test && npm run test:extension-host",
     "test:python": "PYTHONPATH=packages/sage-lsp/src python -m pytest packages/sage-lsp/tests"
