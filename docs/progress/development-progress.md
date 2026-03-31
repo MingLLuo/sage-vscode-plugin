@@ -10,6 +10,7 @@
 - Syntax package: baseline scaffold added and synced into extension resources
 - Runtime hardening: interpreter launch, path resolution, execution targets, and URI handling aligned
 - LSP host runtime: decoupled from the Sage executable and made compatible with Sage Python 3.9 syntax
+- LSP lifecycle: restart sequencing and configuration notifications hardened
 - Local debugging: repository-level VS Code launch and task scaffolding added
 - Manual testing assets: curated smoke workspace added
 
@@ -62,3 +63,4 @@
 - Added repository-local `.vscode` launch and task definitions so `F5` starts the extension development host after a root build, and enabled source maps for direct extension-side TypeScript debugging.
 - Added a curated manual smoke-test workspace with source-root modules, extra-path modules, `.pyx` coverage, lazy-import cases, source-mapping examples, and a dedicated extension-host launch target.
 - Split the LSP host runtime from the Sage executable, added explicit `sage.languageServer.*` settings, updated startup error reporting, and removed Python 3.10+/3.11+ syntax that broke Sage's bundled Python 3.9.
+- Serialized extension-side restart requests so overlapping configuration and workspace events no longer tear down an in-flight language-server connection, and added an explicit `workspace/didChangeConfiguration` handler on the server.

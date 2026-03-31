@@ -628,3 +628,35 @@ Fix the extension-host startup failure caused by launching `sage-lsp` inside Sag
 
 - Next task: add extension-host smoke coverage
 - Risks or blockers: users may still need to set `sage.languageServer.pythonPath` explicitly when VS Code is launched without access to the intended Python environment
+
+## Entry 22
+
+- Date: 2026-03-31
+- Task ID: RUNTIME-003
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `2c4f3ef`
+
+### Goal
+
+Stop the extension from disposing its own language-server connection when several restart triggers arrive close together
+during activation and workspace configuration churn.
+
+### Decisions
+
+- Decision: serialize language-server restarts in the extension and coalesce overlapping restart requests into a single lifecycle loop.
+- Reason: concurrent `start()` and `stop()` calls on different `LanguageClient` instances were the most plausible explanation for repeated startup lines followed by a clean exit code.
+- Decision: explicitly handle `workspace/didChangeConfiguration` on the server and stop asking the client library to auto-forward configuration changes.
+- Reason: the extension already owns restart-on-config-change, so duplicate notifications only added noise without value.
+
+### Verification
+
+- Checks run:
+  - `npm run test`
+  - protocol-level stdio probe: `initialize -> initialized -> workspace/didChangeConfiguration -> didOpen -> hover`
+- Result: repository tests stayed green, the manual probe kept the server alive after configuration notifications, and `stderr` stayed empty
+
+### Follow-ups
+
+- Next task: add extension-host smoke coverage
+- Risks or blockers: the extension lifecycle fix is covered by protocol probing and repository tests, but not yet by a true VS Code extension-host automation layer
