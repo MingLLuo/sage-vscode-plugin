@@ -5,6 +5,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from lsprotocol.types import (
     CompletionList,
+    CompletionItem,
     CompletionParams,
     Diagnostic,
     DiagnosticSeverity,
@@ -146,10 +147,13 @@ def create_server() -> SageLanguageServer:
             params.position.character,
         )
         if dotted_target and server.workspace_index is not None:
-            items = server.workspace_index.member_completion_items(record, dotted_target, prefix)
+            items = [
+                _as_completion_item(item)
+                for item in server.workspace_index.member_completion_items(record, dotted_target, prefix)
+            ]
             return CompletionList(is_incomplete=False, items=items)
 
-        items = server.workspace_index.completion_items(record, prefix)
+        items = [_as_completion_item(item) for item in server.workspace_index.completion_items(record, prefix)]
         return CompletionList(is_incomplete=False, items=items)
 
     @server.feature("textDocument/signatureHelp")
@@ -405,6 +409,17 @@ def _signature_help_from_runtime_symbol(
         ],
         active_signature=0,
         active_parameter=clamped_active_parameter,
+    )
+
+
+def _as_completion_item(item: CompletionItem | dict[str, object]) -> CompletionItem:
+    if isinstance(item, CompletionItem):
+        return item
+
+    return CompletionItem(
+        label=str(item["label"]),
+        kind=int(item["kind"]) if "kind" in item and item["kind"] is not None else None,
+        detail=str(item["detail"]) if "detail" in item and item["detail"] is not None else None,
     )
 
 

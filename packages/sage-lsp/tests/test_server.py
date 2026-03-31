@@ -101,6 +101,7 @@ def test_server_handlers_resolve_hover_definition_completion_and_documentation()
             position=Position(line=2, character=0),
         )
     )
+    assert all(not isinstance(item, dict) for item in completion.items)
     labels = {item["label"] if isinstance(item, dict) else item.label for item in completion.items}
     assert "ZZ" in labels
     assert "x" in labels
@@ -301,6 +302,7 @@ def test_server_resolves_static_dotted_members_and_member_completion(tmp_path: P
             position=Position(line=3, character=22),
         )
     )
+    assert all(not isinstance(item, dict) for item in completion.items)
     labels = {item["label"] if isinstance(item, dict) else item.label for item in completion.items}
     assert "CycleGraph" in labels
 
