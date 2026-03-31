@@ -276,3 +276,35 @@ Run the full local bootstrap validation chain after dependency installation and 
 
 - Next task: first real `.sage` preprocessing slice
 - Risks or blockers: extension tests still cover only a placeholder path
+
+## Entry 11
+
+- Date: 2026-03-31
+- Task ID: LSP-002
+- Scope: lsp
+- Related milestone: Source mapping v1
+- Commit: `02de2b4`
+
+### Goal
+
+Land the first real `.sage` preprocessing feature by rewriting caret exponent syntax into Python power syntax while preserving usable source-position mapping.
+
+### Decisions
+
+- Decision: support only standalone code-region `^` rewrites in v1.
+- Reason: this delivers a real Sage-specific transform without overreaching into a full preparser.
+- Decision: skip strings, comments, and triple-quoted blocks.
+- Reason: these regions should remain lexically stable in the first mapping implementation.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests`
+  - `npm run build`
+  - `npm run test`
+- Result: Python tests passed with 6 total tests; repository build and test commands remained green
+
+### Follow-ups
+
+- Next task: LSP-003
+- Risks or blockers: only caret rewrite is supported, and hover currently uses preprocessing only for preview rather than full diagnostics/navigation
