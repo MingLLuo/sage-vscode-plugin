@@ -15,6 +15,7 @@
 - Manual testing assets: curated smoke workspace added
 - Native source support: `.pyx`, `.pxd`, and `.pxi` now participate in indexing, navigation, and highlighting
 - VS Code dev helper: one-command repository prep and launch script added
+- Standard LSP baseline: workspace symbols, references, rename, and unresolved-import diagnostics now work through the server
 
 ## Current Focus
 
@@ -22,7 +23,7 @@
 2. Feed source mapping into diagnostics, references, and rename paths.
 3. Add extension-host integration tests beyond the current unit suite.
 4. Layer runtime-aware Sage introspection on top of the static index where useful.
-5. Grow native-source support from lightweight navigation into diagnostics, references, and richer Cython parsing.
+5. Add signature help, semantic tokens, and richer diagnostics on top of the current LSP baseline.
 
 ## Milestone Tracker
 
@@ -43,6 +44,7 @@
 | LSP host runtime split | Done | The server now runs in a dedicated Python environment, configures its own runtime path, and remains source-compatible with Sage Python 3.9. |
 | Native source support | Done | The plugin now treats `.pyx`, `.pxd`, and `.pxi` as first-class documents for highlighting, indexing, and lightweight navigation. |
 | Developer workflow | Done | A helper script now prepares the repository and opens VS Code with the local launch configs ready to use. |
+| LSP baseline | Done | Workspace symbols, references, rename, and conservative diagnostics now sit alongside hover, completion, definition, and document symbols. |
 
 ## Change Log Notes
 
@@ -73,3 +75,4 @@
 - Registered native Sage Cython files in the extension so language-server activation, document selection, and file watching now cover the same source set as the parser and grammar.
 - Replaced the placeholder syntax grammar with a broader Sage/Cython grammar and expanded the smoke workspace with `.pxd` and `.pxi` fixtures for manual validation.
 - Added a repository-local `dev-vscode.sh` helper plus root npm shortcuts so contributors can bootstrap, build, and open the project in VS Code with a single command.
+- Added a standard LSP baseline slice with workspace symbol search, cross-file references, rename edits, and unresolved-import diagnostics, then covered those request paths with `pygls` tests.

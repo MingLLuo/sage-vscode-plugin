@@ -787,3 +787,42 @@ Give contributors a single command that can prepare the repository and open the 
 
 - Next task: extension-host smoke automation remains the next development workflow target
 - Risks or blockers: opening the GUI still depends on the user having the `code` CLI available in their PATH
+
+## Entry 27
+
+- Date: 2026-03-31
+- Task ID: LSP-009
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `4160448`
+
+### Goal
+
+Push the plugin closer to the everyday baseline that users expect from tools like rust-analyzer or Python LSPs instead
+of stopping at hover and definition only.
+
+### Decisions
+
+- Decision: implement workspace symbols, references, rename, and diagnostics as static index-driven features first.
+- Reason: these are high-value baseline capabilities that do not need full runtime introspection to become useful.
+- Decision: keep diagnostics conservative and limited to unresolved imports for now.
+- Reason: low-noise diagnostics are more valuable than a noisy pseudo-checker when the server still lacks full type and
+  runtime knowledge.
+- Decision: treat renamed import aliases differently from same-name imports.
+- Reason: `from pkg import helper` should follow the underlying symbol across files, while `from pkg import helper as
+  local_helper` should remain a local alias rename.
+
+### Verification
+
+- Checks run:
+  - `PYTHONPATH=packages/sage-lsp/src python -m pytest packages/sage-lsp/tests/test_index.py packages/sage-lsp/tests/test_server.py`
+  - `npm run lint`
+  - `npm run test`
+- Result: the request-level LSP suite now covers workspace symbol search, cross-file references, rename edits, and
+  diagnostics publication without regressing the existing extension or server tests
+
+### Follow-ups
+
+- Next task: add signature help, semantic tokens, and extension-host automation on top of the current baseline
+- Risks or blockers: references and rename are still lexical/static and will need deeper `.sage` source mapping before
+  they can match runtime-preparsed code perfectly

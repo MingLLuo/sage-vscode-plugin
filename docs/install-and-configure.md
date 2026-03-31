@@ -28,7 +28,8 @@ executable used to run `.sage` files.
 5. Leave `sage.languageServer.pythonPath = auto` to use the active Python environment for the language server, or set it explicitly if VS Code cannot find the right Python on its own.
 6. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
 7. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
-8. Open or create a `.sage` file to exercise hover, completion, definition, document symbols, and docs requests.
+8. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, document symbols,
+   workspace symbols, diagnostics, and docs requests.
 
 ## Runtime Split
 

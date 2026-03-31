@@ -64,11 +64,12 @@ tracked, and how the current static-analysis baseline should be extended safely.
   Parses Python, loose `.sage`, and lightweight `.pyx`/`.pxd`/`.pxi` files into a common module model.
 - `src/sage_lsp/index.py`
   Builds workspace state, merges native declaration and implementation modules, and resolves symbols through imports,
-  star imports, and lazy imports.
+  star imports, lazy imports, workspace symbol search, references, rename edits, and import diagnostics.
 - `src/sage_lsp/source_map.py`
   Hosts the first `.sage` preprocessing and bidirectional position mapping primitives.
 - `src/sage_lsp/server.py`
-  Wires the index and parser into `pygls` request handlers.
+  Wires the index and parser into `pygls` request handlers for hover, completion, definition, references, rename,
+  workspace symbols, and diagnostics publication.
 - `tests/fixtures/sage_src_lite`
   Reduced Sage-aligned source corpus used for parser and index regression tests.
 

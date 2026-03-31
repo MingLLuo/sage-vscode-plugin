@@ -24,6 +24,8 @@ indexing, and Sage-aware `.sage` preprocessing primitives.
 - The extension now launches the language server with a dedicated Python runtime instead of assuming Sage's bundled Python can host `pygls`.
 - The language server provides static hover, completion, definition, document symbols, documentation requests, and
   reduced Sage fixture-backed source indexing.
+- The language server now covers a more standard editor baseline with workspace symbols, references, rename, and
+  low-noise unresolved-import diagnostics.
 - Native Sage/Cython sources now participate in the editor experience through `.pyx`, `.pxd`, and `.pxi` registration,
   lightweight `cimport` parsing, and richer syntax highlighting.
 - `.sage` source mapping v1 currently rewrites standalone exponent carets while preserving bidirectional column maps.
@@ -54,5 +56,5 @@ indexing, and Sage-aware `.sage` preprocessing primitives.
 ## Next Steps
 
 1. Extend `.sage` preprocessing beyond the initial caret rewrite.
-2. Feed source mapping into diagnostics and navigation paths.
-3. Add deeper extension-host integration coverage and runtime-aware fallbacks.
+2. Feed source mapping into richer diagnostics and navigation paths.
+3. Add deeper extension-host integration coverage, signature help, and semantic token support.
