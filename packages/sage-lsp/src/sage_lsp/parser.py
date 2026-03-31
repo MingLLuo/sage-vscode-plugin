@@ -388,32 +388,17 @@ def parse_lazy_import_statement(module_name: str, node: ast.stmt) -> list[Import
 def parse_lazy_import_line(line: str, line_number: int) -> list[ImportBinding]:
     if "lazy_import(" not in line:
         return []
-    module_match = re.search(r"""lazy_import\(\s*["']([^"']+)["']""", line)
-    names_match = re.findall(r"""["']([^"']+)["']""", line)
-    if module_match is None or len(names_match) < 2:
+
+    try:
+        parsed = ast.parse(line)
+    except SyntaxError:
         return []
-    imported_module = module_match.group(1)
-    raw_names = names_match[1:]
-    if len(raw_names) >= 4 and len(raw_names) % 2 == 1:
-        midpoint = len(raw_names) // 2
-        names = raw_names[: midpoint + 1]
-        aliases = raw_names[midpoint + 1 :]
-    else:
-        names = raw_names
-        aliases = raw_names
-    bindings: list[ImportBinding] = []
-    for index, name in enumerate(names):
-        alias = aliases[index] if index < len(aliases) else name
-        bindings.append(
-            ImportBinding(
-                alias=alias,
-                module_name=imported_module,
-                target_name=name,
-                source_range=SourceRange.from_offsets(line_number, max(0, line.find(alias)), line_number, max(0, line.find(alias)) + len(alias)),
-                is_lazy=True,
-            )
-        )
-    return bindings
+
+    if not parsed.body:
+        return []
+
+    bindings = parse_lazy_import_statement("document::line", parsed.body[0])
+    return [relocate_binding_line(binding, line_number) for binding in bindings]
 
 
 def parse_string_or_list(value: Optional[ast.AST]) -> list[str]:
@@ -430,6 +415,24 @@ def parse_string_or_list(value: Optional[ast.AST]) -> list[str]:
 
 def parse_aliases(value: Optional[ast.AST]) -> list[str]:
     return parse_string_or_list(value)
+
+
+def relocate_binding_line(binding: ImportBinding, line_number: int) -> ImportBinding:
+    line_offset = line_number - (binding.source_range.start.line + 1)
+    if line_offset == 0:
+        return binding
+    return ImportBinding(
+        alias=binding.alias,
+        module_name=binding.module_name,
+        target_name=binding.target_name,
+        source_range=SourceRange.from_offsets(
+            binding.source_range.start.line + 1 + line_offset,
+            binding.source_range.start.character,
+            binding.source_range.end.line + 1 + line_offset,
+            binding.source_range.end.character,
+        ),
+        is_lazy=binding.is_lazy,
+    )
 
 
 def is_lazy_import_call(call: ast.Call) -> bool:

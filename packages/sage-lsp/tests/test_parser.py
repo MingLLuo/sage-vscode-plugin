@@ -17,6 +17,19 @@ lazy_import("sage.functions.other", ["sqrt", "factorial"], ["root", "factorial"]
     assert record.bindings["factorial"].is_lazy is True
 
 
+def test_parse_loose_sage_module_extracts_lazy_import_aliases() -> None:
+    source = """
+lazy_import("external_series", "alternating_square_sum", "alt_square_sum")
+lazy_import("local_docs", ["PolynomialNotebook"], ["NotebookAlias"])
+"""
+    record = parse_module("document::example", Path("example.sage"), source)
+
+    assert record.bindings["alt_square_sum"].module_name == "external_series"
+    assert record.bindings["alt_square_sum"].target_name == "alternating_square_sum"
+    assert record.bindings["NotebookAlias"].module_name == "local_docs"
+    assert record.bindings["NotebookAlias"].target_name == "PolynomialNotebook"
+
+
 def test_parse_pyx_module_extracts_top_level_symbols() -> None:
     source = '''
 """
