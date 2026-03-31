@@ -22,6 +22,7 @@ from lsprotocol.types import (
     MarkupContent,
     MarkupKind,
     Position,
+    PublishDiagnosticsParams,
     ReferenceParams,
     Range,
     RenameParams,
@@ -249,12 +250,16 @@ def _record_for_uri(server: SageLanguageServer, uri: str) -> Tuple[Optional[Modu
 
 def _publish_diagnostics(server: SageLanguageServer, uri: str) -> None:
     if server.workspace_index is None or not server.environment.analysis.enable_diagnostics:
-        server.publish_diagnostics(uri, [])
+        server.text_document_publish_diagnostics(
+            PublishDiagnosticsParams(uri=uri, diagnostics=[])
+        )
         return
 
     record, _ = _record_for_uri(server, uri)
     if record is None:
-        server.publish_diagnostics(uri, [])
+        server.text_document_publish_diagnostics(
+            PublishDiagnosticsParams(uri=uri, diagnostics=[])
+        )
         return
 
     diagnostics = [
@@ -266,7 +271,9 @@ def _publish_diagnostics(server: SageLanguageServer, uri: str) -> None:
         )
         for entry in server.workspace_index.diagnostics_for_record(record)
     ]
-    server.publish_diagnostics(uri, diagnostics)
+    server.text_document_publish_diagnostics(
+        PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
+    )
 
 
 def _resolve_request_symbol(

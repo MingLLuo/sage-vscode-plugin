@@ -285,8 +285,8 @@ def test_server_publishes_import_diagnostics_on_open() -> None:
         TextDocumentItem(uri=uri, language_id="python", version=1, text=source)
     )
 
-    published: list[tuple[str, list[object]]] = []
-    server.publish_diagnostics = lambda target_uri, diagnostics: published.append((target_uri, diagnostics))  # type: ignore[assignment]
+    published: list[object] = []
+    server.text_document_publish_diagnostics = published.append  # type: ignore[assignment]
 
     did_open_handler = server.protocol.fm.features["textDocument/didOpen"]
     did_open_handler(
@@ -296,8 +296,8 @@ def test_server_publishes_import_diagnostics_on_open() -> None:
     )
 
     assert published
-    assert published[0][0] == uri
-    assert any("missing.module" in diagnostic.message for diagnostic in published[0][1])
+    assert published[0].uri == uri
+    assert any("missing.module" in diagnostic.message for diagnostic in published[0].diagnostics)
 
 
 def _write_module(root: Path, relative_path: str, contents: str) -> None:
