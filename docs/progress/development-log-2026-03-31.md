@@ -191,3 +191,88 @@ Add onboarding documents, align root scripts with package order, and introduce a
 - Next task: first `.sage` preprocessing design/implementation slice
 - Risks or blockers: npm-based build and extension-host tests were not run because this new repository has not installed Node dependencies yet
 
+## Entry 8
+
+- Date: 2026-03-31
+- Task ID: OPS-002
+- Scope: repo
+- Related milestone: Repository bootstrap
+- Commit: `9ccef30`
+
+### Goal
+
+Fix the first root-level `npm install` failure so Node dependencies can be installed and the real build/test chain can start.
+
+### Decisions
+
+- Decision: remove the non-essential `workspace:*` dependency from the extension package.
+- Reason: syntax assets are already copied into extension-owned resources by the sync script, so runtime dependency wiring was unnecessary.
+
+### Verification
+
+- Checks run: reran `npm install`
+- Result: root install succeeded after the manifest fix
+
+### Follow-ups
+
+- Next task: OPS-003
+- Risks or blockers: build-time TypeScript issues could still appear after dependencies are installed
+
+## Entry 9
+
+- Date: 2026-03-31
+- Task ID: OPS-003
+- Scope: extension
+- Related milestone: Repository bootstrap
+- Commit: `211c49c`
+
+### Goal
+
+Fix the first TypeScript build error exposed by the newly installed toolchain.
+
+### Decisions
+
+- Decision: treat the language client instance itself as the subscription and await `start()` separately.
+- Reason: `start()` returned a promise, not a disposable object expected by VS Code subscriptions.
+
+### Verification
+
+- Checks run: `npm run build`
+- Result: root build succeeded
+
+### Follow-ups
+
+- Next task: OPS-004
+- Risks or blockers: full lint and test chain still needed to be exercised
+
+## Entry 10
+
+- Date: 2026-03-31
+- Task ID: OPS-004
+- Scope: repo
+- Related milestone: Repository bootstrap
+- Commit: pending
+
+### Goal
+
+Run the full local bootstrap validation chain after dependency installation and initial build fixes.
+
+### Decisions
+
+- Decision: keep the validation path repository-root first, so CI and local development use the same commands.
+- Reason: one canonical command chain reduces drift between developer machines and automation.
+
+### Verification
+
+- Checks run:
+  - `npm install`
+  - `python -m pip install -e './packages/sage-lsp[dev]'`
+  - `npm run build`
+  - `npm run lint`
+  - `npm run test`
+- Result: all commands completed successfully
+
+### Follow-ups
+
+- Next task: first real `.sage` preprocessing slice
+- Risks or blockers: extension tests still cover only a placeholder path

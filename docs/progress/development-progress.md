@@ -3,7 +3,7 @@
 ## Status Snapshot
 
 - Date: 2026-03-31
-- Repository: bootstrap nearing completion
+- Repository: bootstrap complete and locally validated
 - Process tracking: baseline in place
 - Extension package: baseline scaffold added
 - Language server package: baseline scaffold added
@@ -12,15 +12,15 @@
 ## Current Focus
 
 1. Start the first implementation-facing design note for `.sage` preprocessing.
-2. Add the first real extension-host test path once dependencies are installed.
+2. Add the first real extension-host test path beyond the placeholder test.
 3. Add the first server-side hover or health check smoke run.
-4. Fix bootstrap package wiring issues discovered during first dependency install.
+4. Begin real Sage-aware feature work on top of the validated scaffold.
 
 ## Milestone Tracker
 
 | Milestone | Status | Notes |
 | --- | --- | --- |
-| Repository bootstrap | Done | Root docs, package scaffolds, onboarding docs, and CI placeholder are now present. |
+| Repository bootstrap | Done | Root docs, package scaffolds, onboarding docs, CI placeholder, and local bootstrap validation are complete. |
 | Process baseline | Done | Commit policy, task flow, and progress templates are now committed. |
 | Design baseline | Done | Initial overview, workspace, server boundary, and source mapping notes are committed. |
 | Extension scaffold | Done | Minimal VS Code client package, commands, configuration model, and language client wiring are committed. |
@@ -38,3 +38,4 @@
 - Added the first `syntax-pack` scaffold plus a sync script that materializes extension-owned runtime assets.
 - Added developer onboarding docs and a bootstrap GitHub Actions workflow aligned with root scripts.
 - First dependency-install pass exposed and isolated a Node workspace wiring issue in the extension package manifest.
+- Installed Node and Python dependencies locally, corrected bootstrap lifecycle typing, and verified `npm run build`, `npm run lint`, and `npm run test`.
