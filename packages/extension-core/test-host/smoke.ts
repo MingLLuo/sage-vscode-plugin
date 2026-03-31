@@ -24,22 +24,82 @@ export async function run(): Promise<void> {
   await config.update("analysis.enableRuntimeIntrospection", false, vscode.ConfigurationTarget.Workspace);
   await config.update("docs.showOnHover", true, vscode.ConfigurationTarget.Workspace);
 
-  const uri = vscode.Uri.joinPath(workspaceFolder.uri, "src", "01_hover_and_definition.sage");
-  const document = await vscode.workspace.openTextDocument(uri);
-  await vscode.window.showTextDocument(document);
+  const bootstrapUri = vscode.Uri.joinPath(workspaceFolder.uri, "src", "01_hover_and_definition.sage");
+  const bootstrapDocument = await vscode.workspace.openTextDocument(bootstrapUri);
+  await vscode.window.showTextDocument(bootstrapDocument);
 
   await waitForCommand("sage.__test.getLifecycleSnapshot");
   const initialSnapshot = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
   assert.ok(initialSnapshot.launchCount >= 1, "expected the language client to launch during activation");
   assert.equal(initialSnapshot.unexpectedCloseCount, 0, "expected no unexpected client shutdowns before restart");
 
+  await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri));
+  await assertEventually(() => verifyWorkspaceReferencesRenameAndSymbols(workspaceFolder.uri));
+  await assertEventually(() => verifyNativeCythonNavigation(workspaceFolder.uri));
+
+  if (process.env.SAGE_TEST_NATIVE_SOURCE_ROOT) {
+    await assertEventually(() =>
+      verifyNativeSageLibraryNavigation(
+        workspaceFolder.uri,
+        config,
+        process.env.SAGE_TEST_NATIVE_SOURCE_ROOT ?? "",
+        process.env.SAGE_TEST_NATIVE_SAGE_EXECUTABLE,
+      ),
+    );
+  }
+
+  const restartBaseline = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
+
+  const afterFirstRestart = await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
+  assert.equal(
+    afterFirstRestart.launchCount,
+    restartBaseline.launchCount + 1,
+    "expected the first managed restart to create exactly one additional client launch",
+  );
+  assert.ok(
+    afterFirstRestart.managedCloseCount >= restartBaseline.managedCloseCount + 1,
+    "expected the first managed restart to record a managed close",
+  );
+  assert.equal(
+    afterFirstRestart.unexpectedCloseCount,
+    restartBaseline.unexpectedCloseCount,
+    "expected no unexpected closes during the first managed restart",
+  );
+
+  const afterSecondRestart = await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
+  assert.equal(
+    afterSecondRestart.launchCount,
+    afterFirstRestart.launchCount + 1,
+    "expected the second managed restart to create exactly one additional client launch",
+  );
+  assert.ok(
+    afterSecondRestart.managedCloseCount >= afterFirstRestart.managedCloseCount + 1,
+    "expected the second managed restart to record another managed close",
+  );
+  assert.equal(
+    afterSecondRestart.unexpectedCloseCount,
+    afterFirstRestart.unexpectedCloseCount,
+    "expected no unexpected closes during the second managed restart",
+  );
+
+  const uri = vscode.Uri.joinPath(workspaceFolder.uri, "src", "01_hover_and_definition.sage");
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
   const hoverPosition = positionOfNth(document, "make_demo_matrix", 2);
-  const hovers =
-    (await vscode.commands.executeCommand<vscode.Hover[]>(
-      "vscode.executeHoverProvider",
-      uri,
-      hoverPosition,
-    )) ?? [];
+  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", uri, hoverPosition)) ?? [];
+  assert.ok(
+    hovers.some((hover) => renderHoverContents(hover).includes("looks like a matrix")),
+    "expected hover results to remain available after managed restarts",
+  );
+}
+
+async function verifyWorkspaceHoverDefinitionCompletion(workspaceUri: vscode.Uri): Promise<void> {
+  const uri = vscode.Uri.joinPath(workspaceUri, "src", "01_hover_and_definition.sage");
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+
+  const hoverPosition = positionOfNth(document, "make_demo_matrix", 2);
+  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", uri, hoverPosition)) ?? [];
   assert.ok(
     hovers.some((hover) => renderHoverContents(hover).includes("looks like a matrix")),
     "expected hover text for make_demo_matrix from the workspace fixture",
@@ -69,49 +129,160 @@ export async function run(): Promise<void> {
     completionLabels.has("summarize_coefficients"),
     "expected completion items to include summarize_coefficients from the workspace fixture",
   );
+}
 
-  const afterFirstRestart = await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
-  assert.equal(
-    afterFirstRestart.launchCount,
-    initialSnapshot.launchCount + 1,
-    "expected the first managed restart to create exactly one additional client launch",
-  );
-  assert.ok(
-    afterFirstRestart.managedCloseCount >= initialSnapshot.managedCloseCount + 1,
-    "expected the first managed restart to record a managed close",
-  );
-  assert.equal(
-    afterFirstRestart.unexpectedCloseCount,
-    initialSnapshot.unexpectedCloseCount,
-    "expected no unexpected closes during the first managed restart",
-  );
+async function verifyWorkspaceReferencesRenameAndSymbols(workspaceUri: vscode.Uri): Promise<void> {
+  const uri = vscode.Uri.joinPath(workspaceUri, "src", "01_hover_and_definition.sage");
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
 
-  const afterSecondRestart = await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
-  assert.equal(
-    afterSecondRestart.launchCount,
-    afterFirstRestart.launchCount + 1,
-    "expected the second managed restart to create exactly one additional client launch",
-  );
-  assert.ok(
-    afterSecondRestart.managedCloseCount >= afterFirstRestart.managedCloseCount + 1,
-    "expected the second managed restart to record another managed close",
-  );
-  assert.equal(
-    afterSecondRestart.unexpectedCloseCount,
-    afterFirstRestart.unexpectedCloseCount,
-    "expected no unexpected closes during the second managed restart",
-  );
-
-  const postRestartHovers =
-    (await vscode.commands.executeCommand<vscode.Hover[]>(
-      "vscode.executeHoverProvider",
+  const helperPosition = positionOfNth(document, "make_demo_matrix", 2);
+  const references =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeReferenceProvider",
       uri,
-      hoverPosition,
+      helperPosition,
+    )) ?? [];
+  const referenceUris = new Set(references.map((reference) => definitionUri(reference).fsPath));
+  assert.ok(referenceUris.size >= 2, "expected references for make_demo_matrix across definition and usage sites");
+  assert.ok(
+    [...referenceUris].some((entry) => entry.endsWith("src/local_docs.py")),
+    "expected references to include the function definition module",
+  );
+
+  const renameEdit =
+    await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
+      "vscode.executeDocumentRenameProvider",
+      uri,
+      helperPosition,
+      "make_demo_matrix_renamed",
+    );
+  assert.ok(renameEdit, "expected a rename edit for make_demo_matrix");
+  const renameEntries = renameEdit.entries().map(([targetUri]) => targetUri.fsPath);
+  assert.ok(renameEntries.some((entry) => entry.endsWith("src/local_docs.py")));
+  assert.ok(renameEntries.some((entry) => entry.endsWith("src/01_hover_and_definition.sage")));
+
+  const symbolsUri = vscode.Uri.joinPath(workspaceUri, "src", "05_symbols_and_locals.sage");
+  const symbols =
+    (await vscode.commands.executeCommand<Array<vscode.DocumentSymbol | vscode.SymbolInformation>>(
+      "vscode.executeDocumentSymbolProvider",
+      symbolsUri,
+    )) ?? [];
+  const symbolNames = new Set(flattenSymbolNames(symbols));
+  for (const expected of ["LocalContainer", "local_builder", "GAMMA", "R", "z"]) {
+    assert.ok(symbolNames.has(expected), `expected document symbols to include ${expected}`);
+  }
+
+  const workspaceSymbols =
+    (await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+      "vscode.executeWorkspaceSymbolProvider",
+      "PolynomialNotebook",
     )) ?? [];
   assert.ok(
-    postRestartHovers.some((hover) => renderHoverContents(hover).includes("looks like a matrix")),
-    "expected hover results to remain available after managed restarts",
+    workspaceSymbols.some((entry) => entry.name === "PolynomialNotebook" && entry.location.uri.fsPath.endsWith("src/local_docs.py")),
+    "expected workspace symbols to include PolynomialNotebook from the local fixture module",
   );
+}
+
+async function verifyNativeCythonNavigation(workspaceUri: vscode.Uri): Promise<void> {
+  const uri = vscode.Uri.joinPath(workspaceUri, "src", "cythonish_bridge.pyx");
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+
+  const nativeAccumulatorPosition = positionOfNth(document, "NativeAccumulator", 1);
+  const definitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      uri,
+      nativeAccumulatorPosition,
+    )) ?? [];
+  assert.ok(
+    definitions.some((definition) => definitionUri(definition).fsPath.endsWith("src/native_support.pxd")),
+    "expected NativeAccumulator to resolve into native_support.pxd",
+  );
+
+  const symbols =
+    (await vscode.commands.executeCommand<Array<vscode.DocumentSymbol | vscode.SymbolInformation>>(
+      "vscode.executeDocumentSymbolProvider",
+      uri,
+    )) ?? [];
+  const symbolNames = new Set(flattenSymbolNames(symbols));
+  for (const expected of ["fast_square", "StepCounter", "stepped_square"]) {
+    assert.ok(symbolNames.has(expected), `expected Cython symbols to include ${expected}`);
+  }
+}
+
+async function verifyNativeSageLibraryNavigation(
+  workspaceUri: vscode.Uri,
+  config: vscode.WorkspaceConfiguration,
+  nativeSourceRoot: string,
+  nativeSageExecutable: string | undefined,
+): Promise<void> {
+  await config.update(
+    "analysis.sourceRoots",
+    [vscode.Uri.joinPath(workspaceUri, "src").fsPath, nativeSourceRoot],
+    vscode.ConfigurationTarget.Workspace,
+  );
+  await config.update(
+    "analysis.enableRuntimeIntrospection",
+    Boolean(nativeSageExecutable),
+    vscode.ConfigurationTarget.Workspace,
+  );
+  if (nativeSageExecutable) {
+    await config.update("interpreter.path", nativeSageExecutable, vscode.ConfigurationTarget.Workspace);
+  }
+
+  await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
+
+  const uri = vscode.Uri.joinPath(workspaceUri, "src", "06_runtime_graphs_and_number_theory.sage");
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+
+  const graphPosition = positionOfNth(document, "graphs.PetersenGraph", 1, "graphs.".length);
+  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", uri, graphPosition)) ?? [];
+  assert.ok(
+    hovers.some((hover) => renderHoverContents(hover).includes("Petersen Graph")),
+    "expected native Sage hover docs for graphs.PetersenGraph",
+  );
+
+  const definitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      uri,
+      graphPosition,
+    )) ?? [];
+  assert.ok(
+    definitions.some((definition) => definitionUri(definition).fsPath.endsWith("sage/graphs/generators/smallgraphs.py")),
+    "expected graphs.PetersenGraph to resolve into the Sage graph generator sources",
+  );
+
+  const workspaceSymbols =
+    (await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+      "vscode.executeWorkspaceSymbolProvider",
+      "PetersenGraph",
+    )) ?? [];
+  assert.ok(
+    workspaceSymbols.some((entry) => entry.location.uri.fsPath.endsWith("sage/graphs/generators/smallgraphs.py")),
+    "expected workspace symbols to include the native PetersenGraph implementation",
+  );
+
+  if (!nativeSageExecutable) {
+    return;
+  }
+
+  const signaturePosition = positionOfNth(document, "EllipticCurve([", 1, "EllipticCurve(".length);
+  const signatureHelp = await vscode.commands.executeCommand<vscode.SignatureHelp>(
+    "vscode.executeSignatureHelpProvider",
+    uri,
+    signaturePosition,
+    "(",
+  );
+  if (signatureHelp?.signatures?.length) {
+    assert.ok(
+      signatureHelp.signatures.some((signature) => signature.label.includes("EllipticCurve")),
+      "expected runtime signature help for EllipticCurve when the runtime supplies signatures",
+    );
+  }
 }
 
 async function waitForCommand(command: string, timeoutMs = 15_000): Promise<void> {
@@ -130,6 +301,27 @@ async function lifecycleSnapshot(command: string): Promise<LifecycleSnapshot> {
   const result = await vscode.commands.executeCommand<LifecycleSnapshot>(command);
   assert.ok(result, `expected ${command} to return a lifecycle snapshot`);
   return result;
+}
+
+async function assertEventually(
+  check: () => Promise<void>,
+  timeoutMs = 15_000,
+  intervalMs = 200,
+): Promise<void> {
+  const start = Date.now();
+  let lastError: unknown;
+
+  while (Date.now() - start < timeoutMs) {
+    try {
+      await check();
+      return;
+    } catch (error) {
+      lastError = error;
+      await delay(intervalMs);
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("timed out waiting for the expected editor state");
 }
 
 function positionOfNth(
@@ -168,6 +360,19 @@ function renderHoverContents(hover: vscode.Hover): string {
 
 function definitionUri(location: vscode.Location | vscode.LocationLink): vscode.Uri {
   return "targetUri" in location ? location.targetUri : location.uri;
+}
+
+function flattenSymbolNames(
+  symbols: Array<vscode.DocumentSymbol | vscode.SymbolInformation>,
+): string[] {
+  const names: string[] = [];
+  for (const symbol of symbols) {
+    names.push(symbol.name);
+    if ("children" in symbol) {
+      names.push(...flattenSymbolNames(symbol.children));
+    }
+  }
+  return names;
 }
 
 async function delay(milliseconds: number): Promise<void> {

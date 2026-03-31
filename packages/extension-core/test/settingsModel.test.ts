@@ -21,6 +21,7 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
     showDocsOnHover: false,
     loggingLevel: "debug",
     runTarget: "terminal",
+    cleanupGeneratedPython: true,
     notebookSupportEnabled: true,
   };
 

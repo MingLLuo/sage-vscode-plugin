@@ -19,6 +19,7 @@ export interface SageSettings {
   showDocsOnHover: boolean;
   loggingLevel: LoggingLevel;
   runTarget: RunTarget;
+  cleanupGeneratedPython: boolean;
   notebookSupportEnabled: boolean;
 }
 

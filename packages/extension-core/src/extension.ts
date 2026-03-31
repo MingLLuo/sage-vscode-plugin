@@ -211,7 +211,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         : getOrCreateRunTerminal();
       const command = shouldRunInRepl(settings.runTarget)
         ? buildReplLoadCommand(editor.document.uri.fsPath)
-        : buildRunFileCommand(settings, editor.document.uri.fsPath);
+        : buildRunFileCommand(
+            {
+              interpreterPath: settings.interpreterPath,
+              interpreterArgs: settings.interpreterArgs,
+              cleanupGeneratedPython: settings.cleanupGeneratedPython,
+            },
+            editor.document.uri.fsPath,
+          );
       terminal.sendText(command, true);
       terminal.show(true);
     }),

@@ -128,11 +128,13 @@
         "sage.interpreter.path": {
           "type": "string",
           "default": "sage",
+          "scope": "resource",
           "markdownDescription": "Path to the Sage executable used for running files and for Sage-aware runtime context."
         },
         "sage.interpreter.args": {
           "type": "array",
           "default": [],
+          "scope": "resource",
           "items": {
             "type": "string"
           },
@@ -141,11 +143,13 @@
         "sage.languageServer.pythonPath": {
           "type": "string",
           "default": "auto",
+          "scope": "resource",
           "markdownDescription": "Python executable used to run the language server. Use `auto` to prefer the selected interpreter when it is already a Python executable, otherwise fall back to the active Python environment."
         },
         "sage.languageServer.pythonArgs": {
           "type": "array",
           "default": [],
+          "scope": "resource",
           "items": {
             "type": "string"
           },
@@ -154,6 +158,7 @@
         "sage.analysis.mode": {
           "type": "string",
           "default": "default",
+          "scope": "resource",
           "enum": [
             "light",
             "default",
@@ -164,6 +169,7 @@
         "sage.analysis.extraPaths": {
           "type": "array",
           "default": [],
+          "scope": "resource",
           "items": {
             "type": "string"
           },
@@ -172,6 +178,7 @@
         "sage.analysis.sourceRoots": {
           "type": "array",
           "default": [],
+          "scope": "resource",
           "items": {
             "type": "string"
           },
@@ -180,16 +187,19 @@
         "sage.analysis.enableDiagnostics": {
           "type": "boolean",
           "default": true,
+          "scope": "resource",
           "markdownDescription": "Enable diagnostics emitted by the language server."
         },
         "sage.analysis.enableRuntimeIntrospection": {
           "type": "boolean",
           "default": true,
+          "scope": "resource",
           "markdownDescription": "Allow the language server to query a live Sage runtime when static indexing cannot supply docs or source locations."
         },
         "sage.analysis.enablePyxParsing": {
           "type": "boolean",
           "default": true,
+          "scope": "resource",
           "markdownDescription": "Enable lightweight parsing for `.pyx` files during source indexing."
         },
         "sage.indexing.exclude": {
@@ -200,6 +210,7 @@
             "**/.venv/**",
             "**/build/**"
           ],
+          "scope": "resource",
           "items": {
             "type": "string"
           },
@@ -208,6 +219,7 @@
         "sage.docs.preferredSource": {
           "type": "string",
           "default": "auto",
+          "scope": "resource",
           "enum": [
             "auto",
             "workspace",
@@ -219,11 +231,13 @@
         "sage.docs.showOnHover": {
           "type": "boolean",
           "default": true,
+          "scope": "resource",
           "markdownDescription": "Display documentation previews in hover content when available."
         },
         "sage.logging.level": {
           "type": "string",
           "default": "info",
+          "scope": "resource",
           "enum": [
             "error",
             "warn",
@@ -235,15 +249,23 @@
         "sage.run.target": {
           "type": "string",
           "default": "terminal",
+          "scope": "resource",
           "enum": [
             "terminal",
             "repl"
           ],
           "markdownDescription": "Default execution target for Sage run commands."
         },
+        "sage.run.cleanupGeneratedPython": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "markdownDescription": "After running a `.sage` file in the terminal, remove the generated `.sage.py` helper file on POSIX shells."
+        },
         "sage.experimental.notebookSupport": {
           "type": "boolean",
           "default": false,
+          "scope": "resource",
           "markdownDescription": "Enable preview hooks for future notebook integration."
         }
       }

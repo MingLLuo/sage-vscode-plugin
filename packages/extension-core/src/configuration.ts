@@ -35,6 +35,7 @@ export function readSettings(workspaceFolder?: vscode.WorkspaceFolder): SageSett
     showDocsOnHover: configuration.get<boolean>("docs.showOnHover", true),
     loggingLevel: configuration.get<LoggingLevel>("logging.level", "info"),
     runTarget: configuration.get<RunTarget>("run.target", "terminal"),
+    cleanupGeneratedPython: configuration.get<boolean>("run.cleanupGeneratedPython", false),
     notebookSupportEnabled: configuration.get<boolean>("experimental.notebookSupport", false),
   };
 }
