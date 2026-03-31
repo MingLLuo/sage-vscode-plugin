@@ -253,3 +253,51 @@ helpers, decorators, namespaces, and factory patterns in addition to broad mathe
   becomes the next priority
 - Risks or blockers: some themes still collapse custom TextMate scopes into similar colors, so semantic tokens remain
   the stronger long-term path
+
+## Entry 8
+
+- Date: 2026-04-01
+- Task ID: LSP-021
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `pending`
+
+### Goal
+
+Make complex Python-style `.sage` files behave closer to normal Python-editor expectations by preserving AST-grade
+analysis where possible, reducing repeated lookup cost, and adding a first semantic-token layer on top of the richer
+TextMate grammar.
+
+### Decisions
+
+- Decision: treat `.sage` files without preparser assignment syntax as Python-like and parse them through the Python AST
+  path after lightweight Sage preprocessing.
+- Reason: many real Sage files are mostly Python with a `.sage` suffix, so dropping them to the loose line-based parser
+  throws away class, method, and import structure that should remain available.
+- Decision: keep preparser-assignment forms such as `R.<x, y> = ...` on the existing loose parser for now.
+- Reason: the current source mapping is still too narrow to remap those lines safely through a full AST path without
+  risking incorrect ranges.
+- Decision: index saved `.sage` and `.pxi` files during workspace builds and add caches for indexed symbol and member
+  resolution.
+- Reason: this reduces the gap between open-document analysis and workspace-wide navigation while avoiding repeated
+  recursive resolution work for stable indexed modules.
+- Decision: add a semantic-token baseline now instead of waiting for a larger highlighting overhaul.
+- Reason: semantic tokens immediately improve theme-independent differentiation for methods, namespaces, constructors,
+  readonly Sage values, decorators, and preparser generator declarations.
+
+### Verification
+
+- Checks run:
+  - `python -m py_compile packages/sage-lsp/src/sage_lsp/parser.py packages/sage-lsp/src/sage_lsp/index.py packages/sage-lsp/src/sage_lsp/server.py`
+  - `python -m pytest packages/sage-lsp/tests/test_parser.py packages/sage-lsp/tests/test_index.py packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+- Result: parser, index, server, extension, native-smoke, and real VS Code extension-host smoke all passed after the
+  `.sage` fast path, semantic-token baseline, and indexed lookup caches were added
+
+### Follow-ups
+
+- Next task: persist the Sage library/workspace index so restart cost drops on large trees
+- Risks or blockers: preparser-heavy `.sage` files still fall back to the loose parser until source mapping grows past
+  caret rewrite and can safely support more transformed constructs

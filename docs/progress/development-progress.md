@@ -36,14 +36,19 @@
 - Definition prewarm: opening a Sage document now warms both documentation and definition caches for likely callable targets, reducing first-jump latency alongside first-hover latency
 - Runtime import-root hardening: runtime fallback now receives the resolved language-server Python host plus discovered `sage/src` and `builddir*/src` roots for local checkout scenarios
 - Structure-aware highlighting: grammar and snippets now cover cached decorators, runtime helper names, toric and module namespaces, factory-style assignments, and a dedicated manual smoke file for visually checking heavier Sage source patterns
+- Python-like `.sage` fast path: `.sage` files without preparser assignment now parse through the Python AST path, preserving richer class, method, and import analysis for mixed Sage/Python scripts
+- Saved `.sage` indexing: workspace builds now index `.sage` and `.pxi` files so navigation is not limited to transient open-document parsing
+- Resolution caching: indexed-module symbol and member lookups now reuse cached results to reduce repeated definition and documentation resolution cost
+- Semantic-token baseline: the server now publishes semantic tokens for Sage namespaces, constructors, decorators, readonly library values, methods, and preparser generator declarations
+- Extension-host smoke revalidated: the real VS Code smoke harness now passes again under an approval path that permits launching the local app in the background
 
 ## Current Focus
 
 1. Extend source mapping beyond caret rewrite into more `.sage` constructs.
 2. Feed source mapping into diagnostics, references, and rename paths.
-3. Deepen runtime-aware Sage introspection beyond docs/definitions/signatures where useful.
-4. Add semantic tokens and richer diagnostics on top of the current LSP baseline.
-5. Re-enable extension-host native-library smoke under an approval path that permits local VS Code launches, then keep the non-GUI native smoke as the fast default.
+3. Persist library/workspace index data so restart cost drops for large Sage trees.
+4. Broaden semantic-token coverage and keep refining editor-side highlighting for real Sage source style.
+5. Deepen runtime-aware Sage introspection beyond docs/definitions/signatures where useful.
 
 ## Milestone Tracker
 
@@ -67,6 +72,7 @@
 | LSP baseline | Done | Workspace symbols, references, rename, and conservative diagnostics now sit alongside hover, completion, definition, and document symbols. |
 | Editor authoring baseline | Done | Syntax assets, snippets, triple-quoted editing, terminal cleanup, and background extension-host smoke automation now support richer Sage authoring workflows. |
 | Native library documentation baseline | Done | Common Sage library constructors and `.pyx` functions now expose documentation and source paths through merged static/runtime analysis plus local smoke coverage. |
+| Python-like `.sage` performance baseline | Done | `.sage` files that look like Python now keep AST-grade analysis, saved `.sage` files enter workspace indexing, semantic tokens are available, and repeated indexed lookups reuse caches. |
 
 ## Change Log Notes
 
@@ -126,3 +132,8 @@
 - Taught runtime fallback to expand local checkout import roots with matching `builddir*/src` directories, so compiled native modules remain available when runtime probes are driven from the development Python host.
 - Expanded syntax assets again so `@cached_method`, `lazy_import`, `UniqueFactory`, `toric_varieties`, `ChowGroup`, `FilteredSimplicialComplex`, and related structure-heavy Sage patterns receive stronger, more intentional scopes instead of blending into generic support tokens.
 - Added manual smoke coverage for the new highlighting path through `08_highlighting_structures.sage` and corresponding workspace instructions.
+- Added a Python-like `.sage` parsing fast path that preserves AST-grade symbol extraction, member tracking, and import handling whenever the file does not use preparser assignment syntax.
+- Started indexing saved `.sage` and `.pxi` files during workspace builds so navigation and symbol queries can see those modules even before they are opened in the editor.
+- Added indexed-module symbol and member resolution caches to reduce repeated lookup cost during documentation, definition, completion, and workspace-symbol requests.
+- Added a first semantic-token baseline for Sage namespaces, constructors, readonly library values, decorators, methods, and preparser generator declarations.
+- Revalidated the real VS Code extension-host smoke flow after the `.sage` parser and semantic-token changes by rerunning the background host against the copied smoke workspace.

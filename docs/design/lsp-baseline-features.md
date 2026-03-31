@@ -13,6 +13,7 @@ The current baseline now includes:
 - completion
 - definition
 - signature help
+- semantic tokens for Sage namespaces, constructors, decorators, readonly library values, and preparser declarations
 - document symbols
 - workspace symbols
 - references
@@ -23,13 +24,21 @@ The current baseline now includes:
 - dotted singleton-member resolution for common Sage patterns such as `graphs.PetersenGraph`
 - member completion for statically understood singleton APIs
 - completion responses serialized as concrete LSP `CompletionItem` objects under real clients
+- Python-like `.sage` parsing through the AST path when no preparser assignment is present
+- saved `.sage` modules participating in workspace indexing instead of only live open-document parsing
+- cached symbol and member resolution for indexed modules to reduce repeated definition and documentation lookup cost
 
 ## Scope
 
 - These features are primarily static and index-driven, with runtime fallback for documentation, definitions, and
   signatures when static resolution misses Sage runtime objects.
+- Python-heavy `.sage` files now stay on the richer Python AST path unless they use Sage preparser assignment syntax
+  such as `R.<x, y> = ...`; that keeps class, method, import, and assignment tracking closer to ordinary Python-editor
+  behavior for mixed Sage/Python projects.
 - Static resolution now includes class-body imports, singleton instance aliases, and dotted member traversal so common
   Sage generator objects remain navigable even when the selected Sage runtime cannot answer introspection requests.
+- Indexed-module resolution caches currently target repeated symbol and member lookups; this is a first step toward a
+  broader split between hot document state and colder library/workspace indexes.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.
@@ -37,4 +46,6 @@ The current baseline now includes:
 ## Follow-up Areas
 
 - `.sage` source mapping still needs to feed more of the diagnostics and navigation surface.
-- Semantic tokens, code actions, inlay hints, richer diagnostics, and deeper runtime-aware analysis remain open work.
+- Semantic tokens should expand beyond the current baseline into more classifiable Sage runtime objects.
+- Code actions, inlay hints, richer diagnostics, and deeper runtime-aware analysis remain open work.
+- Library-index persistence and incremental background indexing remain open performance work.
