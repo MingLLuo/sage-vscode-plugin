@@ -1,0 +1,17 @@
+{
+  "name": "sage-vscode-plugin",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Independent monorepo for a SageMath VS Code plugin",
+  "workspaces": [
+    "packages/extension-core",
+    "packages/syntax-pack"
+  ],
+  "scripts": {
+    "build": "npm run build --workspace @sage-vscode/extension-core && npm run build --workspace @sage-vscode/syntax-pack",
+    "lint": "npm run lint --workspace @sage-vscode/extension-core && npm run lint --workspace @sage-vscode/syntax-pack",
+    "test": "npm run test --workspace @sage-vscode/extension-core && npm run test:python",
+    "test:python": "python -m pytest packages/sage-lsp/tests"
+  }
+}
+

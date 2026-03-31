@@ -1,0 +1,12 @@
+node_modules/
+dist/
+out/
+.DS_Store
+.pytest_cache/
+__pycache__/
+*.pyc
+.venv/
+.coverage
+coverage/
+*.vsix
+
