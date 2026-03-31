@@ -12,6 +12,7 @@ from lsprotocol.types import (
     ReferenceContext,
     ReferenceParams,
     RenameParams,
+    SignatureHelpParams,
     TextDocumentIdentifier,
     TextDocumentItem,
     TextDocumentSyncKind,
@@ -114,6 +115,26 @@ def test_server_handlers_resolve_hover_definition_completion_and_documentation()
     assert documentation is not None
     assert documentation["name"] == "sqrt"
     assert documentation["summary"] == "Return the principal square root."
+
+    server.runtime_introspector.lookup = lambda name: RuntimeSymbolResult(  # type: ignore[method-assign]
+        name=name,
+        kind="function",
+        detail="sqrt(x)",
+        module_name="sage.misc.functional",
+        docstring="Return the principal square root.",
+        file_path=Path("/runtime/sage/functions/other.py"),
+        line=10,
+    )
+
+    signature_help_handler = server.protocol.fm.features["textDocument/signatureHelp"]
+    signature_help = signature_help_handler(
+        SignatureHelpParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=1, character=5),
+        )
+    )
+    assert signature_help is not None
+    assert signature_help.signatures[0].label == "sqrt(x)"
 
 
 def test_server_document_symbols_track_open_document_contents() -> None:
@@ -357,6 +378,97 @@ def test_server_falls_back_to_runtime_docs_and_definition() -> None:
     assert documentation is not None
     assert documentation["name"] == "runtime_only"
     assert documentation["summary"] == "Runtime fallback documentation."
+
+
+def test_server_runtime_fallback_prefers_dotted_symbol_names() -> None:
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": []},
+            "analysis": {
+                "enablePyxParsing": True,
+                "enableRuntimeIntrospection": True,
+            },
+        }
+    )
+    uri = Path("/workspace/runtime_dotted.sage").as_uri()
+    source = "graphs.PetersenGraph\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    requested_names: list[str] = []
+
+    def _lookup(name: str) -> RuntimeSymbolResult:
+        requested_names.append(name)
+        return RuntimeSymbolResult(
+            name=name.split(".")[-1],
+            kind="function",
+            detail=f"{name}()",
+            module_name="sage.graphs.graph_generators",
+            docstring="Runtime fallback dotted lookup.",
+            file_path=Path("/runtime/sage/graphs/graph_generators.py"),
+            line=12,
+        )
+
+    server.runtime_introspector.lookup = _lookup  # type: ignore[method-assign]
+
+    documentation_handler = server.protocol.fm.features["sage/getDocumentation"]
+    documentation = documentation_handler(
+        {
+            "textDocument": {"uri": uri},
+            "position": {"line": 0, "character": 10},
+        }
+    )
+
+    assert documentation is not None
+    assert requested_names == ["graphs.PetersenGraph"]
+    assert documentation["name"] == "PetersenGraph"
+
+
+def test_server_signature_help_uses_runtime_fallback_for_dotted_calls() -> None:
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": []},
+            "analysis": {
+                "enablePyxParsing": True,
+                "enableRuntimeIntrospection": True,
+            },
+        }
+    )
+    uri = Path("/workspace/runtime_signature.sage").as_uri()
+    source = "graphs.PetersenGraph(order=10, immutable=True)\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    requested_names: list[str] = []
+
+    def _lookup(name: str) -> RuntimeSymbolResult:
+        requested_names.append(name)
+        return RuntimeSymbolResult(
+            name="PetersenGraph",
+            kind="function",
+            detail="graphs.PetersenGraph(order=None, immutable=False)",
+            module_name="sage.graphs.graph_generators",
+            docstring="Build the Petersen graph.",
+            file_path=Path("/runtime/sage/graphs/graph_generators.py"),
+            line=12,
+        )
+
+    server.runtime_introspector.lookup = _lookup  # type: ignore[method-assign]
+
+    signature_help_handler = server.protocol.fm.features["textDocument/signatureHelp"]
+    signature_help = signature_help_handler(
+        SignatureHelpParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=0, character=40),
+        )
+    )
+
+    assert signature_help is not None
+    assert requested_names == ["graphs.PetersenGraph"]
+    assert signature_help.signatures[0].label == "graphs.PetersenGraph(order=None, immutable=False)"
+    assert signature_help.active_parameter == 1
 
 
 def _write_module(root: Path, relative_path: str, contents: str) -> None:

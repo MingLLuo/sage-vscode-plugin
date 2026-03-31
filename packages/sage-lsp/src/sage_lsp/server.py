@@ -27,10 +27,14 @@ from lsprotocol.types import (
     Range,
     RenameParams,
     ServerCapabilities,
+    SignatureHelp,
+    SignatureHelpParams,
+    SignatureInformation,
     TextDocumentSyncKind,
     TextEdit,
     WorkspaceEdit,
     WorkspaceSymbolParams,
+    ParameterInformation,
 )
 from pygls.lsp.server import LanguageServer
 
@@ -66,6 +70,7 @@ def create_server() -> SageLanguageServer:
                 rename_provider=True,
                 document_symbol_provider=True,
                 workspace_symbol_provider=True,
+                signature_help_provider={"triggerCharacters": ["(", ","]},
                 completion_provider={"triggerCharacters": [".", "("], "resolveProvider": False},
             ),
         )
@@ -84,7 +89,12 @@ def create_server() -> SageLanguageServer:
         if resolved is None:
             return None
 
-        documentation = _documentation_for_request(server, resolved["record"], resolved["name"])
+        documentation = _documentation_for_request(
+            server,
+            resolved["record"],
+            str(resolved["name"]),
+            str(resolved.get("runtime_name") or resolved["name"]),
+        )
         if documentation is None:
             return None
 
@@ -109,7 +119,9 @@ def create_server() -> SageLanguageServer:
             else None
         )
         if symbol is None:
-            runtime_symbol = server.runtime_introspector.lookup(resolved["name"])
+            runtime_symbol = server.runtime_introspector.lookup(
+                str(resolved.get("runtime_name") or resolved["name"])
+            )
             if runtime_symbol is None or runtime_symbol.file_path is None:
                 return None
             return _location_from_runtime_symbol(runtime_symbol)
@@ -128,6 +140,29 @@ def create_server() -> SageLanguageServer:
         prefix = current_prefix(text or record.source, params.position.line, params.position.character)
         items = server.workspace_index.completion_items(record, prefix)
         return CompletionList(is_incomplete=False, items=items)
+
+    @server.feature("textDocument/signatureHelp")
+    def on_signature_help(params: SignatureHelpParams) -> Optional[SignatureHelp]:
+        record, text = _record_for_uri(server, params.text_document.uri)
+        if record is None:
+            return None
+
+        call_name, active_parameter = call_expression_at_position(
+            text or record.source,
+            params.position.line,
+            params.position.character,
+        )
+        if call_name is None:
+            return None
+
+        runtime_symbol = server.runtime_introspector.lookup(call_name)
+        if runtime_symbol is None:
+            return None
+
+        signature = _signature_help_from_runtime_symbol(runtime_symbol, active_parameter)
+        if signature is None:
+            return None
+        return signature
 
     @server.feature("textDocument/documentSymbol")
     def on_document_symbol(params: DocumentSymbolParams) -> list[dict[str, object]]:
@@ -215,11 +250,12 @@ def create_server() -> SageLanguageServer:
             character = position.get("character")
             if not isinstance(line, int) or not isinstance(character, int):
                 return None
-            name, _ = word_at_position(text or record.source, line, character)
+            _, runtime_name, _ = symbol_at_position(text or record.source, line, character)
+            name = runtime_name
             if name is None:
                 return None
 
-        documentation = _documentation_for_request(server, record, name)
+        documentation = _documentation_for_request(server, record, name, name)
         return documentation.to_payload() if documentation is not None else None
 
     return server
@@ -287,6 +323,7 @@ def _documentation_for_request(
     server: SageLanguageServer,
     record: ModuleRecord,
     name: str,
+    runtime_name: Optional[str] = None,
 ) -> Optional[DocumentationResult]:
     documentation = (
         server.workspace_index.documentation_for_symbol(record, name)
@@ -296,7 +333,7 @@ def _documentation_for_request(
     if documentation is not None:
         return documentation
 
-    runtime_symbol = server.runtime_introspector.lookup(name)
+    runtime_symbol = server.runtime_introspector.lookup(runtime_name or name)
     if runtime_symbol is None:
         return None
     return _documentation_from_runtime_symbol(runtime_symbol)
@@ -334,6 +371,31 @@ def _location_from_runtime_symbol(symbol: RuntimeSymbolResult) -> Location:
     )
 
 
+def _signature_help_from_runtime_symbol(
+    symbol: RuntimeSymbolResult,
+    active_parameter: int,
+) -> Optional[SignatureHelp]:
+    label = symbol.detail.strip()
+    if not label or "(" not in label or ")" not in label:
+        return None
+
+    parameter_labels = split_signature_parameters(label)
+    parameters = [ParameterInformation(label=parameter) for parameter in parameter_labels] or None
+    clamped_active_parameter = min(active_parameter, max(len(parameter_labels) - 1, 0))
+
+    return SignatureHelp(
+        signatures=[
+            SignatureInformation(
+                label=label,
+                documentation=symbol.docstring,
+                parameters=parameters,
+            )
+        ],
+        active_signature=0,
+        active_parameter=clamped_active_parameter,
+    )
+
+
 def _resolve_request_symbol(
     server: SageLanguageServer,
     uri: str,
@@ -343,15 +405,84 @@ def _resolve_request_symbol(
     if record is None:
         return None
 
-    name, source_range = word_at_position(text or record.source, position.line, position.character)
+    name, runtime_name, source_range = symbol_at_position(
+        text or record.source,
+        position.line,
+        position.character,
+    )
     if not name or source_range is None:
         return None
 
     return {
         "record": record,
         "name": name,
+        "runtime_name": runtime_name,
         "range": source_range,
     }
+
+
+def symbol_at_position(
+    text: str,
+    line: int,
+    character: int,
+) -> Tuple[Optional[str], Optional[str], Optional[Range]]:
+    dotted_name, dotted_range = dotted_word_at_position(text, line, character)
+    if dotted_name is not None and dotted_range is not None:
+        return dotted_name.split(".")[-1], dotted_name, dotted_range
+
+    name, source_range = word_at_position(text, line, character)
+    return name, name, source_range
+
+
+def call_expression_at_position(
+    text: str,
+    line: int,
+    character: int,
+) -> Tuple[Optional[str], int]:
+    lines = text.splitlines()
+    if line < 0 or line >= len(lines):
+        return None, 0
+
+    prefix = lines[line][: max(character, 0)]
+    if not prefix:
+        return None, 0
+
+    depth = 0
+    active_parameter = 0
+    open_index: Optional[int] = None
+
+    for index in range(len(prefix) - 1, -1, -1):
+        char = prefix[index]
+        if char in ")]}":
+            depth += 1
+            continue
+        if char in "([{":
+            if depth == 0:
+                if char != "(":
+                    return None, 0
+                open_index = index
+                break
+            depth -= 1
+            continue
+        if char == "," and depth == 0:
+            active_parameter += 1
+
+    if open_index is None:
+        return None, 0
+
+    end = open_index
+    start = end
+    while start > 0 and _is_dotted_word_char(prefix[start - 1]):
+        start -= 1
+
+    candidate = prefix[start:end].strip(".")
+    if not candidate:
+        return None, 0
+    parts = candidate.split(".")
+    if not all(part and _is_word_char(part[0]) and all(_is_word_char(char) for char in part) for part in parts):
+        return None, 0
+
+    return candidate, active_parameter
 
 
 def current_prefix(text: str, line: int, character: int) -> str:
@@ -396,8 +527,110 @@ def word_at_position(text: str, line: int, character: int) -> Tuple[Optional[str
     )
 
 
+def dotted_word_at_position(text: str, line: int, character: int) -> Tuple[Optional[str], Optional[Range]]:
+    lines = text.splitlines()
+    if line < 0 or line >= len(lines):
+        return None, None
+    source_line = lines[line]
+    if not source_line:
+        return None, None
+
+    bounded_character = min(max(character, 0), max(len(source_line) - 1, 0))
+    if (
+        not _is_dotted_word_char(source_line[bounded_character])
+        and bounded_character > 0
+        and _is_dotted_word_char(source_line[bounded_character - 1])
+    ):
+        bounded_character -= 1
+
+    if not _is_dotted_word_char(source_line[bounded_character]):
+        return None, None
+
+    start = bounded_character
+    end = bounded_character + 1
+    while start > 0 and _is_dotted_word_char(source_line[start - 1]):
+        start -= 1
+    while end < len(source_line) and _is_dotted_word_char(source_line[end]):
+        end += 1
+
+    candidate = source_line[start:end].strip(".")
+    if "." not in candidate:
+        return None, None
+    parts = candidate.split(".")
+    if not all(part and (_is_word_char(part[0])) and all(_is_word_char(char) for char in part) for part in parts):
+        return None, None
+
+    candidate_start = source_line[start:end].find(candidate) + start
+    candidate_end = candidate_start + len(candidate)
+    return (
+        candidate,
+        Range(
+            start=Position(line=line, character=candidate_start),
+            end=Position(line=line, character=candidate_end),
+        ),
+    )
+
+
+def split_signature_parameters(signature_label: str) -> list[str]:
+    start = signature_label.find("(")
+    end = signature_label.rfind(")")
+    if start == -1 or end <= start + 1:
+        return []
+
+    body = signature_label[start + 1 : end]
+    parameters: list[str] = []
+    current: list[str] = []
+    depth = 0
+    quote: Optional[str] = None
+    escaped = False
+
+    for char in body:
+        if quote is not None:
+            current.append(char)
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == quote:
+                quote = None
+            continue
+
+        if char in {"'", '"'}:
+            quote = char
+            current.append(char)
+            continue
+
+        if char in "([{":
+            depth += 1
+            current.append(char)
+            continue
+
+        if char in ")]}":
+            depth = max(depth - 1, 0)
+            current.append(char)
+            continue
+
+        if char == "," and depth == 0:
+            parameter = "".join(current).strip()
+            if parameter:
+                parameters.append(parameter)
+            current = []
+            continue
+
+        current.append(char)
+
+    tail = "".join(current).strip()
+    if tail:
+        parameters.append(tail)
+    return parameters
+
+
 def _is_word_char(value: str) -> bool:
     return value.isalnum() or value == "_"
+
+
+def _is_dotted_word_char(value: str) -> bool:
+    return _is_word_char(value) or value == "."
 
 
 def _as_lsp_range(raw_range: dict[str, dict[str, int]]) -> Range:
