@@ -1,50 +1,186 @@
 import * as vscode from "vscode";
-import { LanguageClient } from "vscode-languageclient/node";
-import { createLanguageClient } from "./languageClient";
-import { readInitializationOptions } from "./settingsModel";
+import type { LanguageClient } from "vscode-languageclient/node";
+
+import { readSettings } from "./configuration";
+import { DocumentationPanel } from "./docsPanel";
+import { renderDocumentationMarkdown } from "./documentationRequest";
+import {
+  formatEnvironmentDetails,
+  formatStatusBarText,
+  formatStatusBarTooltip,
+} from "./environmentPresentation";
+import { createLanguageClient, requestDocumentation } from "./languageClient";
+import { buildWorkspaceInitializationData } from "./workspaceDiscovery";
 
 let client: LanguageClient | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  client = createLanguageClient(context);
-  context.subscriptions.push(client);
-  await client.start();
+  const outputChannel = vscode.window.createOutputChannel("Sage");
+  const languageOutputChannel = vscode.window.createOutputChannel("Sage Language Server");
+  const docsPanel = new DocumentationPanel();
+  const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+
+  context.subscriptions.push(outputChannel, languageOutputChannel, statusBarItem);
+
+  const updateStatusBar = (): void => {
+    const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
+    const workspaceData = buildWorkspaceInitializationData(
+      vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+      settings.sourceRoots,
+    );
+    statusBarItem.text = formatStatusBarText({
+      interpreterPath: settings.interpreterPath,
+      analysisMode: settings.analysisMode,
+      docsSource: settings.docsSource,
+      sourceRoots: workspaceData.sourceRoots,
+      enablePyxParsing: settings.enablePyxParsing,
+    });
+    statusBarItem.tooltip = formatStatusBarTooltip({
+      interpreterPath: settings.interpreterPath,
+      analysisMode: settings.analysisMode,
+      docsSource: settings.docsSource,
+      sourceRoots: workspaceData.sourceRoots,
+      enablePyxParsing: settings.enablePyxParsing,
+    });
+    statusBarItem.command = "sage.showEnvironmentDetails";
+    statusBarItem.show();
+  };
+
+  const startLanguageClient = async (): Promise<void> => {
+    if (client) {
+      await client.stop();
+    }
+
+    client = createLanguageClient(context, languageOutputChannel);
+    await client.start();
+    outputChannel.appendLine("Sage language client started.");
+  };
 
   context.subscriptions.push(
     vscode.commands.registerCommand("sage.selectInterpreter", async () => {
-      const nextValue = await vscode.window.showInputBox({
-        title: "Sage Interpreter Path",
-        prompt: "Enter the Python executable that should launch the Sage language server",
-        value: readInitializationOptions().interpreterPath
+      const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
+      const selection = await vscode.window.showInputBox({
+        title: "Sage interpreter path",
+        value: settings.interpreterPath,
+        prompt: "Enter the Sage executable used for language intelligence and execution.",
       });
 
-      if (!nextValue) {
+      if (!selection) {
         return;
       }
 
-      await vscode.workspace.getConfiguration("sage").update(
-        "interpreterPath",
-        nextValue,
-        vscode.ConfigurationTarget.Workspace
+      await vscode.workspace
+        .getConfiguration("sage")
+        .update("interpreter.path", selection, vscode.ConfigurationTarget.Workspace);
+      outputChannel.appendLine(`Updated Sage interpreter path to: ${selection}`);
+      updateStatusBar();
+      await startLanguageClient();
+    }),
+    vscode.commands.registerCommand("sage.restartLanguageServer", async () => {
+      outputChannel.appendLine("Restarting Sage language server.");
+      await startLanguageClient();
+    }),
+    vscode.commands.registerCommand("sage.runCurrentFile", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        void vscode.window.showWarningMessage("Open a Sage file before running it.");
+        return;
+      }
+      const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
+      const terminal = getOrCreateTerminal();
+      terminal.sendText(
+        [settings.interpreterPath, ...settings.interpreterArgs, quotePath(editor.document.uri.fsPath)].join(
+          " ",
+        ),
+      );
+      terminal.show(true);
+    }),
+    vscode.commands.registerCommand("sage.runSelection", async () => {
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        void vscode.window.showWarningMessage("Open a Sage file before sending code to REPL.");
+        return;
+      }
+      const selection = editor.document.getText(editor.selection) || editor.document.lineAt(editor.selection.active.line).text;
+      const terminal = getOrCreateTerminal();
+      terminal.sendText(selection, true);
+      terminal.show(true);
+    }),
+    vscode.commands.registerCommand("sage.startRepl", async () => {
+      const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
+      const terminal = getOrCreateTerminal();
+      terminal.sendText([settings.interpreterPath, ...settings.interpreterArgs].join(" "), true);
+      terminal.show(true);
+    }),
+    vscode.commands.registerCommand("sage.showDocumentation", async () => {
+      if (!client) {
+        void vscode.window.showWarningMessage("Sage language server is not available yet.");
+        return;
+      }
+
+      const editor = vscode.window.activeTextEditor;
+      if (!editor) {
+        void vscode.window.showWarningMessage("Open a Sage file to request documentation.");
+        return;
+      }
+
+      const selectedText = editor.document.getText(editor.selection).trim() || undefined;
+      const result = await requestDocumentation(
+        client,
+        editor.document.uri.toString(),
+        editor.selection.active.line,
+        editor.selection.active.character,
+        selectedText,
       );
 
-      void vscode.window.showInformationMessage(`Updated Sage interpreter to ${nextValue}`);
+      if (!result) {
+        void vscode.window.showInformationMessage("No documentation available for the current symbol.");
+        return;
+      }
+
+      docsPanel.show(`Docs: ${result.symbol}`, renderDocumentationMarkdown(result));
     }),
     vscode.commands.registerCommand("sage.showEnvironmentDetails", async () => {
-      const settings = readInitializationOptions();
-      const message = [
-        `Interpreter: ${settings.interpreterPath}`,
-        `Source roots: ${settings.analysisSourceRoots.join(", ") || "(workspace default)"}`,
-        `Trust mode: ${settings.workspaceTrustMode}`,
-        `Log level: ${settings.logLevel}`
-      ].join("\n");
-
-      await vscode.window.showInformationMessage(message, { modal: true });
-    })
+      const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
+      const workspaceData = buildWorkspaceInitializationData(
+        vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+        settings.sourceRoots,
+      );
+      void vscode.window.showInformationMessage(
+        formatEnvironmentDetails({
+          interpreterPath: settings.interpreterPath,
+          analysisMode: settings.analysisMode,
+          docsSource: settings.docsSource,
+          sourceRoots: workspaceData.sourceRoots,
+          enablePyxParsing: settings.enablePyxParsing,
+        }),
+      );
+    }),
+    vscode.workspace.onDidChangeConfiguration(async (event) => {
+      if (!event.affectsConfiguration("sage")) {
+        return;
+      }
+      updateStatusBar();
+      await startLanguageClient();
+    }),
   );
+
+  updateStatusBar();
+  await startLanguageClient();
 }
 
 export async function deactivate(): Promise<void> {
-  await client?.stop();
-  client = undefined;
+  if (client) {
+    await client.stop();
+    client = undefined;
+  }
+}
+
+function getOrCreateTerminal(): vscode.Terminal {
+  return vscode.window.terminals.find((terminal) => terminal.name === "Sage REPL")
+    ?? vscode.window.createTerminal("Sage REPL");
+}
+
+function quotePath(fsPath: string): string {
+  return /\s/.test(fsPath) ? JSON.stringify(fsPath) : fsPath;
 }

@@ -1,24 +1,56 @@
 {
   "name": "@sage-vscode/extension-core",
   "displayName": "Sage VS Code Plugin",
+  "description": "High-customizability SageMath tooling for Visual Studio Code.",
   "version": "0.1.0",
   "private": true,
-  "description": "VS Code extension client for Sage language tooling",
-  "main": "./out/src/extension.js",
+  "publisher": "sage-vscode",
+  "license": "MIT",
   "engines": {
-    "vscode": "^1.95.0"
+    "vscode": "^1.97.0"
   },
+  "categories": [
+    "Programming Languages",
+    "Linters",
+    "Notebooks"
+  ],
   "activationEvents": [
     "onLanguage:sagemath",
     "onCommand:sage.selectInterpreter",
+    "onCommand:sage.restartLanguageServer",
+    "onCommand:sage.runCurrentFile",
+    "onCommand:sage.runSelection",
+    "onCommand:sage.startRepl",
+    "onCommand:sage.showDocumentation",
     "onCommand:sage.showEnvironmentDetails"
   ],
+  "main": "./out/src/extension.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "package": "npm run build",
+    "test": "npm run build && node --test out/test/**/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/vscode": "^1.97.0",
+    "typescript": "^5.8.2"
+  },
   "contributes": {
     "languages": [
       {
         "id": "sagemath",
-        "aliases": ["SageMath", "sage"],
-        "extensions": [".sage"],
+        "aliases": [
+          "SageMath",
+          "sage"
+        ],
+        "extensions": [
+          ".sage"
+        ],
         "configuration": "./resources/generated/syntax/language-configuration.json"
       }
     ],
@@ -41,6 +73,26 @@
         "title": "Sage: Select Interpreter"
       },
       {
+        "command": "sage.restartLanguageServer",
+        "title": "Sage: Restart Language Server"
+      },
+      {
+        "command": "sage.runCurrentFile",
+        "title": "Sage: Run Current File"
+      },
+      {
+        "command": "sage.runSelection",
+        "title": "Sage: Run Selection"
+      },
+      {
+        "command": "sage.startRepl",
+        "title": "Sage: Start REPL"
+      },
+      {
+        "command": "sage.showDocumentation",
+        "title": "Sage: Show Documentation"
+      },
+      {
         "command": "sage.showEnvironmentDetails",
         "title": "Sage: Show Environment Details"
       }
@@ -48,10 +100,36 @@
     "configuration": {
       "title": "Sage",
       "properties": {
-        "sage.interpreterPath": {
+        "sage.interpreter.path": {
           "type": "string",
-          "default": "python",
-          "description": "Python executable used to launch the Sage language server during bootstrap."
+          "default": "sage",
+          "markdownDescription": "Path to the Sage executable used for running files and querying the language server."
+        },
+        "sage.interpreter.args": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Extra arguments passed to the Sage executable."
+        },
+        "sage.analysis.mode": {
+          "type": "string",
+          "default": "default",
+          "enum": [
+            "light",
+            "default",
+            "full"
+          ],
+          "markdownDescription": "Analysis depth used by the Sage language server."
+        },
+        "sage.analysis.extraPaths": {
+          "type": "array",
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Additional import paths supplied to the language server."
         },
         "sage.analysis.sourceRoots": {
           "type": "array",
@@ -59,28 +137,78 @@
           "items": {
             "type": "string"
           },
-          "description": "Optional analysis source roots forwarded to the language server."
+          "markdownDescription": "Optional source roots to index before falling back to discovered workspace roots."
         },
-        "sage.logLevel": {
+        "sage.analysis.enableDiagnostics": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable diagnostics emitted by the language server."
+        },
+        "sage.analysis.enableRuntimeIntrospection": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Allow the language server to query a live Sage runtime for docs and signatures."
+        },
+        "sage.analysis.enablePyxParsing": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Enable lightweight parsing for `.pyx` files during source indexing."
+        },
+        "sage.indexing.exclude": {
+          "type": "array",
+          "default": [
+            "**/.git/**",
+            "**/__pycache__/**",
+            "**/.venv/**",
+            "**/build/**"
+          ],
+          "items": {
+            "type": "string"
+          },
+          "markdownDescription": "Glob patterns excluded from Sage source indexing."
+        },
+        "sage.docs.preferredSource": {
+          "type": "string",
+          "default": "auto",
+          "enum": [
+            "auto",
+            "workspace",
+            "runtime",
+            "reference"
+          ],
+          "markdownDescription": "Preferred documentation source for hovers and docs panels."
+        },
+        "sage.docs.showOnHover": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Display documentation previews in hover content when available."
+        },
+        "sage.logging.level": {
           "type": "string",
           "default": "info",
-          "enum": ["trace", "debug", "info", "warn", "error"],
-          "description": "Client and server log verbosity."
+          "enum": [
+            "error",
+            "warn",
+            "info",
+            "debug"
+          ],
+          "markdownDescription": "Logging verbosity for the extension and language client."
+        },
+        "sage.run.target": {
+          "type": "string",
+          "default": "terminal",
+          "enum": [
+            "terminal",
+            "repl"
+          ],
+          "markdownDescription": "Default execution target for Sage run commands."
+        },
+        "sage.experimental.notebookSupport": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Enable preview hooks for future notebook integration."
         }
       }
     }
-  },
-  "scripts": {
-    "build": "tsc -p .",
-    "lint": "tsc -p . --noEmit",
-    "test": "npm run build && node --test out/test/**/*.test.js"
-  },
-  "dependencies": {
-    "vscode-languageclient": "^9.0.1"
-  },
-  "devDependencies": {
-    "@types/node": "^22.10.2",
-    "@types/vscode": "^1.95.0",
-    "typescript": "^5.7.2"
   }
 }
