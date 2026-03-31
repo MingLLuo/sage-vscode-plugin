@@ -499,3 +499,33 @@ Make server behavior reflect the documentation-related settings already exposed 
 
 - Next task: extend source mapping into diagnostics and navigation
 - Risks or blockers: extension-host coverage and richer `.sage` transforms are still pending
+
+## Entry 18
+
+- Date: 2026-03-31
+- Task ID: LSP-007
+- Scope: lsp
+- Related milestone: Runtime hardening
+- Commit: `1fe8303`
+
+### Goal
+
+Make `analysis.extraPaths` affect the static-analysis graph instead of only the subprocess import environment.
+
+### Decisions
+
+- Decision: resolve extra paths on the client before sending initialization options, then include those roots in server index construction.
+- Reason: extra paths are user-facing analysis inputs and should participate in symbol discovery, not just runtime module loading.
+
+### Verification
+
+- Checks run:
+  - `npm run lint`
+  - `python -m pytest packages/sage-lsp/tests`
+  - `npm run test`
+- Result: server initialization now indexes modules from configured extra paths and the full repository suite remained green
+
+### Follow-ups
+
+- Next task: extend source mapping into diagnostics and navigation
+- Risks or blockers: extension-host coverage and richer `.sage` transforms are still pending
