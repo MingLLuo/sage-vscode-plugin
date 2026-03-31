@@ -21,7 +21,7 @@ from lsprotocol.types import (
     ServerCapabilities,
     TextDocumentSyncKind,
 )
-from pygls.server import LanguageServer
+from pygls.lsp.server import LanguageServer
 
 from .environment import SageEnvironment
 from .index import WorkspaceIndex, path_from_uri
@@ -256,4 +256,3 @@ def coerce_path(value: str) -> Path:
     if value.startswith("file://"):
         return path_from_uri(value)
     return Path(value)
-

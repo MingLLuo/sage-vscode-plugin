@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from sage_lsp.index import WorkspaceIndex
+from sage_lsp.index import WorkspaceIndex, path_from_uri
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "sage_src_lite" / "src"
@@ -48,3 +48,9 @@ def test_workspace_index_respects_pyx_disable_and_excludes() -> None:
 
     assert "sage.functions.other" not in index.modules
     assert "sage.rings.integer_ring" not in index.modules
+
+
+def test_path_from_uri_handles_windows_drive_uris() -> None:
+    resolved = path_from_uri("file:///C:/Users/example/project/example.sage")
+
+    assert str(resolved).endswith("C:/Users/example/project/example.sage")

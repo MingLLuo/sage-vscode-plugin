@@ -10,6 +10,7 @@ import {
   formatStatusBarTooltip,
 } from "./environmentPresentation";
 import { createLanguageClient, requestDocumentation } from "./languageClient";
+import { buildShellCommand } from "./runtimeCommand";
 import { buildWorkspaceInitializationData } from "./workspaceDiscovery";
 
 let client: LanguageClient | undefined;
@@ -89,9 +90,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
       const terminal = getOrCreateTerminal();
       terminal.sendText(
-        [settings.interpreterPath, ...settings.interpreterArgs, quotePath(editor.document.uri.fsPath)].join(
-          " ",
-        ),
+        buildShellCommand([
+          settings.interpreterPath,
+          ...settings.interpreterArgs,
+          editor.document.uri.fsPath,
+        ]),
       );
       terminal.show(true);
     }),
@@ -109,7 +112,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand("sage.startRepl", async () => {
       const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
       const terminal = getOrCreateTerminal();
-      terminal.sendText([settings.interpreterPath, ...settings.interpreterArgs].join(" "), true);
+      terminal.sendText(buildShellCommand([settings.interpreterPath, ...settings.interpreterArgs]), true);
       terminal.show(true);
     }),
     vscode.commands.registerCommand("sage.showDocumentation", async () => {
@@ -179,8 +182,4 @@ export async function deactivate(): Promise<void> {
 function getOrCreateTerminal(): vscode.Terminal {
   return vscode.window.terminals.find((terminal) => terminal.name === "Sage REPL")
     ?? vscode.window.createTerminal("Sage REPL");
-}
-
-function quotePath(fsPath: string): string {
-  return /\s/.test(fsPath) ? JSON.stringify(fsPath) : fsPath;
 }

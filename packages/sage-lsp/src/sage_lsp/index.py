@@ -3,6 +3,7 @@ from __future__ import annotations
 import fnmatch
 from dataclasses import dataclass
 from pathlib import Path
+import re
 from urllib.parse import unquote, urlparse
 
 from .model import ImportBinding, ModuleRecord, SymbolRecord, document_symbol_kind
@@ -245,7 +246,12 @@ def module_name_from_path(root: Path, path: Path) -> str | None:
 
 def path_from_uri(uri: str) -> Path:
     parsed = urlparse(uri)
-    return Path(unquote(parsed.path))
+    path_text = unquote(parsed.path)
+    if parsed.netloc:
+        return Path(f"//{parsed.netloc}{path_text}")
+    if re.match(r"^/[A-Za-z]:", path_text):
+        path_text = path_text[1:]
+    return Path(path_text)
 
 
 def first_paragraph(docstring: str | None) -> str | None:

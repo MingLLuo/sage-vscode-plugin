@@ -7,10 +7,18 @@ import fs from "node:fs";
 import {
   buildWorkspaceInitializationData,
   discoverSourceRoots,
+  resolveConfiguredPaths,
 } from "../src/workspaceDiscovery";
 
 test("discoverSourceRoots prefers configured roots when provided", () => {
   assert.deepEqual(discoverSourceRoots(["/workspace"], ["/configured/src"]), ["/configured/src"]);
+});
+
+test("resolveConfiguredPaths resolves relative paths against workspace folders", () => {
+  assert.deepEqual(
+    resolveConfiguredPaths(["/workspace-a", "/workspace-b"], ["src"]),
+    ["/workspace-a/src", "/workspace-b/src"],
+  );
 });
 
 test("discoverSourceRoots maps a Sage source checkout to its src root", () => {

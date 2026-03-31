@@ -8,13 +8,37 @@ export interface WorkspaceInitializationData {
   sourceRoots: string[];
 }
 
+export function resolveConfiguredPaths(
+  workspaceFolders: readonly string[],
+  configuredPaths: readonly string[],
+): string[] {
+  if (configuredPaths.length === 0) {
+    return [];
+  }
+
+  const normalizedFolders = dedupe(workspaceFolders.map((folder) => path.resolve(folder)));
+  const resolved = configuredPaths.flatMap((candidate) => {
+    if (path.isAbsolute(candidate)) {
+      return [path.resolve(candidate)];
+    }
+
+    if (normalizedFolders.length > 0) {
+      return normalizedFolders.map((folder) => path.resolve(folder, candidate));
+    }
+
+    return [path.resolve(candidate)];
+  });
+
+  return dedupe(resolved);
+}
+
 export function discoverSourceRoots(
   workspaceFolders: readonly string[],
   configuredSourceRoots: readonly string[],
   exists: (candidate: string) => boolean = fs.existsSync,
 ): string[] {
   if (configuredSourceRoots.length > 0) {
-    return dedupe(configuredSourceRoots.map((candidate) => path.resolve(candidate)));
+    return resolveConfiguredPaths(workspaceFolders, configuredSourceRoots);
   }
 
   const discovered = workspaceFolders.flatMap((folder) => {

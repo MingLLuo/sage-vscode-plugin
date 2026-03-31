@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { buildLanguageServerLaunch } from "../src/serverLaunch";
 import { buildInitializationOptions, type SageSettings } from "../src/settingsModel";
 
 test("buildInitializationOptions mirrors editor settings and workspace context into the LSP payload", () => {
@@ -58,4 +59,18 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
       },
     },
   );
+});
+
+test("buildLanguageServerLaunch uses python executables directly", () => {
+  assert.deepEqual(buildLanguageServerLaunch("/opt/python/bin/python3", ["-X", "utf8"]), {
+    command: "/opt/python/bin/python3",
+    args: ["-X", "utf8", "-m", "sage_lsp"],
+  });
+});
+
+test("buildLanguageServerLaunch adds -python for Sage executables", () => {
+  assert.deepEqual(buildLanguageServerLaunch("/opt/sage/bin/sage", ["--nodotsage"]), {
+    command: "/opt/sage/bin/sage",
+    args: ["--nodotsage", "-python", "-m", "sage_lsp"],
+  });
 });

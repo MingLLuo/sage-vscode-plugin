@@ -16,28 +16,32 @@ import {
   type DocumentationResponse,
   type DocumentationResult,
 } from "./documentationRequest";
-import { buildWorkspaceInitializationData } from "./workspaceDiscovery";
+import { buildLanguageServerLaunch } from "./serverLaunch";
+import { buildWorkspaceInitializationData, resolveConfiguredPaths } from "./workspaceDiscovery";
 
 export function createLanguageClient(
   context: vscode.ExtensionContext,
   outputChannel: vscode.OutputChannel,
 ): LanguageClient {
+  const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   const settings = readSettings(workspaceFolder);
   const serverModuleRoot = path.resolve(context.extensionPath, "../sage-lsp/src");
   const workspaceData = buildWorkspaceInitializationData(
-    vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [],
+    workspaceFolders,
     settings.sourceRoots,
   );
+  const resolvedExtraPaths = resolveConfiguredPaths(workspaceFolders, settings.extraPaths);
+  const launch = buildLanguageServerLaunch(settings.interpreterPath, settings.interpreterArgs);
 
   const serverOptions: ServerOptions = {
-    command: "python3",
-    args: ["-m", "sage_lsp"],
+    command: launch.command,
+    args: launch.args,
     options: {
       cwd: context.extensionPath,
       env: {
         ...process.env,
-        PYTHONPATH: appendPythonPath(process.env.PYTHONPATH, serverModuleRoot, settings.extraPaths),
+        PYTHONPATH: appendPythonPath(process.env.PYTHONPATH, serverModuleRoot, resolvedExtraPaths),
       },
     },
   };
