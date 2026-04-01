@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-import threading
 from typing import Any, Dict, Optional, Tuple, TypedDict
 
 from lsprotocol.types import (
@@ -482,8 +481,9 @@ def _rebuild_index(server: SageLanguageServer) -> None:
     source_roots = [coerce_path(entry) for entry in server.environment.workspace.source_roots if entry]
     source_roots.extend(coerce_path(entry) for entry in server.environment.analysis.extra_paths if entry)
     deduped_roots = list(dict.fromkeys(root.resolve() for root in source_roots))
+    deferred_roots = [root for root in deduped_roots if _should_defer_root_scan(root)]
+    eager_roots = [root for root in deduped_roots if not _should_defer_root_scan(root)]
     server.index_generation += 1
-    generation = server.index_generation
     server.runtime_introspector = RuntimeIntrospector.from_environment(server.environment)
 
     workspace_index = WorkspaceIndex(
@@ -491,42 +491,24 @@ def _rebuild_index(server: SageLanguageServer) -> None:
         excluded_globs=server.environment.workspace.excluded_globs,
         enable_pyx=server.environment.analysis.enable_pyx_parsing,
     )
-    if workspace_index.hydrate_from_cache():
-        server.workspace_index = workspace_index
-        _clear_all_request_caches(server)
-        _start_background_index_reconcile(server, deduped_roots, generation)
-        return
-
-    workspace_index.build()
-    if server.index_generation == generation:
-        server.workspace_index = workspace_index
-
-
-def _start_background_index_reconcile(
-    server: SageLanguageServer,
-    source_roots: list[Path],
-    generation: int,
-) -> None:
-    excluded_globs = server.environment.workspace.excluded_globs
-    enable_pyx = server.environment.analysis.enable_pyx_parsing
-
-    def _reconcile() -> None:
-        refreshed_index = WorkspaceIndex(
-            source_roots=source_roots,
-            excluded_globs=excluded_globs,
-            enable_pyx=enable_pyx,
+    hydrated = workspace_index.hydrate_from_cache()
+    if eager_roots:
+        workspace_index.load_roots(
+            eager_roots,
+            mark_fully_indexed=hydrated or not deferred_roots,
+            persist_snapshot=not deferred_roots,
         )
-        refreshed_index.build()
-        if server.index_generation != generation:
-            return
-        server.workspace_index = refreshed_index
-        _clear_all_request_caches(server)
+    workspace_index.load_bootstrap_modules(("sage.all_cmdline", "sage.all"))
+    server.workspace_index = workspace_index
+    _clear_all_request_caches(server)
 
-    threading.Thread(
-        target=_reconcile,
-        name="sage-lsp-index-reconcile",
-        daemon=True,
-    ).start()
+
+def _should_defer_root_scan(root: Path) -> bool:
+    return (root / "sage").exists()
+
+
+def _invalidate_background_reconcile(server: SageLanguageServer) -> None:
+    server.index_generation += 1
 
 
 def _record_for_uri(server: SageLanguageServer, uri: str) -> Tuple[Optional[ModuleRecord], Optional[str]]:
@@ -580,6 +562,7 @@ def _refresh_saved_indexed_document(
 ) -> Optional[ModuleRecord]:
     if server.workspace_index is None:
         return None
+    _invalidate_background_reconcile(server)
     return server.workspace_index.refresh_path(path_from_uri(uri))
 
 
@@ -609,6 +592,7 @@ def _apply_workspace_file_changes(
     if server.workspace_index is None:
         return
 
+    _invalidate_background_reconcile(server)
     normalized_changes = [
         (path_from_uri(uri), change_type is FileChangeType.Deleted)
         for uri, change_type in changes

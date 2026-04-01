@@ -76,7 +76,7 @@ def test_server_imports_and_initializes_with_capabilities() -> None:
     assert "workspace/didChangeConfiguration" in server.protocol.fm.features
 
 
-def test_server_prefers_cached_snapshot_before_background_reconcile(tmp_path: Path, monkeypatch) -> None:
+def test_server_prefers_cached_snapshot_before_full_rebuild(tmp_path: Path, monkeypatch) -> None:
     source_root = tmp_path / "src"
     cache_dir = tmp_path / "cache"
     _write_module(source_root, "pkg/__init__.py", "")
@@ -86,11 +86,10 @@ def test_server_prefers_cached_snapshot_before_background_reconcile(tmp_path: Pa
     seed_index = WorkspaceIndex([source_root], (), True)
     seed_index.build()
 
-    started_reconcile: list[tuple[tuple[Path, ...], int]] = []
-    monkeypatch.setattr(
-        "sage_lsp.server._start_background_index_reconcile",
-        lambda server, source_roots, generation: started_reconcile.append((tuple(source_roots), generation)),
-    )
+    def _fail_build(self):
+        raise AssertionError("initialize should not force a full rebuild when a snapshot is available")
+
+    monkeypatch.setattr(WorkspaceIndex, "build", _fail_build)
 
     server = _initialized_server_with_options(
         {
@@ -101,7 +100,35 @@ def test_server_prefers_cached_snapshot_before_background_reconcile(tmp_path: Pa
 
     assert server.workspace_index is not None
     assert "pkg.helpers" in server.workspace_index.modules
-    assert started_reconcile
+
+
+def test_server_bootstraps_modules_before_deferred_full_index_without_cache(tmp_path: Path, monkeypatch) -> None:
+    source_root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(source_root, "sage/__init__.py", "")
+    _write_module(source_root, "sage/functions/__init__.py", "")
+    _write_module(source_root, "sage/functions/other.py", 'def sqrt(value):\n    """square root fixture"""\n    return value\n')
+    _write_module(source_root, "sage/all.py", "from sage.functions.other import sqrt\n")
+
+    monkeypatch.setattr("sage_lsp.index.default_index_cache_dir", lambda: cache_dir)
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(source_root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+
+    assert server.workspace_index is not None
+    assert "sage.all" in server.workspace_index.modules
+    record = server.workspace_index.parse_document(
+        Path("/workspace/example.sage").as_uri(),
+        "value = sqrt(4)\n",
+        "sagemath",
+    )
+    resolved = server.workspace_index.resolve_symbol(record, "sqrt")
+    assert resolved is not None
+    assert resolved.file_path.name == "other.py"
 
 
 def test_server_declares_semantic_tokens_and_encodes_sage_structures() -> None:

@@ -26,6 +26,24 @@ def test_workspace_index_resolves_star_exports_and_lazy_imports() -> None:
     assert x_symbol.file_path.name == "predefined.py"
 
 
+def test_workspace_index_resolves_imports_lazily_without_full_build(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    index = WorkspaceIndex([root], (), True)
+    record = parse_module(
+        "document::consumer",
+        Path("consumer.py"),
+        "from pkg.helpers import helper\n\nresult = helper(4)\n",
+    )
+
+    helper = index.resolve_symbol(record, "helper")
+
+    assert helper is not None
+    assert helper.file_path.name == "helpers.py"
+
+
 def test_workspace_index_documentation_uses_source_docstring() -> None:
     index = WorkspaceIndex([FIXTURE_ROOT], (), True)
     index.build()
@@ -161,6 +179,18 @@ def test_workspace_index_builds_python_like_sage_modules_and_resolves_imports(tm
     assert any(item["name"] == "result" for item in symbols)
 
 
+def test_workspace_index_injects_default_sage_imports_without_full_build() -> None:
+    index = WorkspaceIndex([FIXTURE_ROOT], (), True)
+    record = parse_module("document::example", Path("example.sage"), "value = sqrt(4)\n")
+
+    index._inject_default_sage_imports(record)
+    resolved = index.resolve_symbol(record, "sqrt")
+
+    assert "sage.all" in record.star_imports
+    assert resolved is not None
+    assert resolved.file_path.name == "other.py"
+
+
 def test_workspace_index_keeps_method_structure_for_preparser_sage_modules(tmp_path: Path) -> None:
     root = tmp_path / "src"
     _write_module(root, "pkg/__init__.py", "")
@@ -246,6 +276,27 @@ def test_workspace_index_hydrates_from_cache_without_scanning(tmp_path: Path, mo
 
     assert hydrated_index.hydrate_from_cache() is True
     assert "pkg.helpers" in hydrated_index.modules
+
+
+def test_workspace_index_does_not_persist_partial_lazy_snapshot(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    record = parse_module(
+        "document::consumer",
+        Path("consumer.py"),
+        "from pkg.helpers import helper\n\nvalue = helper(4)\n",
+    )
+
+    helper = index.resolve_symbol(record, "helper")
+
+    assert helper is not None
+    hydrated_index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    assert hydrated_index.hydrate_from_cache() is False
+    assert "pkg.helpers" not in hydrated_index.modules
 
 
 def test_workspace_index_invalidates_persistent_cache_when_source_changes(tmp_path: Path, monkeypatch) -> None:
