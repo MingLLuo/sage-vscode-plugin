@@ -48,6 +48,8 @@
 - Deferred startup hardening: warm snapshots now stay authoritative on disk while smaller roots refresh eagerly and larger Sage roots load on demand
 - Incremental full-index completion: requests that truly need a full index now scan only the roots that were still deferred instead of resetting and rebuilding the entire workspace graph
 - Query-driven cold global lookup: cold `workspace symbols` and import-candidate requests now search deferred roots on demand instead of immediately forcing a whole-library completion pass
+- Summary-backed cold global lookup: deferred-root queries now populate lightweight symbol summaries instead of loading full module records for every cold global hit
+- Query-scoped cold global fast path: first no-snapshot workspace-symbol and import-candidate requests now build query-only summaries for ripgrep-discovered files, bringing the local Sage cold path under one second
 
 ## Current Focus
 
@@ -85,6 +87,8 @@
 | Deferred-root startup hardening | Done | Warm starts now keep full cached snapshots authoritative, refresh smaller roots eagerly, and defer large Sage roots to on-demand loading without persisting partial module sets back to disk. |
 | Incremental full-index completion | Done | Full-index requests now scan only roots that were still deferred, avoiding a reset-and-rebuild of already loaded workspace and bootstrap modules. |
 | Query-driven cold global lookup | Done | Cold workspace-symbol and import-candidate requests now search deferred roots on demand instead of first forcing a complete large-library index build. |
+| Summary-backed cold global lookup | Done | Deferred-root workspace-symbol and import-candidate queries now use lightweight symbol summaries, keeping startup tiny while reducing cold global-query cost further. |
+| Query-scoped cold global fast path | Done | When no persisted summary snapshot exists yet, first cold global requests now use query-only summaries for ripgrep-discovered files instead of loading full module records or waiting for a whole-library pass. |
 
 ## Change Log Notes
 
@@ -164,3 +168,5 @@
 - Hardened deferred startup so partial eager or lazy Sage-root loads never overwrite the authoritative warm snapshot on disk, while smaller roots still refresh eagerly and the real extension-host smoke remains green.
 - Reworked `ensure_full_index()` so requests such as workspace-symbol search and import-candidate lookup now fill in only the roots that were still deferred instead of restarting from an empty in-memory graph.
 - Switched cold global symbol/import search away from “complete the full index first” to “search deferred roots for the query,” which cuts the first cold `workspace symbols("sqrt")` path from roughly `9.4s` to roughly `3.3s` on the local Sage checkout.
+- Added a lightweight summary layer for deferred-root global queries, which keeps cold startup around `3ms`, holds post-startup loaded modules at `2`, and cuts the local cold `workspace symbols("sqrt")` path further to about `1.68s` while keeping cold `import_candidates("sqrt")` around `0.70s`.
+- Added a query-scoped cold lookup fast path that combines ripgrep-discovered candidate files with query-only summaries, bringing repeated no-snapshot samples on the local Sage checkout to about `483ms` for cold `workspace symbols("sqrt")` and about `529ms` for cold `import_candidates("sqrt")` while keeping loaded modules at `2`.

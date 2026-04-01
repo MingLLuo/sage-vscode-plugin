@@ -918,3 +918,56 @@ roots on demand instead of forcing immediate whole-library completion.
   summaries instead of reading every candidate file source on the first query
 - Risks or blockers: cold global lookups are much better than a full rebuild, but they still walk the deferred tree
   once per first query family when no usable snapshot exists yet
+
+## Entry 24
+
+- Date: 2026-04-01
+- Task ID: RUNTIME-011
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `34a4345`
+
+### Goal
+
+Push cold global queries toward Python-tooling latency by combining persisted lightweight summaries with an even
+lighter query-scoped fast path when no summary snapshot exists yet.
+
+### Decisions
+
+- Decision: keep the persisted lightweight module-summary layer introduced for deferred-root global lookups.
+- Reason: summary results are enough for warm no-snapshot workspace-symbol presentation and direct import-candidate
+  ranking, while avoiding the memory and startup cost of inflating the module graph during a cold global lookup.
+- Decision: add a query-scoped fast path on top of those summaries.
+- Reason: even with persisted lightweight summaries available, the true first no-snapshot query was still too slow
+  because it had to read many candidate files before answering.
+- Decision: use ripgrep only to find candidate files, then build query-only summaries for those files instead of
+  loading full module records or waiting for whole-file summary persistence.
+- Reason: this preserves startup around a few milliseconds while cutting first cold `workspace symbols` and cold
+  import-candidate requests into the sub-second range on the local Sage checkout.
+- Decision: keep full star-import visibility expansion for the fully indexed case only.
+- Reason: expanding `sage.all`-style aggregators during cold startup still pushes module count and latency in the
+  wrong direction, so the fast path stays exact and local-first.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py -q`
+  - `python -m pytest packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+  - repeated local timing probe against `/workspace/sage/src`
+- Result: index and server regressions passed, repository tests and native Sage smoke stayed green, the real
+  extension-host smoke passed, and repeated timing probes on the local Sage checkout measured roughly `2.5ms` cold
+  startup, roughly `483ms` average cold `workspace symbols("sqrt")`, and roughly `529ms` average cold
+  `import_candidates("sqrt")`; a summary-only warm-no-snapshot path stayed around `755ms` for `workspace symbols`
+  and around `498ms` for `import_candidates`
+
+### Follow-ups
+
+- Next task: keep shrinking the remaining gap between the query-scoped fast path and true Python-tooling responsiveness,
+  likely by persisting a dedicated summary manifest or reverse index that avoids even candidate-file reads on the first
+  no-snapshot query
+- Risks or blockers: the current fast path is under the target on the local checkout, but it still depends on ripgrep
+  availability for the best cold path and it still returns query-scoped summaries instead of a full library summary
+  graph on the very first no-snapshot lookup

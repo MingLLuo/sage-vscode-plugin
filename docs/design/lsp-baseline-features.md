@@ -67,6 +67,11 @@ The current baseline now includes:
   deferred; it can now scan the missing roots incrementally and then persist the completed snapshot.
 - Query-driven cold global lookups such as workspace-symbol search and import-candidate ranking now search deferred
   roots on demand instead of forcing an immediate whole-library completion pass up front.
+- Deferred-root query search now prefers lightweight module summaries over full `ModuleRecord` loads, so cold global
+  lookups can answer from summary data without inflating the in-memory module graph first.
+- When no persisted summary snapshot is ready yet, cold global lookups now fall back to query-scoped summaries built
+  only for ripgrep-discovered candidate files, keeping the first `workspace symbols` and import-candidate requests on
+  a real local Sage checkout under the one-second target without eagerly loading the full library graph.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.
