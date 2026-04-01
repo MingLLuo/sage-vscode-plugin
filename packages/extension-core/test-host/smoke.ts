@@ -36,6 +36,7 @@ export async function run(): Promise<void> {
   await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri));
   await assertEventually(() => verifyWorkspaceReferencesRenameAndSymbols(workspaceFolder.uri));
   await assertEventually(() => verifyNativeCythonNavigation(workspaceFolder.uri));
+  await assertEventually(() => verifySavedModuleRefresh(workspaceFolder.uri));
 
   if (process.env.SAGE_TEST_NATIVE_SOURCE_ROOT) {
     await assertEventually(() =>
@@ -210,6 +211,48 @@ async function verifyNativeCythonNavigation(workspaceUri: vscode.Uri): Promise<v
   for (const expected of ["fast_square", "StepCounter", "stepped_square"]) {
     assert.ok(symbolNames.has(expected), `expected Cython symbols to include ${expected}`);
   }
+}
+
+async function verifySavedModuleRefresh(workspaceUri: vscode.Uri): Promise<void> {
+  const helperUri = vscode.Uri.joinPath(workspaceUri, "src", "local_docs.py");
+  const helperDocument = await vscode.workspace.openTextDocument(helperUri);
+  const helperEditor = await vscode.window.showTextDocument(helperDocument);
+  const originalSource = helperDocument.getText();
+  const originalSummary = "Return a comma-separated summary for documentation and hover tests.";
+  const updatedSummary = "Return an updated comma-separated summary after a save.";
+  const updatedSource = originalSource.includes(updatedSummary)
+    ? originalSource
+    : originalSource.replace(originalSummary, updatedSummary);
+  assert.ok(
+    updatedSource.includes(updatedSummary),
+    "expected the smoke fixture docstring to contain the updated saved summary",
+  );
+
+  if (updatedSource !== originalSource) {
+    await helperEditor.edit((editBuilder) => {
+      const finalLine = helperDocument.lineAt(helperDocument.lineCount - 1);
+      editBuilder.replace(
+        new vscode.Range(0, 0, helperDocument.lineCount - 1, finalLine.text.length),
+        updatedSource,
+      );
+    });
+    await helperDocument.save();
+  }
+
+  const sageUri = vscode.Uri.joinPath(workspaceUri, "src", "01_hover_and_definition.sage");
+  const sageDocument = await vscode.workspace.openTextDocument(sageUri);
+  await vscode.window.showTextDocument(sageDocument);
+
+  const hoverPosition = positionOfNth(sageDocument, "summarize_coefficients", 2);
+  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", sageUri, hoverPosition)) ?? [];
+  assert.ok(
+    hovers.some((hover) =>
+      normalizeWhitespace(renderHoverContents(hover)).includes(
+        "updated comma-separated summary after a save",
+      ),
+    ),
+    "expected hover docs to refresh after saving the imported Python helper module",
+  );
 }
 
 async function verifyNativeSageLibraryNavigation(

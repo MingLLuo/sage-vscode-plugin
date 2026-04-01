@@ -136,5 +136,6 @@ fails the run on known runtime regressions.
 - Extension-host behavior that depends on the real VS Code client lifecycle should also keep `npm run test:extension-host`
   green.
 - The extension-host smoke suite now covers hover, definition, completion, references, rename, document/workspace
-  symbols, native Cython navigation, managed restart stability, and optional native Sage source-tree lookups.
+  symbols, native Cython navigation, managed restart stability, imported-helper save refresh, and optional native Sage
+  source-tree lookups.
 - Use `npm run test:full` when you need the whole repository suite plus the extension-host smoke test in one command.
