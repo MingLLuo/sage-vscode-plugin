@@ -64,6 +64,7 @@ class WorkspaceIndex:
         self._document_records: dict[str, tuple[str, str, ModuleRecord]] = {}
         self._cache_entries: dict[str, dict[str, object]] = {}
         self._cache_snapshot_complete = False
+        self._loaded_roots: set[Path] = set()
         self._loading_modules: set[str] = set()
         self._fully_indexed = False
 
@@ -116,7 +117,13 @@ class WorkspaceIndex:
     def ensure_full_index(self) -> None:
         if self._fully_indexed:
             return
-        self.build()
+        missing_roots = [root for root in self._source_roots if root.resolve() not in self._loaded_roots]
+        if not missing_roots:
+            self._fully_indexed = True
+            self._cache_snapshot_complete = True
+            self._persist_cache_snapshot()
+            return
+        self.load_roots(missing_roots, mark_fully_indexed=True, persist_snapshot=True)
 
     def module_for_path(self, path: Path) -> Optional[ModuleRecord]:
         module_name = self._module_paths.get(path.resolve())
@@ -807,6 +814,7 @@ class WorkspaceIndex:
         self._document_records.clear()
         self._cache_entries = {}
         self._cache_snapshot_complete = False
+        self._loaded_roots.clear()
         self._loading_modules.clear()
         self._fully_indexed = False
 
@@ -836,6 +844,9 @@ class WorkspaceIndex:
         reset_cache_entries: bool,
     ) -> None:
         next_cache_entries = {} if reset_cache_entries else dict(self._cache_entries)
+        loaded_roots = set() if reset_cache_entries else set(self._loaded_roots)
+        for root in roots:
+            loaded_roots.add(root.resolve())
         for root, path, module_name in self._iter_indexable_modules_for_roots(roots):
             cache_key = str(path.resolve())
             fingerprint = file_fingerprint(path)
@@ -856,6 +867,7 @@ class WorkspaceIndex:
                 "record": serialize_module_record(record),
             }
         self._cache_entries = next_cache_entries
+        self._loaded_roots = loaded_roots
 
     def _is_indexable_path(self, root: Path, path: Path) -> bool:
         if not path.is_file():
@@ -1018,6 +1030,8 @@ class WorkspaceIndex:
             record = deserialize_module_record(payload, module_name, path, source)
             self._store_module_record(module_name, path, record, clear_caches=False)
             restored_any = True
+        if restored_any:
+            self._loaded_roots = {root.resolve() for root in self._source_roots}
         return restored_any
 
     def _ensure_module_loaded(self, module_name: str) -> Optional[ModuleRecord]:

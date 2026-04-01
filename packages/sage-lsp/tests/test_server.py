@@ -131,6 +131,38 @@ def test_server_bootstraps_modules_before_deferred_full_index_without_cache(tmp_
     assert resolved.file_path.name == "other.py"
 
 
+def test_server_workspace_symbols_load_deferred_roots_without_full_rebuild(tmp_path: Path, monkeypatch) -> None:
+    source_root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(source_root, "sage/__init__.py", "")
+    _write_module(source_root, "sage/functions/__init__.py", "")
+    _write_module(source_root, "sage/functions/other.py", 'def sqrt(value):\n    """square root fixture"""\n    return value\n')
+    _write_module(source_root, "sage/all.py", "from sage.functions.other import sqrt\n")
+
+    monkeypatch.setattr("sage_lsp.index.default_index_cache_dir", lambda: cache_dir)
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(source_root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+
+    assert server.workspace_index is not None
+    assert "sage.functions.other" not in server.workspace_index.modules
+
+    def _fail_build(self):
+        raise AssertionError("workspace symbol lookup should load deferred roots incrementally")
+
+    monkeypatch.setattr(WorkspaceIndex, "build", _fail_build)
+
+    workspace_symbol_handler = server.protocol.fm.features["workspace/symbol"]
+    symbols = workspace_symbol_handler(WorkspaceSymbolParams(query="sqrt"))
+
+    assert any(item["name"] == "sqrt" for item in symbols)
+    assert "sage.functions.other" in server.workspace_index.modules
+
+
 def test_server_declares_semantic_tokens_and_encodes_sage_structures() -> None:
     server = create_server()
     server.protocol._workspace = Workspace(  # noqa: SLF001 - intentional test setup

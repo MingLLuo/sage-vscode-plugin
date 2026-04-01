@@ -278,6 +278,34 @@ def test_workspace_index_hydrates_from_cache_without_scanning(tmp_path: Path, mo
     assert "pkg.helpers" in hydrated_index.modules
 
 
+def test_workspace_index_ensure_full_index_loads_only_missing_roots(tmp_path: Path, monkeypatch) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    cache_dir = tmp_path / "cache"
+    _write_module(first_root, "pkg/__init__.py", "")
+    _write_module(first_root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+    _write_module(second_root, "lib/__init__.py", "")
+    _write_module(second_root, "lib/other.py", "def other(value):\n    return value + 1\n")
+
+    index = WorkspaceIndex([first_root, second_root], (), True, cache_dir=cache_dir)
+    index.load_roots([first_root])
+
+    def _fail_build() -> None:
+        raise AssertionError("ensure_full_index should load only missing roots instead of rebuilding everything")
+
+    monkeypatch.setattr(index, "build", _fail_build)
+
+    index.ensure_full_index()
+
+    assert "pkg.helpers" in index.modules
+    assert "lib.other" in index.modules
+
+    hydrated_index = WorkspaceIndex([first_root, second_root], (), True, cache_dir=cache_dir)
+    assert hydrated_index.hydrate_from_cache() is True
+    assert "pkg.helpers" in hydrated_index.modules
+    assert "lib.other" in hydrated_index.modules
+
+
 def test_workspace_index_does_not_persist_partial_lazy_snapshot(tmp_path: Path) -> None:
     root = tmp_path / "src"
     cache_dir = tmp_path / "cache"
