@@ -614,3 +614,44 @@ persisting cache state and clearing resolution caches once per file.
   less synchronous filesystem work on initialization
 - Risks or blockers: batching reduces repeated work inside one event burst, but source-root discovery and cold startup
   still walk the full tree when no cache exists yet
+
+## Entry 17
+
+- Date: 2026-04-01
+- Task ID: RUNTIME-006
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `b1c02ab`
+
+### Goal
+
+Reduce warm-start cold-path I/O by reusing cached module source for unchanged files instead of rereading every module
+source file from disk before rebuilding the in-memory index.
+
+### Decisions
+
+- Decision: store module source alongside each persistent cache entry and reuse it when the cached fingerprint still
+  matches the on-disk file.
+- Reason: the previous warm cache avoided reparsing, but it still reread every unchanged source file just to
+  deserialize the same record again.
+- Decision: bump the cache schema and add direct coverage that unchanged warm-cache startup no longer reads module
+  source files.
+- Reason: this change affects cache compatibility and should be pinned with a targeted regression test instead of
+  relying only on parse-level assertions.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py -q`
+  - `python -m pytest packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+- Result: index tests, server tests, full repository tests, native Sage smoke, and real extension-host smoke all
+  passed after warm-cache startup switched to cached-source reuse
+
+### Follow-ups
+
+- Next task: keep pushing cold startup toward a true “cached snapshot first, background reconcile later” model
+- Risks or blockers: unchanged-module source reads are gone on warm starts, but the server still walks source roots to
+  compute fingerprints and detect new files before initialization completes
