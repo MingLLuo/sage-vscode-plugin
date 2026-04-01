@@ -77,6 +77,7 @@
 | Editor authoring baseline | Done | Syntax assets, snippets, triple-quoted editing, terminal cleanup, and background extension-host smoke automation now support richer Sage authoring workflows. |
 | Native library documentation baseline | Done | Common Sage library constructors and `.pyx` functions now expose documentation and source paths through merged static/runtime analysis plus local smoke coverage. |
 | Python-like `.sage` performance baseline | Done | `.sage` files that look like Python now keep AST-grade analysis, saved `.sage` files enter workspace indexing, semantic tokens are available, and repeated indexed lookups reuse caches. |
+| `.sage` projection and quick-fix baseline | Done | `.sage` syntax diagnostics now project back to source-facing ranges, deterministic unresolved-import-name diagnostics expose import quick fixes, and both paths are covered through real extension-host smoke. |
 
 ## Change Log Notes
 
@@ -150,3 +151,5 @@
 - Extended the real extension-host smoke suite so it edits and saves an imported Python helper module, then verifies that hover inside a `.sage` consumer updates without a manual language-server restart.
 - Batched multi-file watcher/save indexing work so change bursts now persist cache state and clear resolution caches once per batch instead of once per file.
 - Reused cached module source during warm index startup so unchanged files can be reconstructed from persistent cache data without rereading every module source file.
+- Projected `.sage` syntax diagnostics back to original source ranges so caret-based preparser syntax no longer reports generated-text columns to the editor.
+- Added standard LSP import quick fixes for deterministic unresolved-import-name diagnostics and validated them through both request-level tests and real extension-host smoke.

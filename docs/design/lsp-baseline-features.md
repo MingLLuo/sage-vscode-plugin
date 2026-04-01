@@ -19,7 +19,9 @@ The current baseline now includes:
 - references
 - rename
 - low-noise unresolved-import diagnostics
+- quick-fix import rewrites for deterministic unresolved-import-name diagnostics
 - conservative syntax diagnostics for Python and `.sage`
+- source-projected `.sage` syntax diagnostics that point back to original caret/generator syntax instead of generated validation text
 - custom documentation requests
 - dotted singleton-member resolution for common Sage patterns such as `graphs.PetersenGraph`
 - member completion for statically understood singleton APIs
@@ -59,6 +61,8 @@ The current baseline now includes:
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.
+- Deterministic unresolved-import-name diagnostics now expose standard LSP quick fixes when the index can already
+  prove a better import source module for the missing symbol.
 
 ## Follow-up Areas
 

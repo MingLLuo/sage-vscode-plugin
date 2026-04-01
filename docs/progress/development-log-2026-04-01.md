@@ -655,3 +655,83 @@ source file from disk before rebuilding the in-memory index.
 - Next task: keep pushing cold startup toward a true “cached snapshot first, background reconcile later” model
 - Risks or blockers: unchanged-module source reads are gone on warm starts, but the server still walks source roots to
   compute fingerprints and detect new files before initialization completes
+
+## Entry 18
+
+- Date: 2026-04-01
+- Task ID: LSP-027
+- Scope: lsp
+- Related milestone: Source mapping v1
+- Commit: `0b2d48b`
+
+### Goal
+
+Project `.sage` syntax diagnostics back onto original source ranges so generated validation text never leaks into the
+editor as incorrect caret columns or highlight spans.
+
+### Decisions
+
+- Decision: extend the source-mapping layer with generated-range projection helpers instead of patching syntax-error
+  spans ad hoc inside one parser branch.
+- Reason: future `.sage` diagnostics and navigation work will need the same projection primitives, so the mapping
+  model should own range normalization.
+- Decision: thread the preprocessed `.sage` document through syntax validation helpers and mark parser-produced syntax
+  diagnostics with an explicit `syntax-error` code.
+- Reason: the server now needs to preserve projected ranges during publish and later code-action filtering without
+  guessing which diagnostics came from syntax validation.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_source_map.py packages/sage-lsp/tests/test_parser.py packages/sage-lsp/tests/test_server.py -q`
+- Result: source-map projection tests, parser diagnostics tests, and publish-level server tests passed with `.sage`
+  syntax errors highlighting the original source caret position
+
+### Follow-ups
+
+- Next task: keep feeding the same projection model into more `.sage` navigation and edit paths beyond syntax
+  diagnostics
+- Risks or blockers: current projection work covers syntax diagnostics first; richer `.sage` rename/reference paths
+  still need deeper source-map adoption
+
+## Entry 19
+
+- Date: 2026-04-01
+- Task ID: LSP-028
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `dedcf16`
+
+### Goal
+
+Expose standard quick-fix code actions for deterministic unresolved-import-name diagnostics and prove the behavior
+through both request-level and real VS Code host automation.
+
+### Decisions
+
+- Decision: only generate quick fixes for `unresolved-import-name`, not `unresolved-import-module`.
+- Reason: the index can safely rewrite an existing-but-wrong import source module, while missing modules are too
+  ambiguous for a low-noise automatic fix.
+- Decision: reuse indexed symbol-export knowledge to rank import candidates, preferring the defining module ahead of
+  broad re-export surfaces such as `sage.all`.
+- Reason: quick fixes should bias toward the most direct source of truth rather than the widest aggregator.
+- Decision: extend the extension-host smoke suite with a temporary `.sage` file that exercises both projected syntax
+  diagnostics and a real import quick-fix application.
+- Reason: this behavior matters at the editor integration layer, not just in handler-level unit tests.
+
+### Verification
+
+- Checks run:
+  - `npm run lint`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+- Result: repository lint, unit/integration tests, native Sage smoke, and real extension-host smoke all passed after
+  the server started publishing quick-fix metadata and the host smoke applied the generated import rewrite
+
+### Follow-ups
+
+- Next task: consider extending quick fixes to other deterministic Sage import and binding diagnostics once false
+  positives stay under control
+- Risks or blockers: quick-fix ranking is intentionally conservative today and still depends on static export
+  knowledge rather than deeper runtime category inference
