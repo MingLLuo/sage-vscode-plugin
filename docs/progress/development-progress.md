@@ -145,3 +145,4 @@
 - Added a persistent module-cache baseline for indexed source roots, plus cache invalidation on file changes and automatic fallback when the preferred cache directory cannot be written.
 - Added a hot open-document overlay layer so repeated requests against unchanged editor buffers no longer re-parse the same text, while document-close events now drop that overlay state cleanly.
 - Refactored the recent index/cache code into clearer helper functions so warm-cache loading, module storage, document overlays, and cache-eligibility checks are easier to reason about without changing behavior.
+- Refactored the language-server request flow so hover/definition wrappers, open-document overlay refresh, and empty-diagnostics publication now live behind smaller helpers instead of being repeated across `server.py`.

@@ -457,3 +457,41 @@ Improve readability and maintainability of the recent indexing and document-cach
 
 - Next task: continue replacing repeated ad hoc indexing logic with clearer hot-document versus cold-index boundaries
 - Risks or blockers: `server.py` still carries a lot of feature wiring and could use a similar readability pass later
+
+## Entry 13
+
+- Date: 2026-04-01
+- Task ID: LSP-026
+- Scope: lsp
+- Related milestone: LSP baseline
+- Commit: `5b8e14e`
+
+### Goal
+
+Improve readability in `server.py` by extracting the repeated request/document flow into smaller helpers without
+changing request behavior.
+
+### Decisions
+
+- Decision: add dedicated helpers for resolved-request documentation/definition lookup, hover markup construction,
+  document-overlay refresh, and empty diagnostics publication.
+- Reason: request handlers had started repeating the same glue logic across hover, definition, open/change/close, and
+  diagnostics code paths.
+- Decision: keep the refactor localized to handler wiring instead of changing the indexing model in the same step.
+- Reason: the recent cache work already shifted the performance model, so this pass should stay focused on readability
+  and maintenance risk reduction.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_server.py packages/sage-lsp/tests/test_index.py -q`
+  - `npm run test`
+- Result: targeted server/index tests and the full repository suite both passed after the `server.py` helper
+  extraction refactor
+
+### Follow-ups
+
+- Next task: continue shrinking handler-level branching as the server moves toward clearer hot-document versus
+  cold-index boundaries
+- Risks or blockers: request wiring is cleaner now, but future performance work will still need careful discipline to
+  avoid pushing cache and runtime policy back into individual handlers
