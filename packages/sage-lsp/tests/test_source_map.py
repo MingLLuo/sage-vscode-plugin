@@ -42,3 +42,11 @@ def test_preserves_trailing_newline_line_count() -> None:
     assert document.line_maps[1].source_line == ""
     assert document.map_source_to_generated(1, 0).character == 0
 
+
+def test_projects_generated_error_spans_back_to_source_positions() -> None:
+    document = preprocess_sage_source("value = 2^\n")
+
+    projected = document.project_generated_error_range(0, 11, 12)
+
+    assert (projected.start.line, projected.start.character) == (0, 9)
+    assert (projected.end.line, projected.end.character) == (0, 10)

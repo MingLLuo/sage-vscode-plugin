@@ -157,6 +157,18 @@ worker = PolyWorker()
     assert record.diagnostics == []
 
 
+def test_parse_sage_module_projects_caret_syntax_errors_back_to_source() -> None:
+    source = "value = 2^\n"
+
+    record = parse_module("document::broken", Path("broken.sage"), source)
+
+    assert any(entry["message"].startswith("Syntax error:") for entry in record.diagnostics)
+    diagnostic = next(entry for entry in record.diagnostics if entry["message"].startswith("Syntax error:"))
+    assert diagnostic["range"]["start"]["line"] == 0
+    assert diagnostic["range"]["start"]["character"] == 9
+    assert diagnostic["range"]["end"]["character"] == 10
+
+
 def test_parse_python_module_extracts_singleton_member_bindings() -> None:
     source = """
 class GraphGenerators:

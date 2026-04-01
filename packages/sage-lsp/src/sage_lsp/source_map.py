@@ -16,6 +16,12 @@ class MappedPosition:
     character: int
 
 
+@dataclass(frozen=True)
+class MappedRange:
+    start: MappedPosition
+    end: MappedPosition
+
+
 @dataclass
 class LineMap:
     source_line: str
@@ -51,6 +57,50 @@ class PreprocessedDocument:
         return MappedPosition(
             line=line_index,
             character=self.line_maps[line_index].map_generated_character(character),
+        )
+
+    def map_generated_range_to_source(
+        self,
+        start_line: int,
+        start_character: int,
+        end_line: int,
+        end_character: int,
+    ) -> MappedRange:
+        start = self.map_generated_to_source(start_line, start_character)
+        end = self.map_generated_to_source(end_line, end_character)
+        return self._normalized_range(start, end)
+
+    def project_generated_error_range(
+        self,
+        line: int,
+        character: int,
+        end_character: int,
+    ) -> MappedRange:
+        return self.map_generated_range_to_source(line, character, line, end_character)
+
+    def _normalized_range(
+        self,
+        start: MappedPosition,
+        end: MappedPosition,
+    ) -> MappedRange:
+        if start.line != end.line or end.character > start.character:
+            return MappedRange(start=start, end=end)
+
+        line_index = min(max(start.line, 0), len(self.line_maps) - 1)
+        source_line_length = len(self.line_maps[line_index].source_line)
+        if source_line_length == 0:
+            return MappedRange(start=MappedPosition(line=line_index, character=0), end=MappedPosition(line=line_index, character=0))
+
+        anchor_character = min(max(start.character, 0), source_line_length)
+        if anchor_character >= source_line_length:
+            return MappedRange(
+                start=MappedPosition(line=line_index, character=max(source_line_length - 1, 0)),
+                end=MappedPosition(line=line_index, character=source_line_length),
+            )
+
+        return MappedRange(
+            start=MappedPosition(line=line_index, character=anchor_character),
+            end=MappedPosition(line=line_index, character=min(anchor_character + 1, source_line_length)),
         )
 
 

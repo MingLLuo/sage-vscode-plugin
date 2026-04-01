@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from .model import ImportBinding, ModuleRecord, SourcePosition, SourceRange, SymbolRecord
-from .source_map import preprocess_sage_source
+from .source_map import PreprocessedDocument, preprocess_sage_source
 
 
 LAZY_IMPORT_NAMES = {"lazy_import", "_lazy_import"}
@@ -41,7 +41,7 @@ def parse_sage_module(module_name: str, file_path: Path, source: str) -> ModuleR
     if _has_preparser_assignment(source):
         record = _parse_hybrid_sage_module(module_name, file_path, source, preprocessed)
         record.language = "sage"
-        record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source))
+        _extend_syntax_diagnostics(record, file_path, source, preprocessed=preprocessed)
         return record
 
     record = parse_python_module(
@@ -52,7 +52,7 @@ def parse_sage_module(module_name: str, file_path: Path, source: str) -> ModuleR
         position_mapper=_generated_to_source_mapper(preprocessed),
     )
     record.language = "sage"
-    record.diagnostics.extend(syntax_diagnostics_for_source(file_path, source))
+    _extend_syntax_diagnostics(record, file_path, source, preprocessed=preprocessed)
     return record
 
 
@@ -598,42 +598,47 @@ def syntax_diagnostics_for_source(
     file_path: Path,
     source: str,
     syntax_error: Optional[SyntaxError] = None,
+    preprocessed: Optional[PreprocessedDocument] = None,
 ) -> list[dict[str, object]]:
     active_error = syntax_error
     if active_error is None:
         try:
-            ast.parse(sanitized_source_for_validation(file_path, source), filename=str(file_path))
+            ast.parse(
+                sanitized_source_for_validation(file_path, source, preprocessed=preprocessed),
+                filename=str(file_path),
+            )
         except SyntaxError as error:
             active_error = error
 
     if active_error is None:
         return []
 
-    line_number = active_error.lineno or 1
-    character = max((active_error.offset or 1) - 1, 0)
-    source_lines = source.splitlines()
-    source_line = source_lines[line_number - 1] if 0 < line_number <= len(source_lines) else ""
-    end_character = min(len(source_line), character + max(1, highlighted_span(active_error)))
+    syntax_range = diagnostic_range_for_syntax_error(
+        file_path,
+        source,
+        active_error,
+        preprocessed=preprocessed,
+    )
     return [
         {
-            "range": SourceRange.from_offsets(
-                line_number,
-                character,
-                line_number,
-                end_character,
-            ).to_lsp(),
+            "range": syntax_range.to_lsp(),
             "severity": 1,
             "source": "sage-lsp",
+            "code": "syntax-error",
             "message": f"Syntax error: {active_error.msg}",
         }
     ]
 
 
-def sanitized_source_for_validation(file_path: Path, source: str) -> str:
+def sanitized_source_for_validation(
+    file_path: Path,
+    source: str,
+    preprocessed: Optional[PreprocessedDocument] = None,
+) -> str:
     if file_path.suffix != ".sage":
         return source
 
-    generated_text = preprocess_sage_source(source).generated_text
+    generated_text = preprocessed.generated_text if preprocessed is not None else preprocess_sage_source(source).generated_text
     sanitized_lines = [
         LOOSE_PREPARSE_VALIDATE_RE.sub(r"\g<indent>\g<parent>\g<spacing> None", line)
         for line in generated_text.splitlines()
@@ -645,6 +650,56 @@ def highlighted_span(error: SyntaxError) -> int:
     if error.end_offset is not None and error.offset is not None and error.end_offset > error.offset:
         return error.end_offset - error.offset
     return 1
+
+
+def diagnostic_range_for_syntax_error(
+    file_path: Path,
+    source: str,
+    syntax_error: SyntaxError,
+    preprocessed: Optional[PreprocessedDocument] = None,
+) -> SourceRange:
+    line_number = syntax_error.lineno or 1
+    character = max((syntax_error.offset or 1) - 1, 0)
+    end_character = character + max(1, highlighted_span(syntax_error))
+
+    if file_path.suffix == ".sage":
+        document = preprocessed if preprocessed is not None else preprocess_sage_source(source)
+        mapped_range = document.project_generated_error_range(
+            max(line_number - 1, 0),
+            character,
+            end_character,
+        )
+        return SourceRange(
+            start=SourcePosition(line=mapped_range.start.line, character=mapped_range.start.character),
+            end=SourcePosition(line=mapped_range.end.line, character=mapped_range.end.character),
+        )
+
+    source_lines = source.splitlines()
+    source_line = source_lines[line_number - 1] if 0 < line_number <= len(source_lines) else ""
+    bounded_end_character = min(len(source_line), end_character)
+    return SourceRange.from_offsets(
+        line_number,
+        character,
+        line_number,
+        bounded_end_character,
+    )
+
+
+def _extend_syntax_diagnostics(
+    record: ModuleRecord,
+    file_path: Path,
+    source: str,
+    preprocessed: Optional[PreprocessedDocument] = None,
+) -> None:
+    if any(str(entry.get("code")) == "syntax-error" for entry in record.diagnostics):
+        return
+    record.diagnostics.extend(
+        syntax_diagnostics_for_source(
+            file_path,
+            source,
+            preprocessed=preprocessed,
+        )
+    )
 
 
 def parse_cython_symbol_line(line: str) -> tuple[Optional[str], Optional[str]]:
