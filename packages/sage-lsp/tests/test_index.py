@@ -325,8 +325,48 @@ def test_workspace_symbols_query_loads_only_matching_deferred_modules(tmp_path: 
     symbols = index.workspace_symbols("helper")
 
     assert any(item["name"] == "helper" for item in symbols)
-    assert "pkg.helpers" in index.modules
+    assert "pkg.helpers" not in index.modules
     assert "pkg.other" not in index.modules
+
+
+def test_workspace_symbols_query_uses_ripgrep_candidates_to_skip_unrelated_source_reads(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    _write_module(first_root, "seed.py", "value = 1\n")
+    helpers_path = _write_module(second_root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+    _write_module(second_root, "pkg/other.py", "def unrelated(value):\n    return value + 1\n")
+
+    index = WorkspaceIndex([first_root, second_root], (), True)
+    index.load_roots([first_root])
+
+    monkeypatch.setattr(
+        index,
+        "_ripgrep_candidate_paths_for_query",
+        lambda needle, roots: {helpers_path.resolve()},
+    )
+    monkeypatch.setattr(
+        index,
+        "_iter_indexable_modules_for_roots",
+        lambda roots: (_ for _ in ()).throw(
+            AssertionError("ripgrep candidate filtering should avoid a full deferred-root walk")
+        ),
+    )
+
+    original_read = index._read_module_source
+
+    def _track_read(path: Path) -> str:
+        if path.name == "other.py":
+            raise AssertionError("ripgrep candidate filtering should skip unrelated files")
+        return original_read(path)
+
+    monkeypatch.setattr(index, "_read_module_source", _track_read)
+
+    symbols = index.workspace_symbols("helper")
+
+    assert any(item["name"] == "helper" for item in symbols)
 
 
 def test_workspace_index_does_not_persist_partial_lazy_snapshot(tmp_path: Path) -> None:
@@ -369,7 +409,7 @@ def test_import_candidates_query_loads_only_matching_deferred_modules(tmp_path: 
     candidates = index.import_candidates("helper")
 
     assert candidates == ["pkg.helpers"]
-    assert "pkg.helpers" in index.modules
+    assert "pkg.helpers" not in index.modules
     assert "pkg.other" not in index.modules
 
 
@@ -384,6 +424,55 @@ def test_import_candidates_handles_cyclic_star_imports_during_targeted_search(tm
     candidates = index.import_candidates("helper")
 
     assert "pkg.a" in candidates
+
+
+def test_workspace_symbols_query_uses_persisted_summary_cache_without_source_reads(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    builder = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    builder.build()
+    builder._cache_file_path().unlink()  # noqa: SLF001 - intentional cache-path verification
+
+    index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+
+    def _fail_read(path: Path) -> str:
+        raise AssertionError("workspace_symbols(query) should answer from the persisted summary cache")
+
+    monkeypatch.setattr(index, "_read_module_source", _fail_read)
+
+    symbols = index.workspace_symbols("helper")
+
+    assert any(item["name"] == "helper" for item in symbols)
+    assert "pkg.helpers" not in index.modules
+
+
+def test_workspace_symbols_query_skips_root_scan_when_summary_cache_is_complete(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    builder = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    builder.build()
+    builder._cache_file_path().unlink()  # noqa: SLF001 - intentional cache-path verification
+
+    index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+
+    def _fail_iter(_roots):
+        raise AssertionError("complete summary caches should satisfy cold misses without scanning roots")
+
+    monkeypatch.setattr(index, "_iter_indexable_modules_for_roots", _fail_iter)
+
+    assert index.workspace_symbols("missing_symbol") == []
 
 
 def test_workspace_index_invalidates_persistent_cache_when_source_changes(tmp_path: Path, monkeypatch) -> None:

@@ -160,7 +160,7 @@ def test_server_workspace_symbols_load_deferred_roots_without_full_rebuild(tmp_p
     symbols = workspace_symbol_handler(WorkspaceSymbolParams(query="sqrt"))
 
     assert any(item["name"] == "sqrt" for item in symbols)
-    assert "sage.functions.other" in server.workspace_index.modules
+    assert "sage.functions.other" not in server.workspace_index.modules
 
 
 def test_server_declares_semantic_tokens_and_encodes_sage_structures() -> None:
