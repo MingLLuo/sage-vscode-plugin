@@ -575,3 +575,42 @@ consumer without requiring a manual restart.
   index grows beyond save-driven edits
 - Risks or blockers: this smoke currently covers the save path, while closed-file watcher propagation remains covered
   by server-side tests rather than the real extension host
+
+## Entry 16
+
+- Date: 2026-04-01
+- Task ID: RUNTIME-005
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `b31b01d`
+
+### Goal
+
+Reduce the overhead of multi-file watcher and save bursts by applying incremental index changes in batches instead of
+persisting cache state and clearing resolution caches once per file.
+
+### Decisions
+
+- Decision: add batched `refresh_paths`, `remove_paths`, and `refresh_or_remove_paths` flows inside `WorkspaceIndex`.
+- Reason: the single-file incremental API was correct, but a burst of watcher events still paid repeated cache-write
+  and resolution-cache-reset costs.
+- Decision: route `workspace/didChangeWatchedFiles` through one batched server helper and pin the behavior with tests.
+- Reason: the language server already receives batched file events from the client, so the index layer should preserve
+  that granularity instead of flattening it back into per-file work.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+- Result: targeted index/server tests, full repository tests, native Sage smoke, and real extension-host smoke all
+  passed after the batched incremental-update refactor
+
+### Follow-ups
+
+- Next task: start separating hot-document edits from colder background source-root scans so larger workspaces do even
+  less synchronous filesystem work on initialization
+- Risks or blockers: batching reduces repeated work inside one event burst, but source-root discovery and cold startup
+  still walk the full tree when no cache exists yet

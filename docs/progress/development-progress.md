@@ -148,3 +148,4 @@
 - Refactored the language-server request flow so hover/definition wrappers, open-document overlay refresh, and empty-diagnostics publication now live behind smaller helpers instead of being repeated across `server.py`.
 - Added incremental refresh and removal for indexed workspace files, so saved or watched Python/Sage/Cython modules now update the persistent index and merged native-module state without requiring a full rebuild.
 - Extended the real extension-host smoke suite so it edits and saves an imported Python helper module, then verifies that hover inside a `.sage` consumer updates without a manual language-server restart.
+- Batched multi-file watcher/save indexing work so change bursts now persist cache state and clear resolution caches once per batch instead of once per file.
