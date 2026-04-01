@@ -32,7 +32,7 @@ from pygls.workspace import Workspace
 
 from sage_lsp.runtime_introspection import RuntimeSymbolResult
 from sage_lsp.server import _merge_documentation_with_runtime, create_server
-from sage_lsp.index import DocumentationResult
+from sage_lsp.index import DocumentationResult, WorkspaceIndex
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "sage_src_lite" / "src"
@@ -74,6 +74,34 @@ def test_server_imports_and_initializes_with_capabilities() -> None:
     assert server.workspace_index is not None
     assert "sage.all" in server.workspace_index.modules
     assert "workspace/didChangeConfiguration" in server.protocol.fm.features
+
+
+def test_server_prefers_cached_snapshot_before_background_reconcile(tmp_path: Path, monkeypatch) -> None:
+    source_root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(source_root, "pkg/__init__.py", "")
+    _write_module(source_root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    monkeypatch.setattr("sage_lsp.index.default_index_cache_dir", lambda: cache_dir)
+    seed_index = WorkspaceIndex([source_root], (), True)
+    seed_index.build()
+
+    started_reconcile: list[tuple[tuple[Path, ...], int]] = []
+    monkeypatch.setattr(
+        "sage_lsp.server._start_background_index_reconcile",
+        lambda server, source_roots, generation: started_reconcile.append((tuple(source_roots), generation)),
+    )
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(source_root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+
+    assert server.workspace_index is not None
+    assert "pkg.helpers" in server.workspace_index.modules
+    assert started_reconcile
 
 
 def test_server_declares_semantic_tokens_and_encodes_sage_structures() -> None:

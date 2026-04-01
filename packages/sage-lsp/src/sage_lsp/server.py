@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import threading
 from typing import Any, Dict, Optional, Tuple, TypedDict
 
 from lsprotocol.types import (
@@ -65,6 +66,7 @@ class SageLanguageServer(LanguageServer):
         self.runtime_introspector = RuntimeIntrospector(command=None, enabled=False)
         self.documentation_cache: dict[tuple[str, str, str], DocumentationResult] = {}
         self.definition_cache: dict[tuple[str, str, str], Optional[Location]] = {}
+        self.index_generation = 0
 
 
 class ResolvedRequestSymbol(TypedDict):
@@ -480,13 +482,51 @@ def _rebuild_index(server: SageLanguageServer) -> None:
     source_roots = [coerce_path(entry) for entry in server.environment.workspace.source_roots if entry]
     source_roots.extend(coerce_path(entry) for entry in server.environment.analysis.extra_paths if entry)
     deduped_roots = list(dict.fromkeys(root.resolve() for root in source_roots))
-    server.workspace_index = WorkspaceIndex(
+    server.index_generation += 1
+    generation = server.index_generation
+    server.runtime_introspector = RuntimeIntrospector.from_environment(server.environment)
+
+    workspace_index = WorkspaceIndex(
         source_roots=deduped_roots,
         excluded_globs=server.environment.workspace.excluded_globs,
         enable_pyx=server.environment.analysis.enable_pyx_parsing,
     )
-    server.workspace_index.build()
-    server.runtime_introspector = RuntimeIntrospector.from_environment(server.environment)
+    if workspace_index.hydrate_from_cache():
+        server.workspace_index = workspace_index
+        _clear_all_request_caches(server)
+        _start_background_index_reconcile(server, deduped_roots, generation)
+        return
+
+    workspace_index.build()
+    if server.index_generation == generation:
+        server.workspace_index = workspace_index
+
+
+def _start_background_index_reconcile(
+    server: SageLanguageServer,
+    source_roots: list[Path],
+    generation: int,
+) -> None:
+    excluded_globs = server.environment.workspace.excluded_globs
+    enable_pyx = server.environment.analysis.enable_pyx_parsing
+
+    def _reconcile() -> None:
+        refreshed_index = WorkspaceIndex(
+            source_roots=source_roots,
+            excluded_globs=excluded_globs,
+            enable_pyx=enable_pyx,
+        )
+        refreshed_index.build()
+        if server.index_generation != generation:
+            return
+        server.workspace_index = refreshed_index
+        _clear_all_request_caches(server)
+
+    threading.Thread(
+        target=_reconcile,
+        name="sage-lsp-index-reconcile",
+        daemon=True,
+    ).start()
 
 
 def _record_for_uri(server: SageLanguageServer, uri: str) -> Tuple[Optional[ModuleRecord], Optional[str]]:

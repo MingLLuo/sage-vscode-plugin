@@ -84,7 +84,7 @@ class WorkspaceIndex:
                 cached_entry,
                 fingerprint,
             )
-            self._store_module_record(module_name, path, record)
+            self._store_module_record(module_name, path, record, clear_caches=False)
             next_cache_entries[cache_key] = {
                 "moduleName": module_name,
                 "fingerprint": fingerprint,
@@ -92,7 +92,18 @@ class WorkspaceIndex:
                 "record": serialize_module_record(record),
             }
         self._cache_entries = next_cache_entries
+        self._clear_resolution_caches()
         self._write_cached_entries(self._cache_entries)
+
+    def hydrate_from_cache(self) -> bool:
+        self._reset_runtime_state()
+        self._cache_entries = self._load_cached_entries()
+        if not self._cache_entries:
+            return False
+
+        restored_any = self._restore_cached_entries(self._cache_entries)
+        self._clear_resolution_caches()
+        return restored_any
 
     def module_for_path(self, path: Path) -> Optional[ModuleRecord]:
         module_name = self._module_paths.get(path.resolve())
@@ -831,6 +842,8 @@ class WorkspaceIndex:
         module_name: str,
         path: Path,
         record: ModuleRecord,
+        *,
+        clear_caches: bool = True,
     ) -> None:
         resolved_path = path.resolve()
         previous_module_name = self._module_paths.get(resolved_path)
@@ -848,7 +861,8 @@ class WorkspaceIndex:
         self._module_records_by_path[resolved_path] = record
         self._module_component_paths.setdefault(module_name, set()).add(resolved_path)
         self._rebuild_module_record(module_name)
-        self._clear_resolution_caches()
+        if clear_caches:
+            self._clear_resolution_caches()
 
     def _cached_document_record(
         self,
@@ -939,6 +953,20 @@ class WorkspaceIndex:
     def _clear_resolution_caches(self) -> None:
         self._resolved_symbol_cache.clear()
         self._resolved_member_cache.clear()
+
+    def _restore_cached_entries(self, entries: dict[str, dict[str, object]]) -> bool:
+        restored_any = False
+        for cache_key, entry in entries.items():
+            module_name = entry.get("moduleName")
+            source = entry.get("source")
+            payload = entry.get("record")
+            if not isinstance(module_name, str) or not isinstance(source, str) or not isinstance(payload, dict):
+                continue
+            path = Path(cache_key)
+            record = deserialize_module_record(payload, module_name, path, source)
+            self._store_module_record(module_name, path, record, clear_caches=False)
+            restored_any = True
+        return restored_any
 
     def _cache_file_path(self) -> Path:
         resolved_cache_dir = _resolve_cache_dir(self._cache_dir)
