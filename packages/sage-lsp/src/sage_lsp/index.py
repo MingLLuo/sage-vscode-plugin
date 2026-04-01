@@ -120,19 +120,79 @@ class WorkspaceIndex:
         self._document_records.pop(uri, None)
 
     def refresh_path(self, path: Path) -> Optional[ModuleRecord]:
+        self.refresh_paths([path])
         indexed_path = self._indexed_path(path)
-        if indexed_path is None or not indexed_path.exists():
-            self.remove_path(path)
+        if indexed_path is None:
             return None
+        module_name = self._module_paths.get(indexed_path)
+        if module_name is None:
+            return None
+        return self._modules.get(module_name)
+
+    def refresh_paths(self, paths: list[Path]) -> dict[Path, Optional[ModuleRecord]]:
+        results: dict[Path, Optional[ModuleRecord]] = {}
+        changed = False
+        for path in paths:
+            indexed_path = self._indexed_path(path)
+            if indexed_path is None:
+                continue
+            before_module_name = self._module_paths.get(indexed_path)
+            changed = self._refresh_path_in_memory(indexed_path) or changed
+            after_module_name = self._module_paths.get(indexed_path, before_module_name)
+            results[indexed_path] = self._modules.get(after_module_name) if after_module_name else None
+        if changed:
+            self._clear_resolution_caches()
+            self._write_cached_entries(self._cache_entries)
+        return results
+
+    def remove_paths(self, paths: list[Path]) -> None:
+        changed = False
+        for path in paths:
+            indexed_path = self._indexed_path(path)
+            if indexed_path is None:
+                continue
+            changed = self._remove_path_in_memory(indexed_path) or changed
+        if changed:
+            self._clear_resolution_caches()
+            self._write_cached_entries(self._cache_entries)
+
+    def refresh_or_remove_paths(
+        self,
+        changes: list[tuple[Path, bool]],
+    ) -> dict[Path, Optional[ModuleRecord]]:
+        results: dict[Path, Optional[ModuleRecord]] = {}
+        changed = False
+        for path, deleted in changes:
+            indexed_path = self._indexed_path(path)
+            if indexed_path is None:
+                continue
+            if deleted:
+                changed = self._remove_path_in_memory(indexed_path) or changed
+                results[indexed_path] = None
+                continue
+            before_module_name = self._module_paths.get(indexed_path)
+            changed = self._refresh_path_in_memory(indexed_path) or changed
+            after_module_name = self._module_paths.get(indexed_path, before_module_name)
+            results[indexed_path] = self._modules.get(after_module_name) if after_module_name else None
+        if changed:
+            self._clear_resolution_caches()
+            self._write_cached_entries(self._cache_entries)
+        return results
+
+    def remove_path(self, path: Path) -> None:
+        self.remove_paths([path])
+
+    def _refresh_path_in_memory(self, indexed_path: Path) -> bool:
+        if not indexed_path.exists():
+            return self._remove_path_in_memory(indexed_path)
 
         root = self._source_root_for_path(indexed_path)
         if root is None or not self._is_indexable_path(root, indexed_path):
-            self.remove_path(indexed_path)
-            return None
+            return self._remove_path_in_memory(indexed_path)
 
         module_name = module_name_from_path(root, indexed_path)
         if not module_name:
-            return None
+            return False
 
         source = indexed_path.read_text(encoding="utf-8")
         fingerprint = file_fingerprint(indexed_path)
@@ -150,15 +210,11 @@ class WorkspaceIndex:
             "fingerprint": fingerprint,
             "record": serialize_module_record(record),
         }
-        self._write_cached_entries(self._cache_entries)
-        return self._modules.get(module_name)
+        return True
 
-    def remove_path(self, path: Path) -> None:
-        indexed_path = self._indexed_path(path)
-        if indexed_path is None:
-            return
-
+    def _remove_path_in_memory(self, indexed_path: Path) -> bool:
         cache_key = str(indexed_path)
+        existed = cache_key in self._cache_entries or indexed_path in self._module_paths
         self._cache_entries.pop(cache_key, None)
 
         module_name = self._module_paths.pop(indexed_path, None)
@@ -173,8 +229,7 @@ class WorkspaceIndex:
                 else:
                     self._module_component_paths.pop(module_name, None)
                     self._modules.pop(module_name, None)
-        self._clear_resolution_caches()
-        self._write_cached_entries(self._cache_entries)
+        return existed
 
     def resolve_symbol(self, record: ModuleRecord, name: str) -> Optional[SymbolRecord]:
         cache_key = self._symbol_cache_key(record, name)

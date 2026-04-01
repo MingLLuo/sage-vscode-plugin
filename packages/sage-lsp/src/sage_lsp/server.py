@@ -264,8 +264,10 @@ def create_server() -> SageLanguageServer:
 
     @server.feature("workspace/didChangeWatchedFiles")
     def on_did_change_watched_files(params: DidChangeWatchedFilesParams) -> None:
-        for change in params.changes:
-            _apply_workspace_file_change(server, change.uri, change.type)
+        _apply_workspace_file_changes(
+            server,
+            [(change.uri, change.type) for change in params.changes],
+        )
         _clear_all_request_caches(server)
 
     @server.feature("textDocument/hover")
@@ -548,6 +550,28 @@ def _apply_workspace_file_change(
 
     server.workspace_index.refresh_path(path)
     _clear_request_caches(server, uri)
+
+
+def _apply_workspace_file_changes(
+    server: SageLanguageServer,
+    changes: list[tuple[str, FileChangeType]],
+) -> None:
+    if server.workspace_index is None:
+        return
+
+    normalized_changes = [
+        (path_from_uri(uri), change_type is FileChangeType.Deleted)
+        for uri, change_type in changes
+    ]
+    results = server.workspace_index.refresh_or_remove_paths(normalized_changes)
+
+    for path, record in results.items():
+        uri = path.as_uri()
+        if record is None:
+            _publish_empty_diagnostics(server, uri)
+            continue
+        _publish_diagnostics(server, uri)
+        _clear_request_caches(server, uri)
 
 
 def _publish_empty_diagnostics(server: SageLanguageServer, uri: str) -> None:

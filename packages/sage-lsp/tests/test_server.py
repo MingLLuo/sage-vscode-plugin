@@ -375,6 +375,45 @@ def test_server_watched_file_changes_refresh_workspace_index(tmp_path: Path) -> 
     assert all(item["name"] != "dynamic_helper" for item in symbols_after_delete)
 
 
+def test_server_batches_watched_file_changes_into_one_index_update(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "src"
+    package_dir = root / "pkg"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+    assert server.workspace_index is not None
+
+    recorded_changes: list[list[tuple[Path, bool]]] = []
+
+    def _track_changes(changes):
+        recorded_changes.append(changes)
+        return {}
+
+    monkeypatch.setattr(server.workspace_index, "refresh_or_remove_paths", _track_changes)
+
+    watched_handler = server.protocol.fm.features["workspace/didChangeWatchedFiles"]
+    watched_handler(
+        DidChangeWatchedFilesParams(
+            changes=[
+                FileEvent(uri=(package_dir / "alpha.py").as_uri(), type=FileChangeType.Created),
+                FileEvent(uri=(package_dir / "beta.py").as_uri(), type=FileChangeType.Deleted),
+            ]
+        )
+    )
+
+    assert len(recorded_changes) == 1
+    assert recorded_changes[0] == [
+        (package_dir / "alpha.py", False),
+        (package_dir / "beta.py", True),
+    ]
+
+
 def test_server_hover_omits_docstring_when_hover_docs_disabled() -> None:
     server = _initialized_server_with_options(
         {

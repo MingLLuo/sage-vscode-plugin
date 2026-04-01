@@ -279,6 +279,39 @@ def test_workspace_index_remove_path_preserves_other_module_components(tmp_path:
     assert "ZZ" not in record.symbols
 
 
+def test_workspace_index_batches_cache_persistence_for_multiple_path_changes(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    first_path = _write_module(root, "pkg/first.py", "def first():\n    return 1\n")
+    second_path = _write_module(root, "pkg/second.py", "def second():\n    return 2\n")
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    first_path.write_text("def first():\n    return 10\n", encoding="utf-8")
+    second_path.unlink()
+
+    write_calls: list[int] = []
+    original_write_cached_entries = index._write_cached_entries  # noqa: SLF001 - intentional state verification
+
+    def _track_write(entries):
+        write_calls.append(len(entries))
+        return original_write_cached_entries(entries)
+
+    monkeypatch.setattr(index, "_write_cached_entries", _track_write)
+
+    index.refresh_or_remove_paths(
+        [
+            (first_path, False),
+            (second_path, True),
+        ]
+    )
+
+    assert len(write_calls) == 1
+    assert "pkg.first" in index.modules
+    assert "pkg.second" not in index.modules
+
+
 def test_workspace_index_reuses_open_document_overlay_for_unchanged_source(monkeypatch) -> None:
     index = WorkspaceIndex([], (), True)
     uri = Path("/workspace/example.sage").as_uri()
