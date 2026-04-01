@@ -14,7 +14,7 @@ from .model import ImportBinding, ModuleRecord, SourceRange, SymbolRecord, docum
 from .parser import parse_module
 
 
-CACHE_SCHEMA_VERSION = 1
+CACHE_SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -73,20 +73,22 @@ class WorkspaceIndex:
         self._cache_entries = self._load_cached_entries()
         next_cache_entries: dict[str, dict[str, object]] = {}
         for root, path, module_name in self._iter_indexable_modules():
-            source = path.read_text(encoding="utf-8")
             cache_key = str(path.resolve())
             fingerprint = file_fingerprint(path)
+            cached_entry = self._cache_entries.get(cache_key)
+            source = self._source_for_module_path(path, cached_entry, fingerprint)
             record = self._load_or_parse_module_record(
                 module_name,
                 path,
                 source,
-                self._cache_entries.get(cache_key),
+                cached_entry,
                 fingerprint,
             )
             self._store_module_record(module_name, path, record)
             next_cache_entries[cache_key] = {
                 "moduleName": module_name,
                 "fingerprint": fingerprint,
+                "source": source,
                 "record": serialize_module_record(record),
             }
         self._cache_entries = next_cache_entries
@@ -194,20 +196,22 @@ class WorkspaceIndex:
         if not module_name:
             return False
 
-        source = indexed_path.read_text(encoding="utf-8")
         fingerprint = file_fingerprint(indexed_path)
         cache_key = str(indexed_path)
+        cached_entry = self._cache_entries.get(cache_key)
+        source = self._source_for_module_path(indexed_path, cached_entry, fingerprint)
         record = self._load_or_parse_module_record(
             module_name,
             indexed_path,
             source,
-            self._cache_entries.get(cache_key),
+            cached_entry,
             fingerprint,
         )
         self._store_module_record(module_name, indexed_path, record)
         self._cache_entries[cache_key] = {
             "moduleName": module_name,
             "fingerprint": fingerprint,
+            "source": source,
             "record": serialize_module_record(record),
         }
         return True
@@ -781,6 +785,17 @@ class WorkspaceIndex:
             return deserialize_module_record(cached_entry["record"], module_name, path, source)
         return parse_module(module_name, path, source)
 
+    def _source_for_module_path(
+        self,
+        path: Path,
+        cached_entry: Optional[dict[str, object]],
+        fingerprint: dict[str, int],
+    ) -> str:
+        cached_source = self._cached_source_for_entry(cached_entry, fingerprint)
+        if cached_source is not None:
+            return cached_source
+        return self._read_module_source(path)
+
     def _store_module_record(
         self,
         module_name: str,
@@ -832,6 +847,21 @@ class WorkspaceIndex:
         for candidate in ("sage.all_cmdline", "sage.all"):
             if candidate in self._modules and candidate not in record.star_imports:
                 record.star_imports.append(candidate)
+
+    def _cached_source_for_entry(
+        self,
+        cached_entry: Optional[dict[str, object]],
+        fingerprint: dict[str, int],
+    ) -> Optional[str]:
+        if not isinstance(cached_entry, dict):
+            return None
+        if cached_entry.get("fingerprint") != fingerprint:
+            return None
+        source = cached_entry.get("source")
+        return source if isinstance(source, str) else None
+
+    def _read_module_source(self, path: Path) -> str:
+        return path.read_text(encoding="utf-8")
 
     def _is_persisted_module_record(self, record: ModuleRecord) -> bool:
         cached_record = self._modules.get(record.module_name)

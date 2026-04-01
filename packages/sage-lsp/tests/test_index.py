@@ -204,6 +204,26 @@ def test_workspace_index_reuses_persistent_cache_for_unchanged_modules(tmp_path:
     assert "pkg.helpers" in cached_index.modules
 
 
+def test_workspace_index_reuses_cached_source_for_unchanged_modules(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    index.build()
+
+    def _fail_read(path: Path) -> str:
+        raise AssertionError("module source should be reused from cache when the file fingerprint is unchanged")
+
+    monkeypatch.setattr(WorkspaceIndex, "_read_module_source", lambda self, path: _fail_read(path))
+
+    cached_index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    cached_index.build()
+
+    assert "pkg.helpers" in cached_index.modules
+
+
 def test_workspace_index_invalidates_persistent_cache_when_source_changes(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "src"
     cache_dir = tmp_path / "cache"

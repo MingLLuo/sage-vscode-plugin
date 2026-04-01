@@ -54,6 +54,8 @@ The current baseline now includes:
   of mixed `.pyx`/`.pxd` native modules when only one component changes or disappears.
 - Batched workspace-change application now updates that incremental index in one pass per event burst, which reduces
   repeated cache persistence and cache-reset churn under larger watcher batches.
+- Warm-start cache hydration now reuses persisted module source for unchanged files, so cache hits avoid rereading each
+  unchanged module from disk before the index becomes usable.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.
