@@ -233,6 +233,52 @@ def test_workspace_index_invalidates_persistent_cache_when_source_changes(tmp_pa
     assert documentation.summary == "Updated."
 
 
+def test_workspace_index_refresh_path_updates_saved_module_without_rebuild(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    helpers_path = _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+
+    helpers_path.write_text('def helper(value):\n    """Refreshed."""\n    return value + 1\n', encoding="utf-8")
+
+    refreshed = index.refresh_path(helpers_path)
+
+    assert refreshed is not None
+    documentation = index.documentation_for_symbol(refreshed, "helper")
+    assert documentation is not None
+    assert documentation.summary == "Refreshed."
+
+
+def test_workspace_index_remove_path_preserves_other_module_components(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "sage/__init__.py", "")
+    _write_module(root, "sage/rings/__init__.py", "")
+    native_support_pxd = _write_module(
+        root,
+        "sage/rings/native_support.pxd",
+        '"""Native declarations."""\n\ncdef class NativeAccumulator:\n    pass\n\ncpdef int native_step(int value)\n',
+    )
+    native_support_pyx = _write_module(
+        root,
+        "sage/rings/native_support.pyx",
+        '"""Native implementation."""\n\ncdef class NativeAccumulator:\n    pass\n\nZZ = NativeAccumulator()\n',
+    )
+
+    index = WorkspaceIndex([root], (), True)
+    index.build()
+    index.remove_path(native_support_pyx)
+
+    record = index.module_for_path(native_support_pxd)
+
+    assert record is not None
+    assert record.file_path.name == "native_support.pxd"
+    assert "NativeAccumulator" in record.symbols
+    assert "native_step" in record.symbols
+    assert "ZZ" not in record.symbols
+
+
 def test_workspace_index_reuses_open_document_overlay_for_unchanged_source(monkeypatch) -> None:
     index = WorkspaceIndex([], (), True)
     uri = Path("/workspace/example.sage").as_uri()

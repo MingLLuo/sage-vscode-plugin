@@ -9,13 +9,16 @@ from lsprotocol.types import (
     CompletionItem,
     CompletionParams,
     DidCloseTextDocumentParams,
+    DidChangeWatchedFilesParams,
     Diagnostic,
     DiagnosticSeverity,
     DidChangeTextDocumentParams,
     DidChangeConfigurationParams,
     DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams,
     DefinitionParams,
     DocumentSymbolParams,
+    FileChangeType,
     Hover,
     HoverParams,
     InitializeParams,
@@ -33,9 +36,11 @@ from lsprotocol.types import (
     SignatureHelp,
     SignatureHelpParams,
     SignatureInformation,
+    SaveOptions,
     SemanticTokens,
     SemanticTokensParams,
     TextDocumentSyncKind,
+    TextDocumentSyncOptions,
     TextEdit,
     WorkspaceEdit,
     WorkspaceSymbolParams,
@@ -226,7 +231,11 @@ def create_server() -> SageLanguageServer:
         return InitializeResult(
             server_info={"name": "sage-lsp", "version": "0.3.0"},
             capabilities=ServerCapabilities(
-                text_document_sync=TextDocumentSyncKind.Incremental,
+                text_document_sync=TextDocumentSyncOptions(
+                    open_close=True,
+                    change=TextDocumentSyncKind.Incremental,
+                    save=SaveOptions(include_text=False),
+                ),
                 hover_provider=True,
                 definition_provider=True,
                 references_provider=True,
@@ -252,6 +261,12 @@ def create_server() -> SageLanguageServer:
     @server.feature("workspace/didChangeConfiguration")
     def on_did_change_configuration(params: DidChangeConfigurationParams) -> None:
         del params
+
+    @server.feature("workspace/didChangeWatchedFiles")
+    def on_did_change_watched_files(params: DidChangeWatchedFilesParams) -> None:
+        for change in params.changes:
+            _apply_workspace_file_change(server, change.uri, change.type)
+        _clear_all_request_caches(server)
 
     @server.feature("textDocument/hover")
     def on_hover(params: HoverParams) -> Optional[Hover]:
@@ -402,6 +417,12 @@ def create_server() -> SageLanguageServer:
         _publish_diagnostics(server, params.text_document.uri)
         _clear_request_caches(server, params.text_document.uri)
 
+    @server.feature("textDocument/didSave")
+    def on_did_save(params: DidSaveTextDocumentParams) -> None:
+        _refresh_saved_indexed_document(server, params.text_document.uri)
+        _publish_diagnostics(server, params.text_document.uri)
+        _clear_all_request_caches(server)
+
     @server.feature("textDocument/didClose")
     def on_did_close(params: DidCloseTextDocumentParams) -> None:
         if server.workspace_index is not None:
@@ -499,6 +520,34 @@ def _refresh_workspace_document_overlay(
         document.source,
         getattr(document, "language_id", "python"),
     )
+
+
+def _refresh_saved_indexed_document(
+    server: SageLanguageServer,
+    uri: str,
+) -> Optional[ModuleRecord]:
+    if server.workspace_index is None:
+        return None
+    return server.workspace_index.refresh_path(path_from_uri(uri))
+
+
+def _apply_workspace_file_change(
+    server: SageLanguageServer,
+    uri: str,
+    change_type: FileChangeType,
+) -> None:
+    if server.workspace_index is None:
+        return
+
+    path = path_from_uri(uri)
+    if change_type is FileChangeType.Deleted:
+        server.workspace_index.remove_path(path)
+        _clear_request_caches(server, uri)
+        _publish_empty_diagnostics(server, uri)
+        return
+
+    server.workspace_index.refresh_path(path)
+    _clear_request_caches(server, uri)
 
 
 def _publish_empty_diagnostics(server: SageLanguageServer, uri: str) -> None:
@@ -964,6 +1013,11 @@ def _clear_request_caches(server: SageLanguageServer, uri: str) -> None:
     stale_definition_keys = [key for key in server.definition_cache if key[0] == uri]
     for key in stale_definition_keys:
         server.definition_cache.pop(key, None)
+
+
+def _clear_all_request_caches(server: SageLanguageServer) -> None:
+    server.documentation_cache.clear()
+    server.definition_cache.clear()
 
 
 def _documentation_prewarm_candidates(

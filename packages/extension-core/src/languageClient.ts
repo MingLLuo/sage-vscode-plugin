@@ -77,6 +77,7 @@ export function createLanguageClient(
     synchronize: {
       fileEvents: [
         vscode.workspace.createFileSystemWatcher("**/*.sage"),
+        vscode.workspace.createFileSystemWatcher("**/*.py"),
         vscode.workspace.createFileSystemWatcher("**/*.pyx"),
         vscode.workspace.createFileSystemWatcher("**/*.pxd"),
         vscode.workspace.createFileSystemWatcher("**/*.pxi"),

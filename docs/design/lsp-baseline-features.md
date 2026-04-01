@@ -50,6 +50,8 @@ The current baseline now includes:
   language tools separate live editor state from background index state.
 - Server request wiring now routes common documentation, definition, overlay-refresh, and diagnostics flows through
   shared helpers so the handler layer stays thinner as more LSP features accumulate.
+- Saved and watched workspace files now refresh the indexed module graph incrementally, including correct recomposition
+  of mixed `.pyx`/`.pxd` native modules when only one component changes or disappears.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.

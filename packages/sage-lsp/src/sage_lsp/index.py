@@ -57,9 +57,12 @@ class WorkspaceIndex:
         self._cache_dir = cache_dir or default_index_cache_dir()
         self._modules: dict[str, ModuleRecord] = {}
         self._module_paths: dict[Path, str] = {}
+        self._module_component_paths: dict[str, set[Path]] = {}
+        self._module_records_by_path: dict[Path, ModuleRecord] = {}
         self._resolved_symbol_cache: dict[tuple[str, str], Optional[SymbolRecord]] = {}
         self._resolved_member_cache: dict[tuple[str, str, str], Optional[SymbolRecord]] = {}
         self._document_records: dict[str, tuple[str, str, ModuleRecord]] = {}
+        self._cache_entries: dict[str, dict[str, object]] = {}
 
     @property
     def modules(self) -> dict[str, ModuleRecord]:
@@ -67,7 +70,7 @@ class WorkspaceIndex:
 
     def build(self) -> None:
         self._reset_runtime_state()
-        cache_entries = self._load_cached_entries()
+        self._cache_entries = self._load_cached_entries()
         next_cache_entries: dict[str, dict[str, object]] = {}
         for root, path, module_name in self._iter_indexable_modules():
             source = path.read_text(encoding="utf-8")
@@ -77,7 +80,7 @@ class WorkspaceIndex:
                 module_name,
                 path,
                 source,
-                cache_entries.get(cache_key),
+                self._cache_entries.get(cache_key),
                 fingerprint,
             )
             self._store_module_record(module_name, path, record)
@@ -86,7 +89,8 @@ class WorkspaceIndex:
                 "fingerprint": fingerprint,
                 "record": serialize_module_record(record),
             }
-        self._write_cached_entries(next_cache_entries)
+        self._cache_entries = next_cache_entries
+        self._write_cached_entries(self._cache_entries)
 
     def module_for_path(self, path: Path) -> Optional[ModuleRecord]:
         module_name = self._module_paths.get(path.resolve())
@@ -114,6 +118,63 @@ class WorkspaceIndex:
 
     def drop_document(self, uri: str) -> None:
         self._document_records.pop(uri, None)
+
+    def refresh_path(self, path: Path) -> Optional[ModuleRecord]:
+        indexed_path = self._indexed_path(path)
+        if indexed_path is None or not indexed_path.exists():
+            self.remove_path(path)
+            return None
+
+        root = self._source_root_for_path(indexed_path)
+        if root is None or not self._is_indexable_path(root, indexed_path):
+            self.remove_path(indexed_path)
+            return None
+
+        module_name = module_name_from_path(root, indexed_path)
+        if not module_name:
+            return None
+
+        source = indexed_path.read_text(encoding="utf-8")
+        fingerprint = file_fingerprint(indexed_path)
+        cache_key = str(indexed_path)
+        record = self._load_or_parse_module_record(
+            module_name,
+            indexed_path,
+            source,
+            self._cache_entries.get(cache_key),
+            fingerprint,
+        )
+        self._store_module_record(module_name, indexed_path, record)
+        self._cache_entries[cache_key] = {
+            "moduleName": module_name,
+            "fingerprint": fingerprint,
+            "record": serialize_module_record(record),
+        }
+        self._write_cached_entries(self._cache_entries)
+        return self._modules.get(module_name)
+
+    def remove_path(self, path: Path) -> None:
+        indexed_path = self._indexed_path(path)
+        if indexed_path is None:
+            return
+
+        cache_key = str(indexed_path)
+        self._cache_entries.pop(cache_key, None)
+
+        module_name = self._module_paths.pop(indexed_path, None)
+        self._module_records_by_path.pop(indexed_path, None)
+
+        if module_name is not None:
+            component_paths = self._module_component_paths.get(module_name)
+            if component_paths is not None:
+                component_paths.discard(indexed_path)
+                if component_paths:
+                    self._rebuild_module_record(module_name)
+                else:
+                    self._module_component_paths.pop(module_name, None)
+                    self._modules.pop(module_name, None)
+        self._clear_resolution_caches()
+        self._write_cached_entries(self._cache_entries)
 
     def resolve_symbol(self, record: ModuleRecord, name: str) -> Optional[SymbolRecord]:
         cache_key = self._symbol_cache_key(record, name)
@@ -624,9 +685,12 @@ class WorkspaceIndex:
     def _reset_runtime_state(self) -> None:
         self._modules.clear()
         self._module_paths.clear()
+        self._module_component_paths.clear()
+        self._module_records_by_path.clear()
         self._resolved_symbol_cache.clear()
         self._resolved_member_cache.clear()
         self._document_records.clear()
+        self._cache_entries = {}
 
     def _iter_indexable_modules(self) -> list[tuple[Path, Path, str]]:
         results: list[tuple[Path, Path, str]] = []
@@ -668,9 +732,23 @@ class WorkspaceIndex:
         path: Path,
         record: ModuleRecord,
     ) -> None:
-        existing = self._modules.get(module_name)
-        self._modules[module_name] = merge_module_records(existing, record) if existing else record
-        self._module_paths[path.resolve()] = module_name
+        resolved_path = path.resolve()
+        previous_module_name = self._module_paths.get(resolved_path)
+        if previous_module_name is not None and previous_module_name != module_name:
+            previous_component_paths = self._module_component_paths.get(previous_module_name)
+            if previous_component_paths is not None:
+                previous_component_paths.discard(resolved_path)
+                if previous_component_paths:
+                    self._rebuild_module_record(previous_module_name)
+                else:
+                    self._module_component_paths.pop(previous_module_name, None)
+                    self._modules.pop(previous_module_name, None)
+
+        self._module_paths[resolved_path] = module_name
+        self._module_records_by_path[resolved_path] = record
+        self._module_component_paths.setdefault(module_name, set()).add(resolved_path)
+        self._rebuild_module_record(module_name)
+        self._clear_resolution_caches()
 
     def _cached_document_record(
         self,
@@ -708,6 +786,44 @@ class WorkspaceIndex:
             cached_record.source == record.source
             and cached_record.file_path.resolve() == record.file_path.resolve()
         )
+
+    def _indexed_path(self, path: Path) -> Optional[Path]:
+        try:
+            return path.resolve()
+        except OSError:
+            return None
+
+    def _source_root_for_path(self, path: Path) -> Optional[Path]:
+        for root in self._source_roots:
+            try:
+                path.relative_to(root.resolve())
+                return root
+            except ValueError:
+                continue
+        return None
+
+    def _rebuild_module_record(self, module_name: str) -> None:
+        component_paths = self._module_component_paths.get(module_name)
+        if not component_paths:
+            self._modules.pop(module_name, None)
+            return
+
+        ordered_records = sorted(
+            (self._module_records_by_path[path] for path in component_paths if path in self._module_records_by_path),
+            key=lambda record: (module_record_precedence(record), str(record.file_path)),
+        )
+        if not ordered_records:
+            self._modules.pop(module_name, None)
+            return
+
+        merged = ordered_records[0]
+        for record in ordered_records[1:]:
+            merged = merge_module_records(merged, record)
+        self._modules[module_name] = merged
+
+    def _clear_resolution_caches(self) -> None:
+        self._resolved_symbol_cache.clear()
+        self._resolved_member_cache.clear()
 
     def _cache_file_path(self) -> Path:
         resolved_cache_dir = _resolve_cache_dir(self._cache_dir)

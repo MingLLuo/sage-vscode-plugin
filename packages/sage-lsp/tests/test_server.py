@@ -4,9 +4,13 @@ from lsprotocol.types import (
     ClientCapabilities,
     CompletionParams,
     DidCloseTextDocumentParams,
+    DidChangeWatchedFilesParams,
     DidOpenTextDocumentParams,
+    DidSaveTextDocumentParams,
     DefinitionParams,
     DocumentSymbolParams,
+    FileChangeType,
+    FileEvent,
     HoverParams,
     InitializeParams,
     Position,
@@ -245,6 +249,130 @@ def test_server_drops_overlay_documents_on_close() -> None:
     close_handler(DidCloseTextDocumentParams(text_document=TextDocumentIdentifier(uri=uri)))
 
     assert uri not in server.workspace_index._document_records  # noqa: SLF001 - intentional state verification
+
+
+def test_server_did_save_refreshes_indexed_modules(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    helpers_path = root / "pkg" / "helpers.py"
+    helpers_path.parent.mkdir(parents=True, exist_ok=True)
+    (root / "pkg" / "__init__.py").write_text("", encoding="utf-8")
+    helpers_path.write_text("def helper(value):\n    return value\n", encoding="utf-8")
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+
+    uri = helpers_path.as_uri()
+    source = 'def helper(value):\n    """Saved."""\n    return value + 1\n'
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="python", version=1, text=source)
+    )
+    helpers_path.write_text(source, encoding="utf-8")
+
+    save_handler = server.protocol.fm.features["textDocument/didSave"]
+    save_handler(DidSaveTextDocumentParams(text_document=TextDocumentIdentifier(uri=uri)))
+
+    assert server.workspace_index is not None
+    record = server.workspace_index.modules["pkg.helpers"]
+    documentation = server.workspace_index.documentation_for_symbol(record, "helper")
+    assert documentation is not None
+    assert documentation.summary == "Saved."
+
+
+def test_server_did_save_clears_cached_imported_hover_results(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    package_dir = root / "pkg"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+    helper_path = package_dir / "helpers.py"
+    helper_path.write_text(
+        'def helper(value):\n    """Original helper summary."""\n    return value\n',
+        encoding="utf-8",
+    )
+    consumer_path = package_dir / "consumer.sage"
+    consumer_source = "from pkg.helpers import helper\n\nvalue = helper(4)\n"
+    consumer_path.write_text(consumer_source, encoding="utf-8")
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+
+    consumer_uri = consumer_path.as_uri()
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=consumer_uri, language_id="sagemath", version=1, text=consumer_source)
+    )
+
+    hover_handler = server.protocol.fm.features["textDocument/hover"]
+    hover = hover_handler(
+        HoverParams(
+            text_document=TextDocumentIdentifier(uri=consumer_uri),
+            position=Position(line=2, character=8),
+        )
+    )
+    assert hover is not None
+    assert "Original helper summary." in hover.contents.value
+
+    updated_helper_source = 'def helper(value):\n    """Updated helper summary."""\n    return value + 1\n'
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=helper_path.as_uri(), language_id="python", version=1, text=updated_helper_source)
+    )
+    helper_path.write_text(updated_helper_source, encoding="utf-8")
+
+    save_handler = server.protocol.fm.features["textDocument/didSave"]
+    save_handler(DidSaveTextDocumentParams(text_document=TextDocumentIdentifier(uri=helper_path.as_uri())))
+
+    updated_hover = hover_handler(
+        HoverParams(
+            text_document=TextDocumentIdentifier(uri=consumer_uri),
+            position=Position(line=2, character=8),
+        )
+    )
+    assert updated_hover is not None
+    assert "Updated helper summary." in updated_hover.contents.value
+
+
+def test_server_watched_file_changes_refresh_workspace_index(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    package_dir = root / "pkg"
+    package_dir.mkdir(parents=True, exist_ok=True)
+    (package_dir / "__init__.py").write_text("", encoding="utf-8")
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+    assert server.workspace_index is not None
+
+    helper_path = package_dir / "dynamic_helper.py"
+    helper_path.write_text("def dynamic_helper(value):\n    return value\n", encoding="utf-8")
+
+    watched_handler = server.protocol.fm.features["workspace/didChangeWatchedFiles"]
+    watched_handler(
+        DidChangeWatchedFilesParams(
+            changes=[FileEvent(uri=helper_path.as_uri(), type=FileChangeType.Created)]
+        )
+    )
+
+    symbols = server.workspace_index.workspace_symbols("dynamic_helper")
+    assert any(item["name"] == "dynamic_helper" for item in symbols)
+
+    helper_path.unlink()
+    watched_handler(
+        DidChangeWatchedFilesParams(
+            changes=[FileEvent(uri=helper_path.as_uri(), type=FileChangeType.Deleted)]
+        )
+    )
+
+    symbols_after_delete = server.workspace_index.workspace_symbols("dynamic_helper")
+    assert all(item["name"] != "dynamic_helper" for item in symbols_after_delete)
 
 
 def test_server_hover_omits_docstring_when_hover_docs_disabled() -> None:
