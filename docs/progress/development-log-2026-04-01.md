@@ -495,3 +495,83 @@ changing request behavior.
   cold-index boundaries
 - Risks or blockers: request wiring is cleaner now, but future performance work will still need careful discipline to
   avoid pushing cache and runtime policy back into individual handlers
+
+## Entry 14
+
+- Date: 2026-04-01
+- Task ID: RUNTIME-004
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `3beb130`
+
+### Goal
+
+Stop treating saved and watched workspace files as rebuild-only events by refreshing indexed modules incrementally and
+keeping dependent request results coherent afterward.
+
+### Decisions
+
+- Decision: keep per-path component records inside `WorkspaceIndex`, then rebuild the merged module view for only the
+  affected module when one saved or watched file changes.
+- Reason: mixed native modules such as `.pyx` plus `.pxd` cannot be updated safely if the index only remembers the
+  final merged record.
+- Decision: handle both `textDocument/didSave` and `workspace/didChangeWatchedFiles`, and include `.py` in extension
+  file watchers.
+- Reason: users edit Python helper modules alongside `.sage` files, and closed-file changes should refresh the index
+  too.
+- Decision: clear request caches globally after saved or watched file changes.
+- Reason: imported-symbol hover and definition results can stay stale in unrelated open `.sage` files even when the
+  underlying module record has already refreshed.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_server.py packages/sage-lsp/tests/test_index.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+- Result: incremental refresh/remove tests passed, the full repository suite stayed green, and native Sage smoke still
+  resolved common library symbols correctly
+
+### Follow-ups
+
+- Next task: keep pushing toward background incremental indexing so source-root scans are no longer the default answer
+  to larger workspace changes
+- Risks or blockers: request-cache invalidation is intentionally broad for correctness right now, so future tuning can
+  still recover some cross-file cache hit rate
+
+## Entry 15
+
+- Date: 2026-04-01
+- Task ID: QA-005
+- Scope: extension/test
+- Related milestone: Runtime hardening
+- Commit: `5fb021a`
+
+### Goal
+
+Prove through the real VS Code host that saving an imported Python helper updates hover results in a `.sage`
+consumer without requiring a manual restart.
+
+### Decisions
+
+- Decision: extend the extension-host smoke suite to edit and save `local_docs.py`, then re-query hover inside
+  `01_hover_and_definition.sage`.
+- Reason: this is a realistic user path for complex Sage projects that mix `.sage` notebooks with ordinary Python
+  support modules.
+- Decision: make the smoke mutation idempotent so `assertEventually` retries do not fail after the first successful
+  file rewrite.
+- Reason: smoke assertions should surface product regressions, not self-inflicted retry flakiness.
+
+### Verification
+
+- Checks run:
+  - `npm run test:extension-host`
+- Result: the real extension-host smoke suite passed after the imported-helper save path refreshed hover results inside
+  the `.sage` consumer
+
+### Follow-ups
+
+- Next task: add another end-to-end workspace-change assertion for closed-file watcher updates once the incremental
+  index grows beyond save-driven edits
+- Risks or blockers: this smoke currently covers the save path, while closed-file watcher propagation remains covered
+  by server-side tests rather than the real extension host

@@ -146,3 +146,5 @@
 - Added a hot open-document overlay layer so repeated requests against unchanged editor buffers no longer re-parse the same text, while document-close events now drop that overlay state cleanly.
 - Refactored the recent index/cache code into clearer helper functions so warm-cache loading, module storage, document overlays, and cache-eligibility checks are easier to reason about without changing behavior.
 - Refactored the language-server request flow so hover/definition wrappers, open-document overlay refresh, and empty-diagnostics publication now live behind smaller helpers instead of being repeated across `server.py`.
+- Added incremental refresh and removal for indexed workspace files, so saved or watched Python/Sage/Cython modules now update the persistent index and merged native-module state without requiring a full rebuild.
+- Extended the real extension-host smoke suite so it edits and saves an imported Python helper module, then verifies that hover inside a `.sage` consumer updates without a manual language-server restart.
