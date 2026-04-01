@@ -780,3 +780,51 @@ snapshots first and pushing the full source-root rebuild into a background recon
   snapshot exists yet
 - Risks or blockers: warm starts improve, but cold starts without a usable cache still pay the full initial source
   walk before requests become available
+
+## Entry 21
+
+- Date: 2026-04-01
+- Task ID: RUNTIME-008
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `768b772`
+
+### Goal
+
+Keep warm-start snapshots authoritative while still deferring expensive Sage-root traversal, so the startup path does
+not poison its own persistent cache with partial module sets.
+
+### Decisions
+
+- Decision: treat cache persistence as valid only for complete snapshots, not for opportunistic bootstrap or lazy
+  module loads.
+- Reason: deferred eager/lazy loading was writing incomplete `_cache_entries` back to disk, which caused later warm
+  starts to restore only a tiny fraction of the real Sage module graph.
+- Decision: keep partial eager-root refresh and on-demand module loading strictly in-memory unless the server has a
+  full snapshot to persist.
+- Reason: this preserves the fast startup path without turning a local optimization into long-lived cache corruption.
+- Decision: update startup to refresh smaller roots eagerly, keep large Sage roots deferred, and only persist on
+  startup when the loaded roots already represent a full snapshot.
+- Reason: small workspaces should still get a fully persisted warm snapshot quickly, while large local Sage checkouts
+  avoid paying full traversal cost before the first definition request.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py -q`
+  - `python -m pytest packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+  - local timing probe against `/workspace/sage/src`
+- Result: index and server regressions passed, repository tests and native Sage smoke stayed green, the real
+  extension-host smoke passed under the approved desktop path, and a native timing probe measured about `9.10s` for a
+  full rebuild versus about `1.53s` for warm snapshot hydration plus bootstrap loading, with `PolynomialRing`
+  resolving in about `0.000029s` afterward
+
+### Follow-ups
+
+- Next task: keep pushing first-run startup down now that warm snapshots are authoritative again, especially for large
+  local Sage trees without a preexisting cache
+- Risks or blockers: full workspace-symbol and import-candidate requests still require a complete index when no warm
+  snapshot is available

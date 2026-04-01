@@ -45,6 +45,7 @@
 - Persistent index cache: indexed source roots now reuse serialized module records across rebuilds, invalidate entries when source files change, and fall back safely when the preferred cache location is not writable
 - Open-document overlay cache: unchanged editor buffers now reuse parsed records across hover/definition/completion requests, update on edits, and clean up on close
 - Index readability cleanup: recent warm-cache and hot-overlay logic is now split into smaller helpers so the indexing path is easier to follow and maintain
+- Deferred startup hardening: warm snapshots now stay authoritative on disk while smaller roots refresh eagerly and larger Sage roots load on demand
 
 ## Current Focus
 
@@ -78,7 +79,8 @@
 | Native library documentation baseline | Done | Common Sage library constructors and `.pyx` functions now expose documentation and source paths through merged static/runtime analysis plus local smoke coverage. |
 | Python-like `.sage` performance baseline | Done | `.sage` files that look like Python now keep AST-grade analysis, saved `.sage` files enter workspace indexing, semantic tokens are available, and repeated indexed lookups reuse caches. |
 | `.sage` projection and quick-fix baseline | Done | `.sage` syntax diagnostics now project back to source-facing ranges, deterministic unresolved-import-name diagnostics expose import quick fixes, and both paths are covered through real extension-host smoke. |
-| Snapshot-first startup baseline | Done | Warm server starts now hydrate cached index snapshots before a background reconcile rebuild, reducing the time before definition and hover requests can use cached Sage library data. |
+| Snapshot-first startup baseline | Done | Warm server starts now hydrate cached index snapshots before definition and hover requests need large Sage-library traversal, reducing the time before navigation becomes usable. |
+| Deferred-root startup hardening | Done | Warm starts now keep full cached snapshots authoritative, refresh smaller roots eagerly, and defer large Sage roots to on-demand loading without persisting partial module sets back to disk. |
 
 ## Change Log Notes
 
@@ -154,4 +156,5 @@
 - Reused cached module source during warm index startup so unchanged files can be reconstructed from persistent cache data without rereading every module source file.
 - Projected `.sage` syntax diagnostics back to original source ranges so caret-based preparser syntax no longer reports generated-text columns to the editor.
 - Added standard LSP import quick fixes for deterministic unresolved-import-name diagnostics and validated them through both request-level tests and real extension-host smoke.
-- Switched warm startup toward a snapshot-first path so cached Sage library indexes hydrate synchronously before a background reconcile rebuild refreshes the authoritative source-root state.
+- Switched warm startup toward a snapshot-first path so cached Sage library indexes hydrate synchronously before definition and hover requests need large-library traversal.
+- Hardened deferred startup so partial eager or lazy Sage-root loads never overwrite the authoritative warm snapshot on disk, while smaller roots still refresh eagerly and the real extension-host smoke remains green.
