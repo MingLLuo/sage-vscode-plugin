@@ -735,3 +735,48 @@ through both request-level and real VS Code host automation.
   positives stay under control
 - Risks or blockers: quick-fix ranking is intentionally conservative today and still depends on static export
   knowledge rather than deeper runtime category inference
+
+## Entry 20
+
+- Date: 2026-04-01
+- Task ID: RUNTIME-007
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `de81ce7`
+
+### Goal
+
+Reduce the perceived latency before definition and hover become useful on warm starts by hydrating cached index
+snapshots first and pushing the full source-root rebuild into a background reconcile pass.
+
+### Decisions
+
+- Decision: add an explicit `hydrate_from_cache()` path on `WorkspaceIndex` that restores cached module records
+  without rereading or reparsing module source files.
+- Reason: the previous warm build still walked the source tree synchronously and rebuilt the in-memory graph before
+  the server could answer requests, which dominated the “go to definition” wait on large local Sage checkouts.
+- Decision: have server initialization prefer the hydrated snapshot when present, then launch a background rebuild that
+  swaps in a fresh index only if the server generation still matches.
+- Reason: this keeps request-serving state usable earlier without letting stale background work overwrite a newer
+  rebuild request.
+- Decision: stop clearing resolution caches on every module inserted during full builds and snapshot restores.
+- Reason: those cache resets were redundant during bulk population and added avoidable startup overhead.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+  - local timing probe against `/workspace/sage/src`
+- Result: targeted tests, full repository tests, native Sage smoke, and real extension-host smoke all passed; the
+  local timing probe measured warm full build at about `2.67s` and direct snapshot hydration at about `1.35s` for the
+  local Sage source tree
+
+### Follow-ups
+
+- Next task: keep pushing startup toward true lazy or background source-root discovery for first-run cases where no
+  snapshot exists yet
+- Risks or blockers: warm starts improve, but cold starts without a usable cache still pay the full initial source
+  walk before requests become available

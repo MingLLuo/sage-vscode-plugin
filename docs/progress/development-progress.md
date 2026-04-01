@@ -78,6 +78,7 @@
 | Native library documentation baseline | Done | Common Sage library constructors and `.pyx` functions now expose documentation and source paths through merged static/runtime analysis plus local smoke coverage. |
 | Python-like `.sage` performance baseline | Done | `.sage` files that look like Python now keep AST-grade analysis, saved `.sage` files enter workspace indexing, semantic tokens are available, and repeated indexed lookups reuse caches. |
 | `.sage` projection and quick-fix baseline | Done | `.sage` syntax diagnostics now project back to source-facing ranges, deterministic unresolved-import-name diagnostics expose import quick fixes, and both paths are covered through real extension-host smoke. |
+| Snapshot-first startup baseline | Done | Warm server starts now hydrate cached index snapshots before a background reconcile rebuild, reducing the time before definition and hover requests can use cached Sage library data. |
 
 ## Change Log Notes
 
@@ -153,3 +154,4 @@
 - Reused cached module source during warm index startup so unchanged files can be reconstructed from persistent cache data without rereading every module source file.
 - Projected `.sage` syntax diagnostics back to original source ranges so caret-based preparser syntax no longer reports generated-text columns to the editor.
 - Added standard LSP import quick fixes for deterministic unresolved-import-name diagnostics and validated them through both request-level tests and real extension-host smoke.
+- Switched warm startup toward a snapshot-first path so cached Sage library indexes hydrate synchronously before a background reconcile rebuild refreshes the authoritative source-root state.
