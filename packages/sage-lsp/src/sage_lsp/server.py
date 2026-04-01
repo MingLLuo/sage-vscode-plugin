@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, TypedDict
 
 from lsprotocol.types import (
     CompletionList,
@@ -57,6 +57,14 @@ class SageLanguageServer(LanguageServer):
         self.runtime_introspector = RuntimeIntrospector(command=None, enabled=False)
         self.documentation_cache: dict[tuple[str, str, str], DocumentationResult] = {}
         self.definition_cache: dict[tuple[str, str, str], Optional[Location]] = {}
+
+
+class ResolvedRequestSymbol(TypedDict):
+    record: ModuleRecord
+    name: str
+    static_name: Optional[str]
+    runtime_name: Optional[str]
+    range: Range
 
 
 PREWARM_CALL_RE = re.compile(r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\(")
@@ -251,22 +259,12 @@ def create_server() -> SageLanguageServer:
         if resolved is None:
             return None
 
-        documentation = _documentation_for_request(
-            server,
-            resolved["record"],
-            str(resolved.get("static_name") or resolved["name"]),
-            str(resolved.get("runtime_name") or resolved["name"]),
-            uri=params.text_document.uri,
-        )
+        documentation = _documentation_for_resolved(server, resolved, uri=params.text_document.uri)
         if documentation is None:
             return None
 
-        parts = [documentation.detail]
-        if server.environment.documentation.show_on_hover and documentation.docstring:
-            parts.append(documentation.docstring)
-
         return Hover(
-            contents=MarkupContent(kind=MarkupKind.Markdown, value="\n\n".join(parts)),
+            contents=_hover_markup_content(server, documentation),
             range=resolved["range"],
         )
 
@@ -275,13 +273,7 @@ def create_server() -> SageLanguageServer:
         resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
         if resolved is None:
             return None
-        return _definition_for_request(
-            server,
-            resolved["record"],
-            str(resolved.get("static_name") or resolved["name"]),
-            str(resolved.get("runtime_name") or resolved["name"]),
-            uri=params.text_document.uri,
-        )
+        return _definition_for_resolved(server, resolved, uri=params.text_document.uri)
 
     @server.feature("textDocument/completion")
     def on_completion(params: CompletionParams) -> CompletionList:
@@ -395,28 +387,18 @@ def create_server() -> SageLanguageServer:
 
     @server.feature("textDocument/didOpen")
     def on_did_open(params: DidOpenTextDocumentParams) -> None:
-        if server.workspace_index is not None:
-            server.workspace_index.parse_document(
-                params.text_document.uri,
-                params.text_document.text,
-                params.text_document.language_id,
-            )
+        _cache_document_overlay(
+            server,
+            params.text_document.uri,
+            params.text_document.text,
+            params.text_document.language_id,
+        )
         _publish_diagnostics(server, params.text_document.uri)
         _prewarm_request_caches(server, params.text_document.uri)
 
     @server.feature("textDocument/didChange")
     def on_did_change(params: DidChangeTextDocumentParams) -> None:
-        if server.workspace_index is not None:
-            try:
-                document = server.workspace.get_text_document(params.text_document.uri)
-            except KeyError:
-                document = None
-            if document is not None:
-                server.workspace_index.parse_document(
-                    params.text_document.uri,
-                    document.source,
-                    getattr(document, "language_id", "python"),
-                )
+        _refresh_workspace_document_overlay(server, params.text_document.uri)
         _publish_diagnostics(server, params.text_document.uri)
         _clear_request_caches(server, params.text_document.uri)
 
@@ -425,9 +407,7 @@ def create_server() -> SageLanguageServer:
         if server.workspace_index is not None:
             server.workspace_index.drop_document(params.text_document.uri)
         _clear_request_caches(server, params.text_document.uri)
-        server.text_document_publish_diagnostics(
-            PublishDiagnosticsParams(uri=params.text_document.uri, diagnostics=[])
-        )
+        _publish_empty_diagnostics(server, params.text_document.uri)
 
     @server.feature("sage/getDocumentation")
     def on_get_documentation(params: Dict[str, Any]) -> Optional[dict[str, object]]:
@@ -493,18 +473,46 @@ def _record_for_uri(server: SageLanguageServer, uri: str) -> Tuple[Optional[Modu
     return record, record.source if record is not None else None
 
 
+def _cache_document_overlay(
+    server: SageLanguageServer,
+    uri: str,
+    source: str,
+    language_id: str,
+) -> Optional[ModuleRecord]:
+    if server.workspace_index is None:
+        return None
+    return server.workspace_index.parse_document(uri, source, language_id)
+
+
+def _refresh_workspace_document_overlay(
+    server: SageLanguageServer,
+    uri: str,
+) -> Optional[ModuleRecord]:
+    try:
+        document = server.workspace.get_text_document(uri)
+    except KeyError:
+        return None
+
+    return _cache_document_overlay(
+        server,
+        uri,
+        document.source,
+        getattr(document, "language_id", "python"),
+    )
+
+
+def _publish_empty_diagnostics(server: SageLanguageServer, uri: str) -> None:
+    server.text_document_publish_diagnostics(PublishDiagnosticsParams(uri=uri, diagnostics=[]))
+
+
 def _publish_diagnostics(server: SageLanguageServer, uri: str) -> None:
     if server.workspace_index is None or not server.environment.analysis.enable_diagnostics:
-        server.text_document_publish_diagnostics(
-            PublishDiagnosticsParams(uri=uri, diagnostics=[])
-        )
+        _publish_empty_diagnostics(server, uri)
         return
 
     record, _ = _record_for_uri(server, uri)
     if record is None:
-        server.text_document_publish_diagnostics(
-            PublishDiagnosticsParams(uri=uri, diagnostics=[])
-        )
+        _publish_empty_diagnostics(server, uri)
         return
 
     diagnostics = [
@@ -530,6 +538,43 @@ def _prewarm_request_caches(server: SageLanguageServer, uri: str) -> None:
     for static_name, runtime_name in _documentation_prewarm_candidates(record, text or record.source):
         _documentation_for_request(server, record, static_name, runtime_name, uri=uri)
         _definition_for_request(server, record, static_name, runtime_name, uri=uri)
+
+
+def _request_symbol_names(resolved: ResolvedRequestSymbol) -> tuple[str, str]:
+    return (
+        str(resolved.get("static_name") or resolved["name"]),
+        str(resolved.get("runtime_name") or resolved["name"]),
+    )
+
+
+def _documentation_for_resolved(
+    server: SageLanguageServer,
+    resolved: ResolvedRequestSymbol,
+    *,
+    uri: Optional[str] = None,
+) -> Optional[DocumentationResult]:
+    static_name, runtime_name = _request_symbol_names(resolved)
+    return _documentation_for_request(server, resolved["record"], static_name, runtime_name, uri=uri)
+
+
+def _definition_for_resolved(
+    server: SageLanguageServer,
+    resolved: ResolvedRequestSymbol,
+    *,
+    uri: Optional[str] = None,
+) -> Optional[Location]:
+    static_name, runtime_name = _request_symbol_names(resolved)
+    return _definition_for_request(server, resolved["record"], static_name, runtime_name, uri=uri)
+
+
+def _hover_markup_content(
+    server: SageLanguageServer,
+    documentation: DocumentationResult,
+) -> MarkupContent:
+    parts = [documentation.detail]
+    if server.environment.documentation.show_on_hover and documentation.docstring:
+        parts.append(documentation.docstring)
+    return MarkupContent(kind=MarkupKind.Markdown, value="\n\n".join(parts))
 
 
 def _definition_for_request(
@@ -880,7 +925,7 @@ def _resolve_request_symbol(
     server: SageLanguageServer,
     uri: str,
     position: Position,
-) -> Optional[dict[str, object]]:
+) -> Optional[ResolvedRequestSymbol]:
     record, text = _record_for_uri(server, uri)
     if record is None:
         return None

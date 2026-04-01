@@ -48,6 +48,8 @@ The current baseline now includes:
   temporary cache location or disables persistence without breaking analysis.
 - Open documents now act like a hot overlay above the colder workspace/library index, which is closer to how modern
   language tools separate live editor state from background index state.
+- Server request wiring now routes common documentation, definition, overlay-refresh, and diagnostics flows through
+  shared helpers so the handler layer stays thinner as more LSP features accumulate.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.
