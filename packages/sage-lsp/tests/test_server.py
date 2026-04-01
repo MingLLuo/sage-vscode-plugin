@@ -1,6 +1,8 @@
 from pathlib import Path
 
 from lsprotocol.types import (
+    CodeActionContext,
+    CodeActionParams,
     ClientCapabilities,
     CompletionParams,
     DidCloseTextDocumentParams,
@@ -14,6 +16,7 @@ from lsprotocol.types import (
     HoverParams,
     InitializeParams,
     Position,
+    Range,
     ReferenceContext,
     ReferenceParams,
     RenameParams,
@@ -843,6 +846,74 @@ def test_server_publishes_import_diagnostics_on_open() -> None:
     assert published
     assert published[0].uri == uri
     assert any("missing.module" in diagnostic.message for diagnostic in published[0].diagnostics)
+    assert any(diagnostic.code == "unresolved-import-module" for diagnostic in published[0].diagnostics)
+
+
+def test_server_projects_sage_syntax_diagnostics_on_open() -> None:
+    server = _initialized_server()
+    uri = Path("/workspace/broken.sage").as_uri()
+    source = "value = 2^\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    published: list[object] = []
+    server.text_document_publish_diagnostics = published.append  # type: ignore[assignment]
+
+    did_open_handler = server.protocol.fm.features["textDocument/didOpen"]
+    did_open_handler(
+        DidOpenTextDocumentParams(
+            text_document=TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+        )
+    )
+
+    assert published
+    diagnostics = published[0].diagnostics
+    assert diagnostics
+    assert diagnostics[0].code == "syntax-error"
+    assert diagnostics[0].range.start.line == 0
+    assert diagnostics[0].range.start.character == 9
+    assert diagnostics[0].range.end.character == 10
+
+
+def test_server_provides_import_quick_fix_code_actions(tmp_path: Path) -> None:
+    source_root = tmp_path / "src"
+    _write_module(source_root, "pkg/__init__.py", "")
+    _write_module(source_root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+    _write_module(source_root, "pkg/wrong_import_source.py", "value = 1\n")
+    consumer_path = source_root / "pkg" / "consumer.py"
+    consumer_source = "from pkg.wrong_import_source import helper\n\nresult = helper(4)\n"
+    _write_module(source_root, "pkg/consumer.py", consumer_source)
+
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(source_root)]},
+            "analysis": {"enablePyxParsing": True},
+        }
+    )
+    consumer_uri = consumer_path.as_uri()
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=consumer_uri, language_id="python", version=1, text=consumer_source)
+    )
+
+    code_action_handler = server.protocol.fm.features["textDocument/codeAction"]
+    actions = code_action_handler(
+        CodeActionParams(
+            text_document=TextDocumentIdentifier(uri=consumer_uri),
+            range=Range(
+                start=Position(line=0, character=0),
+                end=Position(line=0, character=33),
+            ),
+            context=CodeActionContext(diagnostics=[]),
+        )
+    )
+
+    assert actions
+    assert actions[0].title == "Import 'helper' from 'pkg.helpers'"
+    assert actions[0].is_preferred is True
+    assert actions[0].edit is not None
+    assert actions[0].edit.changes is not None
+    assert actions[0].edit.changes[consumer_uri][0].new_text == "from pkg.helpers import helper"
 
 
 def test_server_falls_back_to_runtime_docs_and_definition() -> None:

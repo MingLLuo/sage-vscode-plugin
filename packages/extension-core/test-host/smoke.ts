@@ -35,6 +35,7 @@ export async function run(): Promise<void> {
 
   await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri));
   await assertEventually(() => verifyWorkspaceReferencesRenameAndSymbols(workspaceFolder.uri));
+  await assertEventually(() => verifyProjectedDiagnosticsAndQuickFix(workspaceFolder.uri));
   await assertEventually(() => verifyNativeCythonNavigation(workspaceFolder.uri));
   await assertEventually(() => verifySavedModuleRefresh(workspaceFolder.uri));
 
@@ -182,6 +183,60 @@ async function verifyWorkspaceReferencesRenameAndSymbols(workspaceUri: vscode.Ur
   assert.ok(
     workspaceSymbols.some((entry) => entry.name === "PolynomialNotebook" && entry.location.uri.fsPath.endsWith("src/local_docs.py")),
     "expected workspace symbols to include PolynomialNotebook from the local fixture module",
+  );
+}
+
+async function verifyProjectedDiagnosticsAndQuickFix(workspaceUri: vscode.Uri): Promise<void> {
+  const syntaxUri = vscode.Uri.joinPath(workspaceUri, "src", "__tmp_projection_check.sage");
+  await vscode.workspace.fs.writeFile(syntaxUri, Buffer.from("value = 2^\n", "utf-8"));
+  const syntaxDocument = await vscode.workspace.openTextDocument(syntaxUri);
+  await vscode.window.showTextDocument(syntaxDocument);
+
+  const syntaxDiagnostics = await waitForDiagnostics(
+    syntaxUri,
+    (diagnostics) => diagnostics.some((diagnostic) => diagnostic.message.startsWith("Syntax error:")),
+  );
+  const syntaxDiagnostic = syntaxDiagnostics.find((diagnostic) => diagnostic.message.startsWith("Syntax error:"));
+  assert.ok(syntaxDiagnostic, "expected a syntax diagnostic for the projected .sage error");
+  assert.equal(String(syntaxDiagnostic.code), "syntax-error");
+  assert.equal(syntaxDiagnostic.range.start.line, 0);
+  assert.equal(syntaxDiagnostic.range.start.character, 9);
+  assert.equal(syntaxDiagnostic.range.end.character, 10);
+
+  const quickFixUri = vscode.Uri.joinPath(workspaceUri, "src", "__tmp_import_fix.sage");
+  await vscode.workspace.fs.writeFile(
+    quickFixUri,
+    Buffer.from("from package_demo import make_demo_matrix\n\nvalue = make_demo_matrix([1, 2, 3])\n", "utf-8"),
+  );
+  const quickFixDocument = await vscode.workspace.openTextDocument(quickFixUri);
+  const quickFixEditor = await vscode.window.showTextDocument(quickFixDocument);
+
+  const importDiagnostics = await waitForDiagnostics(
+    quickFixUri,
+    (diagnostics) => diagnostics.some((diagnostic) => String(diagnostic.code) === "unresolved-import-name"),
+  );
+  const importDiagnostic = importDiagnostics.find((diagnostic) => String(diagnostic.code) === "unresolved-import-name");
+  assert.ok(importDiagnostic, "expected an unresolved import-name diagnostic for the quick-fix scenario");
+
+  const actions =
+    (await vscode.commands.executeCommand<Array<vscode.CodeAction | vscode.Command>>(
+      "vscode.executeCodeActionProvider",
+      quickFixUri,
+      importDiagnostic.range,
+      vscode.CodeActionKind.QuickFix.value,
+    )) ?? [];
+  const quickFix = actions.find(
+    (action): action is vscode.CodeAction => "edit" in action && action.title === "Import 'make_demo_matrix' from 'local_docs'",
+  );
+  assert.ok(quickFix, "expected a quick fix to rewrite the import source module");
+  assert.ok(quickFix.edit, "expected the quick fix to carry a workspace edit");
+  const editApplied = await vscode.workspace.applyEdit(quickFix.edit);
+  assert.ok(editApplied, "expected the quick-fix workspace edit to apply successfully");
+  await quickFixDocument.save();
+
+  assert.ok(
+    quickFixEditor.document.getText().startsWith("from local_docs import make_demo_matrix"),
+    "expected the quick fix to rewrite the import statement to local_docs",
   );
 }
 
@@ -419,6 +474,25 @@ async function assertEventually(
   }
 
   throw lastError instanceof Error ? lastError : new Error("timed out waiting for the expected editor state");
+}
+
+async function waitForDiagnostics(
+  uri: vscode.Uri,
+  predicate: (diagnostics: readonly vscode.Diagnostic[]) => boolean,
+  timeoutMs = 15_000,
+): Promise<readonly vscode.Diagnostic[]> {
+  const start = Date.now();
+  let lastDiagnostics: readonly vscode.Diagnostic[] = [];
+
+  while (Date.now() - start < timeoutMs) {
+    lastDiagnostics = vscode.languages.getDiagnostics(uri);
+    if (predicate(lastDiagnostics)) {
+      return lastDiagnostics;
+    }
+    await delay(100);
+  }
+
+  throw new Error(`timed out waiting for diagnostics on ${uri.fsPath}: ${lastDiagnostics.map((diagnostic) => diagnostic.message).join(" | ")}`);
 }
 
 function positionOfNth(

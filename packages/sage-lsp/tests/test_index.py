@@ -387,6 +387,15 @@ def test_workspace_index_diagnostics_report_unresolved_imports() -> None:
     assert any("also_missing" in entry["message"] for entry in diagnostics)
 
 
+def test_workspace_index_import_candidates_prefer_defining_modules() -> None:
+    index = WorkspaceIndex([FIXTURE_ROOT], (), True)
+    index.build()
+
+    candidates = index.import_candidates("sqrt")
+
+    assert candidates[:2] == ["sage.functions.other", "sage.all"]
+
+
 def test_workspace_index_diagnostics_report_python_syntax_errors() -> None:
     index = WorkspaceIndex([], (), True)
     record = parse_module(

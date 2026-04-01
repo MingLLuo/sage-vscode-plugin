@@ -5,6 +5,9 @@ import re
 from typing import Any, Dict, Optional, Tuple, TypedDict
 
 from lsprotocol.types import (
+    CodeAction,
+    CodeActionKind,
+    CodeActionParams,
     CompletionList,
     CompletionItem,
     CompletionParams,
@@ -242,6 +245,7 @@ def create_server() -> SageLanguageServer:
                 rename_provider=True,
                 document_symbol_provider=True,
                 workspace_symbol_provider=True,
+                code_action_provider=True,
                 signature_help_provider={"triggerCharacters": ["(", ","]},
                 completion_provider={"triggerCharacters": [".", "("], "resolveProvider": False},
                 semantic_tokens_provider={
@@ -401,6 +405,12 @@ def create_server() -> SageLanguageServer:
                 for uri, edits in changes.items()
             }
         )
+
+    @server.feature("textDocument/codeAction")
+    def on_code_action(params: CodeActionParams) -> list[CodeAction]:
+        if server.workspace_index is None:
+            return []
+        return _code_actions_for_request(server, params)
 
     @server.feature("textDocument/didOpen")
     def on_did_open(params: DidOpenTextDocumentParams) -> None:
@@ -588,15 +598,7 @@ def _publish_diagnostics(server: SageLanguageServer, uri: str) -> None:
         _publish_empty_diagnostics(server, uri)
         return
 
-    diagnostics = [
-        Diagnostic(
-            range=_as_lsp_range(entry["range"]),
-            severity=DiagnosticSeverity(entry.get("severity", 2)),
-            source=str(entry.get("source", "sage-lsp")),
-            message=str(entry["message"]),
-        )
-        for entry in server.workspace_index.diagnostics_for_record(record)
-    ]
+    diagnostics = [_as_lsp_diagnostic(entry) for entry in server.workspace_index.diagnostics_for_record(record)]
     server.text_document_publish_diagnostics(
         PublishDiagnosticsParams(uri=uri, diagnostics=diagnostics)
     )
@@ -611,6 +613,78 @@ def _prewarm_request_caches(server: SageLanguageServer, uri: str) -> None:
     for static_name, runtime_name in _documentation_prewarm_candidates(record, text or record.source):
         _documentation_for_request(server, record, static_name, runtime_name, uri=uri)
         _definition_for_request(server, record, static_name, runtime_name, uri=uri)
+
+
+def _code_actions_for_request(
+    server: SageLanguageServer,
+    params: CodeActionParams,
+) -> list[CodeAction]:
+    record, _ = _record_for_uri(server, params.text_document.uri)
+    if record is None or server.workspace_index is None:
+        return []
+
+    diagnostics = list(params.context.diagnostics)
+    if not diagnostics:
+        diagnostics = [
+            _as_lsp_diagnostic(entry)
+            for entry in server.workspace_index.diagnostics_for_record(record)
+            if _ranges_overlap(entry["range"], _as_dict_range(params.range))
+        ]
+
+    actions: list[CodeAction] = []
+    for diagnostic in diagnostics:
+        actions.extend(
+            _code_actions_for_diagnostic(
+                server,
+                params.text_document.uri,
+                diagnostic,
+            )
+        )
+    return actions
+
+
+def _code_actions_for_diagnostic(
+    server: SageLanguageServer,
+    uri: str,
+    diagnostic: Diagnostic,
+) -> list[CodeAction]:
+    if diagnostic.code != "unresolved-import-name" or not isinstance(diagnostic.data, dict):
+        return []
+
+    target_name = diagnostic.data.get("targetName")
+    alias = diagnostic.data.get("alias")
+    existing_module = diagnostic.data.get("moduleName")
+    if not isinstance(target_name, str) or not isinstance(alias, str):
+        return []
+
+    candidates = server.workspace_index.import_candidates(target_name, exclude_module=existing_module if isinstance(existing_module, str) else None)
+    if not candidates:
+        return []
+
+    actions: list[CodeAction] = []
+    for index, module_name in enumerate(candidates[:5]):
+        import_text = f"from {module_name} import {target_name}"
+        if alias != target_name:
+            import_text += f" as {alias}"
+        actions.append(
+            CodeAction(
+                title=f"Import '{target_name}' from '{module_name}'",
+                kind=CodeActionKind.QuickFix,
+                diagnostics=[diagnostic],
+                is_preferred=index == 0,
+                edit=WorkspaceEdit(
+                    changes={
+                        uri: [
+                            TextEdit(
+                                range=diagnostic.range,
+                                new_text=import_text,
+                            )
+                        ]
+                    }
+                ),
+            )
+        )
+    return actions
 
 
 def _request_symbol_names(resolved: ResolvedRequestSymbol) -> tuple[str, str]:
@@ -1318,6 +1392,35 @@ def _is_word_char(value: str) -> bool:
 
 def _is_dotted_word_char(value: str) -> bool:
     return _is_word_char(value) or value == "."
+
+
+def _ranges_overlap(
+    left: dict[str, dict[str, int]],
+    right: dict[str, dict[str, int]],
+) -> bool:
+    return _range_sort_key(left["start"]) < _range_sort_key(right["end"]) and _range_sort_key(right["start"]) < _range_sort_key(left["end"])
+
+
+def _range_sort_key(position: dict[str, int]) -> tuple[int, int]:
+    return (int(position["line"]), int(position["character"]))
+
+
+def _as_dict_range(raw_range: Range) -> dict[str, dict[str, int]]:
+    return {
+        "start": {"line": raw_range.start.line, "character": raw_range.start.character},
+        "end": {"line": raw_range.end.line, "character": raw_range.end.character},
+    }
+
+
+def _as_lsp_diagnostic(entry: dict[str, object]) -> Diagnostic:
+    return Diagnostic(
+        range=_as_lsp_range(entry["range"]),
+        severity=DiagnosticSeverity(entry.get("severity", 2)),
+        code=entry.get("code"),
+        source=str(entry.get("source", "sage-lsp")),
+        message=str(entry["message"]),
+        data=entry.get("data"),
+    )
 
 
 def _as_lsp_range(raw_range: dict[str, dict[str, int]]) -> Range:

@@ -414,6 +414,30 @@ class WorkspaceIndex:
             )
         return changes
 
+    def import_candidates(
+        self,
+        name: str,
+        *,
+        exclude_module: Optional[str] = None,
+    ) -> list[str]:
+        candidates: list[tuple[int, str]] = []
+        for module_name in sorted(self._modules):
+            if module_name == exclude_module:
+                continue
+            record = self._modules[module_name]
+            if name not in self._visible_names(record):
+                continue
+            symbol = self._resolve_symbol(record, name, visited=set())
+            if symbol is None:
+                continue
+            score = 2
+            if module_name in {"sage.all", "sage.all_cmdline"}:
+                score = 1
+            elif symbol.module_name == module_name:
+                score = 0
+            candidates.append((score, module_name))
+        return [module_name for _, module_name in sorted(dict.fromkeys(candidates))]
+
     def diagnostics_for_record(self, record: ModuleRecord) -> list[dict[str, object]]:
         diagnostics: list[dict[str, object]] = list(record.diagnostics)
         seen: set[tuple[int, int, str]] = {
@@ -448,7 +472,13 @@ class WorkspaceIndex:
                     "range": binding.source_range.to_lsp(),
                     "severity": 2,
                     "source": "sage-lsp",
+                    "code": "unresolved-import-module" if target_record is None else "unresolved-import-name",
                     "message": message,
+                    "data": {
+                        "alias": binding.alias,
+                        "moduleName": binding.module_name,
+                        "targetName": binding.target_name,
+                    },
                 }
             )
         return diagnostics
