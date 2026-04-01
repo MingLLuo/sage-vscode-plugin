@@ -873,3 +873,48 @@ roots that were still deferred.
   workspace-symbol or import-candidate request is issued
 - Risks or blockers: a truly cold workspace-symbol search still has to traverse every deferred root once; this change
   avoids duplicate work, but it does not eliminate that first complete scan
+
+## Entry 23
+
+- Date: 2026-04-01
+- Task ID: RUNTIME-010
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `5133d36`
+
+### Goal
+
+Cut the first cold global lookup cost by letting `workspace symbols` and import-candidate search inspect deferred
+roots on demand instead of forcing immediate whole-library completion.
+
+### Decisions
+
+- Decision: make non-empty workspace-symbol queries search deferred roots directly rather than calling
+  `ensure_full_index()` first.
+- Reason: a cold `workspaceSymbols("sqrt")` request was paying almost the entire large-library indexing cost even
+  though the query only needed a small slice of the source tree.
+- Decision: apply the same targeted deferred-root loading path to `import_candidates(name)`.
+- Reason: import quick fixes and similar code actions hit the same cold global-search bottleneck and do not need a
+  completed full index just to rank one symbol.
+- Decision: make visible-name expansion cycle-safe while exercising partially loaded star-import graphs.
+- Reason: query-driven deferred loading exposed recursion loops in cyclic star-import cases that were previously hidden
+  behind all-at-once indexing.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+  - local timing probe against `/workspace/sage/src`
+- Result: index regressions, full repository tests, native Sage smoke, and real extension-host smoke all passed; the
+  local timing probe measured cold `workspace symbols("sqrt")` at about `3.27s` instead of about `9.42s`, and cold
+  `import_candidates("sqrt")` at about `2.81s` after startup bootstrap
+
+### Follow-ups
+
+- Next task: keep pushing cold global lookup down further, likely by splitting deferred-root search into cheaper
+  summaries instead of reading every candidate file source on the first query
+- Risks or blockers: cold global lookups are much better than a full rebuild, but they still walk the deferred tree
+  once per first query family when no usable snapshot exists yet

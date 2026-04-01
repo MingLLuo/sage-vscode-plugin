@@ -47,6 +47,7 @@
 - Index readability cleanup: recent warm-cache and hot-overlay logic is now split into smaller helpers so the indexing path is easier to follow and maintain
 - Deferred startup hardening: warm snapshots now stay authoritative on disk while smaller roots refresh eagerly and larger Sage roots load on demand
 - Incremental full-index completion: requests that truly need a full index now scan only the roots that were still deferred instead of resetting and rebuilding the entire workspace graph
+- Query-driven cold global lookup: cold `workspace symbols` and import-candidate requests now search deferred roots on demand instead of immediately forcing a whole-library completion pass
 
 ## Current Focus
 
@@ -83,6 +84,7 @@
 | Snapshot-first startup baseline | Done | Warm server starts now hydrate cached index snapshots before definition and hover requests need large Sage-library traversal, reducing the time before navigation becomes usable. |
 | Deferred-root startup hardening | Done | Warm starts now keep full cached snapshots authoritative, refresh smaller roots eagerly, and defer large Sage roots to on-demand loading without persisting partial module sets back to disk. |
 | Incremental full-index completion | Done | Full-index requests now scan only roots that were still deferred, avoiding a reset-and-rebuild of already loaded workspace and bootstrap modules. |
+| Query-driven cold global lookup | Done | Cold workspace-symbol and import-candidate requests now search deferred roots on demand instead of first forcing a complete large-library index build. |
 
 ## Change Log Notes
 
@@ -161,3 +163,4 @@
 - Switched warm startup toward a snapshot-first path so cached Sage library indexes hydrate synchronously before definition and hover requests need large-library traversal.
 - Hardened deferred startup so partial eager or lazy Sage-root loads never overwrite the authoritative warm snapshot on disk, while smaller roots still refresh eagerly and the real extension-host smoke remains green.
 - Reworked `ensure_full_index()` so requests such as workspace-symbol search and import-candidate lookup now fill in only the roots that were still deferred instead of restarting from an empty in-memory graph.
+- Switched cold global symbol/import search away from “complete the full index first” to “search deferred roots for the query,” which cuts the first cold `workspace symbols("sqrt")` path from roughly `9.4s` to roughly `3.3s` on the local Sage checkout.
