@@ -276,12 +276,16 @@ class WorkspaceIndex:
             self._resolved_symbol_cache[cache_key] = resolved
         return resolved
 
-    def exported_symbols(self, module_name: str) -> dict[str, SymbolRecord]:
+    def exported_symbols(
+        self,
+        module_name: str,
+        visited: Optional[set[str]] = None,
+    ) -> dict[str, SymbolRecord]:
         record = self._modules.get(module_name) or self._ensure_module_loaded(module_name)
         if record is None:
             return {}
         results: dict[str, SymbolRecord] = {}
-        for name in self._visible_names(record):
+        for name in self._visible_names(record, visited):
             symbol = self._resolve_symbol(record, name, visited=set())
             if symbol is not None:
                 results[name] = symbol
@@ -335,8 +339,11 @@ class WorkspaceIndex:
         return items
 
     def workspace_symbols(self, query: str) -> list[dict[str, object]]:
-        self.ensure_full_index()
         needle = query.casefold().strip()
+        if needle:
+            self._load_modules_matching_query(needle)
+        else:
+            self.ensure_full_index()
         items: list[dict[str, object]] = []
         seen: set[tuple[Path, int, int, str]] = set()
         for module_name in sorted(self._modules):
@@ -452,7 +459,9 @@ class WorkspaceIndex:
         *,
         exclude_module: Optional[str] = None,
     ) -> list[str]:
-        self.ensure_full_index()
+        if not name.strip():
+            return []
+        self._load_modules_matching_query(name.casefold().strip())
         candidates: list[tuple[int, str]] = []
         for module_name in sorted(self._modules):
             if module_name == exclude_module:
@@ -543,11 +552,19 @@ class WorkspaceIndex:
             sections=sections,
         )
 
-    def _visible_names(self, record: ModuleRecord) -> set[str]:
+    def _visible_names(
+        self,
+        record: ModuleRecord,
+        visited: Optional[set[str]] = None,
+    ) -> set[str]:
         names = set(record.symbols)
         names.update(record.bindings)
+        next_visited = set(visited or ())
+        next_visited.add(record.module_name)
         for star_import in record.star_imports:
-            names.update(self.exported_symbols(star_import))
+            if star_import in next_visited:
+                continue
+            names.update(self.exported_symbols(star_import, next_visited))
         return {name for name in names if not name.startswith("_")}
 
     def _resolve_symbol(
@@ -869,6 +886,40 @@ class WorkspaceIndex:
         self._cache_entries = next_cache_entries
         self._loaded_roots = loaded_roots
 
+    def _load_modules_matching_query(self, needle: str) -> None:
+        if self._fully_indexed or not needle:
+            return
+
+        loaded_any = False
+        for root, path, module_name in self._iter_indexable_modules_for_roots(self._deferred_roots()):
+            resolved_path = path.resolve()
+            if resolved_path in self._module_paths:
+                continue
+            module_haystack = module_name.casefold()
+            cache_key = str(resolved_path)
+            fingerprint = file_fingerprint(path)
+            cached_entry = self._cache_entries.get(cache_key)
+            source = self._source_for_module_path(path, cached_entry, fingerprint)
+            if needle not in module_haystack and needle not in source.casefold():
+                continue
+            record = self._load_or_parse_module_record(
+                module_name,
+                path,
+                source,
+                cached_entry,
+                fingerprint,
+            )
+            self._store_module_record(module_name, path, record, clear_caches=False)
+            self._cache_entries[cache_key] = {
+                "moduleName": module_name,
+                "fingerprint": fingerprint,
+                "source": source,
+                "record": serialize_module_record(record),
+            }
+            loaded_any = True
+        if loaded_any:
+            self._clear_resolution_caches()
+
     def _is_indexable_path(self, root: Path, path: Path) -> bool:
         if not path.is_file():
             return False
@@ -1013,6 +1064,9 @@ class WorkspaceIndex:
         for record in ordered_records[1:]:
             merged = merge_module_records(merged, record)
         self._modules[module_name] = merged
+
+    def _deferred_roots(self) -> list[Path]:
+        return [root for root in self._source_roots if root.resolve() not in self._loaded_roots]
 
     def _clear_resolution_caches(self) -> None:
         self._resolved_symbol_cache.clear()

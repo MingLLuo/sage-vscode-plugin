@@ -306,6 +306,29 @@ def test_workspace_index_ensure_full_index_loads_only_missing_roots(tmp_path: Pa
     assert "lib.other" in hydrated_index.modules
 
 
+def test_workspace_symbols_query_loads_only_matching_deferred_modules(tmp_path: Path, monkeypatch) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    _write_module(first_root, "seed.py", "value = 1\n")
+    _write_module(second_root, "pkg/__init__.py", "")
+    _write_module(second_root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+    _write_module(second_root, "pkg/other.py", "def unrelated(value):\n    return value + 1\n")
+
+    index = WorkspaceIndex([first_root, second_root], (), True)
+    index.load_roots([first_root])
+
+    def _fail_build() -> None:
+        raise AssertionError("workspace_symbols(query) should use targeted deferred search instead of full rebuild")
+
+    monkeypatch.setattr(index, "build", _fail_build)
+
+    symbols = index.workspace_symbols("helper")
+
+    assert any(item["name"] == "helper" for item in symbols)
+    assert "pkg.helpers" in index.modules
+    assert "pkg.other" not in index.modules
+
+
 def test_workspace_index_does_not_persist_partial_lazy_snapshot(tmp_path: Path) -> None:
     root = tmp_path / "src"
     cache_dir = tmp_path / "cache"
@@ -325,6 +348,42 @@ def test_workspace_index_does_not_persist_partial_lazy_snapshot(tmp_path: Path) 
     hydrated_index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
     assert hydrated_index.hydrate_from_cache() is False
     assert "pkg.helpers" not in hydrated_index.modules
+
+
+def test_import_candidates_query_loads_only_matching_deferred_modules(tmp_path: Path, monkeypatch) -> None:
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    _write_module(first_root, "seed.py", "value = 1\n")
+    _write_module(second_root, "pkg/__init__.py", "")
+    _write_module(second_root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+    _write_module(second_root, "pkg/other.py", "def unrelated(value):\n    return value + 1\n")
+
+    index = WorkspaceIndex([first_root, second_root], (), True)
+    index.load_roots([first_root])
+
+    def _fail_build() -> None:
+        raise AssertionError("import_candidates(name) should use targeted deferred search instead of full rebuild")
+
+    monkeypatch.setattr(index, "build", _fail_build)
+
+    candidates = index.import_candidates("helper")
+
+    assert candidates == ["pkg.helpers"]
+    assert "pkg.helpers" in index.modules
+    assert "pkg.other" not in index.modules
+
+
+def test_import_candidates_handles_cyclic_star_imports_during_targeted_search(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/a.py", "from pkg.b import *\n\ndef helper(value):\n    return value\n")
+    _write_module(root, "pkg/b.py", "from pkg.a import *\n\ndef other(value):\n    return value + 1\n")
+
+    index = WorkspaceIndex([root], (), True)
+
+    candidates = index.import_candidates("helper")
+
+    assert "pkg.a" in candidates
 
 
 def test_workspace_index_invalidates_persistent_cache_when_source_changes(tmp_path: Path, monkeypatch) -> None:
