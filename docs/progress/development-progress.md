@@ -46,6 +46,7 @@
 - Open-document overlay cache: unchanged editor buffers now reuse parsed records across hover/definition/completion requests, update on edits, and clean up on close
 - Index readability cleanup: recent warm-cache and hot-overlay logic is now split into smaller helpers so the indexing path is easier to follow and maintain
 - Deferred startup hardening: warm snapshots now stay authoritative on disk while smaller roots refresh eagerly and larger Sage roots load on demand
+- Incremental full-index completion: requests that truly need a full index now scan only the roots that were still deferred instead of resetting and rebuilding the entire workspace graph
 
 ## Current Focus
 
@@ -81,6 +82,7 @@
 | `.sage` projection and quick-fix baseline | Done | `.sage` syntax diagnostics now project back to source-facing ranges, deterministic unresolved-import-name diagnostics expose import quick fixes, and both paths are covered through real extension-host smoke. |
 | Snapshot-first startup baseline | Done | Warm server starts now hydrate cached index snapshots before definition and hover requests need large Sage-library traversal, reducing the time before navigation becomes usable. |
 | Deferred-root startup hardening | Done | Warm starts now keep full cached snapshots authoritative, refresh smaller roots eagerly, and defer large Sage roots to on-demand loading without persisting partial module sets back to disk. |
+| Incremental full-index completion | Done | Full-index requests now scan only roots that were still deferred, avoiding a reset-and-rebuild of already loaded workspace and bootstrap modules. |
 
 ## Change Log Notes
 
@@ -158,3 +160,4 @@
 - Added standard LSP import quick fixes for deterministic unresolved-import-name diagnostics and validated them through both request-level tests and real extension-host smoke.
 - Switched warm startup toward a snapshot-first path so cached Sage library indexes hydrate synchronously before definition and hover requests need large-library traversal.
 - Hardened deferred startup so partial eager or lazy Sage-root loads never overwrite the authoritative warm snapshot on disk, while smaller roots still refresh eagerly and the real extension-host smoke remains green.
+- Reworked `ensure_full_index()` so requests such as workspace-symbol search and import-candidate lookup now fill in only the roots that were still deferred instead of restarting from an empty in-memory graph.

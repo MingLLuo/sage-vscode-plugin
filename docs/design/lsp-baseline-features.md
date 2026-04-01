@@ -63,6 +63,8 @@ The current baseline now includes:
   needs them.
 - Deferred eager or lazy loads no longer write partial snapshots back to disk, so warm-start cache hydration stays
   authoritative instead of being poisoned by incomplete module sets.
+- Full-index completion no longer has to reset and rebuild the whole workspace graph when only some roots were
+  deferred; it can now scan the missing roots incrementally and then persist the completed snapshot.
 - They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
 - Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
   validated safely without pretending to approximate a full Python or Cython type checker.

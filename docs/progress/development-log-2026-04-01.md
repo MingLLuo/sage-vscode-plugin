@@ -828,3 +828,48 @@ not poison its own persistent cache with partial module sets.
   local Sage trees without a preexisting cache
 - Risks or blockers: full workspace-symbol and import-candidate requests still require a complete index when no warm
   snapshot is available
+
+## Entry 22
+
+- Date: 2026-04-01
+- Task ID: RUNTIME-009
+- Scope: runtime
+- Related milestone: Runtime hardening
+- Commit: `ca6b953`
+
+### Goal
+
+Avoid turning the first full-index request after startup into another reset-and-rebuild cycle by filling in only the
+roots that were still deferred.
+
+### Decisions
+
+- Decision: track which source roots have already been scanned in memory and let `ensure_full_index()` load only the
+  missing roots.
+- Reason: after snapshot hydration, eager-root refresh, and bootstrap module loading, rebuilding the entire index from
+  scratch throws away useful state and repeats work that was already paid for during startup.
+- Decision: persist the cache snapshot only after that incremental completion has covered every configured root.
+- Reason: this preserves the “authoritative snapshot only” rule added in the previous startup-hardening pass while
+  still letting full-index requests produce a durable completed cache.
+- Decision: cover the path with both index-level and server-level regressions, including a server workspace-symbol
+  request that must succeed even if `WorkspaceIndex.build()` is forced to fail.
+- Reason: the most likely regression was silently falling back to the old rebuild path when a full-index capability was
+  requested.
+
+### Verification
+
+- Checks run:
+  - `python -m pytest packages/sage-lsp/tests/test_index.py -q`
+  - `python -m pytest packages/sage-lsp/tests/test_server.py -q`
+  - `npm run test`
+  - `npm run test:native-smoke`
+  - `npm run test:extension-host`
+- Result: index and server regressions passed, repository tests stayed green, native Sage smoke kept resolving common
+  library symbols, and the real extension-host smoke passed after the new incremental completion path was introduced
+
+### Follow-ups
+
+- Next task: keep reducing the first no-snapshot startup cost for large local Sage trees, especially before any full
+  workspace-symbol or import-candidate request is issued
+- Risks or blockers: a truly cold workspace-symbol search still has to traverse every deferred root once; this change
+  avoids duplicate work, but it does not eliminate that first complete scan
