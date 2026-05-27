@@ -1,10 +1,17 @@
 from pathlib import Path
 
+import sage_lsp.index as index_facade
+import sage_lsp.workspace_index as workspace_index
 from sage_lsp.index import WorkspaceIndex, iter_identifier_ranges, path_from_uri
 from sage_lsp.parser import parse_module
 
 
 FIXTURE_ROOT = Path(__file__).parent / "fixtures" / "sage_src_lite" / "src"
+
+
+def test_index_module_remains_a_compatibility_facade() -> None:
+    assert index_facade.WorkspaceIndex is workspace_index.WorkspaceIndex
+    assert index_facade.parse_module is workspace_index.parse_module
 
 
 def test_workspace_index_resolves_star_exports_and_lazy_imports() -> None:
@@ -450,6 +457,51 @@ def test_workspace_symbols_query_uses_persisted_summary_cache_without_source_rea
 
     assert any(item["name"] == "helper" for item in symbols)
     assert "pkg.helpers" not in index.modules
+
+
+def test_workspace_index_persists_summary_cache_to_sqlite(tmp_path: Path) -> None:
+    root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+
+    builder = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    builder.build()
+
+    assert builder._summary_cache_db_path().exists()  # noqa: SLF001 - intentional storage verification
+
+    index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    symbols = index.workspace_symbols("helper")
+
+    assert any(item["name"] == "helper" for item in symbols)
+    assert "pkg.helpers" not in index.modules
+
+
+def test_workspace_symbols_query_uses_sqlite_summary_index_without_full_load(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    root = tmp_path / "src"
+    cache_dir = tmp_path / "cache"
+    _write_module(root, "pkg/__init__.py", "")
+    _write_module(root, "pkg/helpers.py", "def helper(value):\n    return value\n")
+    _write_module(root, "pkg/unrelated.py", "def unrelated(value):\n    return value\n")
+
+    builder = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+    builder.build()
+
+    index = WorkspaceIndex([root], (), True, cache_dir=cache_dir)
+
+    def _fail_full_summary_load(self):
+        raise AssertionError("query-backed SQLite summaries should avoid a full summary-cache load")
+
+    monkeypatch.setattr(WorkspaceIndex, "_load_cached_summary_entries", _fail_full_summary_load)
+
+    symbols = index.workspace_symbols("helper")
+
+    assert any(item["name"] == "helper" for item in symbols)
+    assert "pkg.helpers" not in index.modules
+    assert "pkg.unrelated" not in index.modules
 
 
 def test_workspace_symbols_query_skips_root_scan_when_summary_cache_is_complete(

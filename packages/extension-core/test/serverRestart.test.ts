@@ -6,8 +6,9 @@ import {
   shouldAutoRestartOnLanguageServerClose,
 } from "../src/serverRestart";
 
-test("shouldRestartLanguageServer ignores run-target-only changes", () => {
+test("shouldRestartLanguageServer ignores run UI and target changes", () => {
   assert.equal(shouldRestartLanguageServer((section) => section === "sage.run.target"), false);
+  assert.equal(shouldRestartLanguageServer((section) => section === "sage.run.showCellCodeLens"), false);
 });
 
 test("shouldRestartLanguageServer reacts to language-server-affecting settings", () => {

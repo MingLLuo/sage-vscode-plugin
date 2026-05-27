@@ -1,0 +1,47 @@
+name: Feature request
+description: Request a new Sage editing capability, language feature, workflow, or integration.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What Sage workflow is difficult or unsupported today?
+      placeholder: I often work with ... and need ...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the editor behavior you expect, preferably compared with Pyright, rust-analyzer, or another modern language plugin.
+      placeholder: Completion should show ..., definition should jump to ..., status should show ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Sage library indexing
+        - Documentation
+        - Navigation
+        - Completion/signature help
+        - Diagnostics/code actions
+        - Syntax or semantic highlighting
+        - Runtime/REPL/notebook workflow
+        - Packaging/release
+        - GitHub/maintenance
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Example code or references
+      description: Include a small code sample, Sage module, or relevant workflow.
+      render: python
+    validations:
+      required: false

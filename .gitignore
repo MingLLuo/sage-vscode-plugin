@@ -1,11 +1,13 @@
 node_modules/
 dist/
+target/
 out/
 packages/extension-core/.vscode-test/
 .DS_Store
 .pytest_cache/
 __pycache__/
 *.pyc
+*.sage.py
 .venv/
 .coverage
 coverage/

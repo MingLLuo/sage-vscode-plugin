@@ -11,38 +11,34 @@ async function main(): Promise<void> {
   const vscodeExecutablePath = await resolveVSCodeExecutablePath();
   const nativeSage = await discoverNativeSagePaths(repositoryRoot);
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sgvsc-"));
-  const workspacePath = await cloneSmokeWorkspace(repositoryRoot, tempRoot);
-  const userDataDir = path.join(tempRoot, "userdata");
-  const extensionsDir = path.join(tempRoot, "extensions");
+  const smokeWorkspacePath = await cloneSmokeWorkspace(repositoryRoot, tempRoot);
+  const externalSageSourceRoot = await createExternalSageSourceRoot(tempRoot);
+  const plainPythonWorkspacePath = await createPlainPythonWorkspace(tempRoot);
   let completedSuccessfully = false;
 
   try {
-    const exitCode = await runTests({
+    await runExtensionHostSuite({
       vscodeExecutablePath,
       extensionDevelopmentPath,
       extensionTestsPath,
-      launchArgs: [
-        workspacePath,
-        "--disable-extensions",
-        "--skip-release-notes",
-        "--skip-welcome",
-        "--disable-workspace-trust",
-        `--user-data-dir=${userDataDir}`,
-        `--extensions-dir=${extensionsDir}`,
-      ],
-      extensionTestsEnv: {
-        SAGE_TEST_LSP_PYTHON: process.env.SAGE_TEST_LSP_PYTHON ?? "python",
-        SAGE_TEST_WORKSPACE: workspacePath,
-        ...(nativeSage.sourceRoot ? { SAGE_TEST_NATIVE_SOURCE_ROOT: nativeSage.sourceRoot } : {}),
-        ...(nativeSage.executable ? { SAGE_TEST_NATIVE_SAGE_EXECUTABLE: nativeSage.executable } : {}),
-      },
+      workspacePath: plainPythonWorkspacePath,
+      userDataDir: path.join(tempRoot, "userdata-plain-python"),
+      extensionsDir: path.join(tempRoot, "extensions-plain-python"),
+      mode: "plain-python",
     });
 
-    if (exitCode !== 0) {
-      throw new Error(`extension-host smoke tests failed with exit code ${exitCode}`);
-    }
+    await runExtensionHostSuite({
+      vscodeExecutablePath,
+      extensionDevelopmentPath,
+      extensionTestsPath,
+      workspacePath: smokeWorkspacePath,
+      userDataDir: path.join(tempRoot, "userdata-smoke"),
+      extensionsDir: path.join(tempRoot, "extensions-smoke"),
+      mode: "smoke",
+      nativeSage,
+      externalSageSourceRoot,
+    });
 
-    await assertCleanLogs(userDataDir);
     completedSuccessfully = true;
   } finally {
     if (completedSuccessfully && process.env.SAGE_TEST_KEEP_TEMP !== "1") {
@@ -51,6 +47,47 @@ async function main(): Promise<void> {
       console.error(`Preserved extension-host temp workspace for debugging: ${tempRoot}`);
     }
   }
+}
+
+async function runExtensionHostSuite(options: {
+  vscodeExecutablePath: string;
+  extensionDevelopmentPath: string;
+  extensionTestsPath: string;
+  workspacePath: string;
+  userDataDir: string;
+  extensionsDir: string;
+  mode: "plain-python" | "smoke";
+  nativeSage?: { sourceRoot?: string; executable?: string };
+  externalSageSourceRoot?: string;
+}): Promise<void> {
+  const exitCode = await runTests({
+    vscodeExecutablePath: options.vscodeExecutablePath,
+    extensionDevelopmentPath: options.extensionDevelopmentPath,
+    extensionTestsPath: options.extensionTestsPath,
+    launchArgs: [
+      options.workspacePath,
+      "--disable-extensions",
+      "--skip-release-notes",
+      "--skip-welcome",
+      "--disable-workspace-trust",
+      `--user-data-dir=${options.userDataDir}`,
+      `--extensions-dir=${options.extensionsDir}`,
+    ],
+    extensionTestsEnv: {
+      SAGE_TEST_HOST_MODE: options.mode,
+      SAGE_TEST_LSP_PYTHON: process.env.SAGE_TEST_LSP_PYTHON ?? "python",
+      SAGE_TEST_WORKSPACE: options.workspacePath,
+      ...(options.nativeSage?.sourceRoot ? { SAGE_TEST_NATIVE_SOURCE_ROOT: options.nativeSage.sourceRoot } : {}),
+      ...(options.nativeSage?.executable ? { SAGE_TEST_NATIVE_SAGE_EXECUTABLE: options.nativeSage.executable } : {}),
+      ...(options.externalSageSourceRoot ? { SAGE_TEST_EXTERNAL_SOURCE_ROOT: options.externalSageSourceRoot } : {}),
+    },
+  });
+
+  if (exitCode !== 0) {
+    throw new Error(`extension-host ${options.mode} smoke tests failed with exit code ${exitCode}`);
+  }
+
+  await assertCleanLogs(options.userDataDir);
 }
 
 async function resolveVSCodeExecutablePath(): Promise<string> {
@@ -94,6 +131,54 @@ async function cloneSmokeWorkspace(repositoryRoot: string, tempRoot: string): Pr
   return targetWorkspace;
 }
 
+async function createPlainPythonWorkspace(tempRoot: string): Promise<string> {
+  const targetWorkspace = path.join(tempRoot, "plain-python-workspace");
+  await fs.mkdir(targetWorkspace, { recursive: true });
+  await fs.writeFile(
+    path.join(targetWorkspace, "plain.py"),
+    [
+      "\"\"\"Ordinary Python file used to prove Sage stays quiet by default.\"\"\"",
+      "",
+      "def add(left: int, right: int) -> int:",
+      "    return left + right",
+      "",
+    ].join("\n"),
+  );
+  return targetWorkspace;
+}
+
+async function createExternalSageSourceRoot(tempRoot: string): Promise<string> {
+  const sourceRoot = path.join(tempRoot, "external-sage-src");
+  const sagePackage = path.join(sourceRoot, "sage");
+  const combinatPackage = path.join(sagePackage, "combinat");
+  await fs.mkdir(combinatPackage, { recursive: true });
+  await fs.writeFile(path.join(sagePackage, "__init__.py"), "\n");
+  await fs.writeFile(path.join(combinatPackage, "__init__.py"), "\n");
+  await fs.writeFile(
+    path.join(sagePackage, "all.py"),
+    [
+      "\"\"\"Minimal Sage public export surface used by the extension-host smoke.\"\"\"",
+      "",
+      "from sage.combinat.combination import Combinations",
+      "",
+      "__all__ = [\"Combinations\"]",
+      "",
+    ].join("\n"),
+  );
+  await fs.writeFile(
+    path.join(combinatPackage, "combination.py"),
+    [
+      "\"\"\"Minimal external Sage source fixture used outside the workspace.\"\"\"",
+      "",
+      "def Combinations(n, k=None):",
+      "    \"\"\"Return combinations of ``n`` objects, optionally of length ``k``.\"\"\"",
+      "    return []",
+      "",
+    ].join("\n"),
+  );
+  return sourceRoot;
+}
+
 async function discoverNativeSagePaths(
   repositoryRoot: string,
 ): Promise<{ sourceRoot?: string; executable?: string }> {
@@ -123,16 +208,19 @@ async function assertCleanLogs(userDataDir: string): Promise<void> {
   const candidateLogs = (await collectFiles(logsRoot)).filter((logPath) =>
     logPath.endsWith("1-Sage.log")
     || logPath.endsWith("2-Sage Language Server.log")
+    || logPath.endsWith("main.log")
     || logPath.endsWith("exthost.log"),
   );
 
   const failures: string[] = [];
   const failurePatterns = [
     /Accessing a window scoped configuration for a resource/g,
+    /\[sage-vscode\.sage-vscode-extension\] Accessing a resource scoped configuration without providing a resource/g,
     /Error sending data/g,
     /Traceback \(most recent call last\):/g,
     /Server process exited with code (?!0(?:[\s.,]|$))/g,
     /language server connection closed unexpectedly; restarting\./g,
+    /Extension host .* is unresponsive/g,
   ];
 
   for (const logPath of candidateLogs) {

@@ -207,6 +207,16 @@ def _rewrite_line(source_line: str, state: str) -> tuple[LineMap, str, bool]:
                 index += 1
                 changed = True
                 continue
+            if char == "." and next_char == ".":
+                after_next = source_line[index + 2] if index + 2 < len(source_line) else ""
+                if prev_char != "." and after_next != ".":
+                    generated_parts.append(",")
+                    generated_length += 1
+                    generated_to_source.append(index + 2)
+                    source_to_generated.extend([generated_length, generated_length])
+                    index += 2
+                    changed = True
+                    continue
 
             generated_length = _emit_unchanged(
                 char, index, generated_parts, source_to_generated, generated_to_source, generated_length

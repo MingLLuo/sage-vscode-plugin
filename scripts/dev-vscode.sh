@@ -31,7 +31,7 @@ Options:
 Examples:
   ./scripts/dev-vscode.sh
   ./scripts/dev-vscode.sh --smoke
-  ./scripts/dev-vscode.sh --bootstrap --python /Users/example/miniforge3/bin/python
+  ./scripts/dev-vscode.sh --bootstrap --python "$HOME/miniforge3/bin/python"
 EOF
 }
 
@@ -127,9 +127,12 @@ if [[ "$SKIP_OPEN" -eq 0 ]]; then
 fi
 
 if [[ "$WORKSPACE_MODE" == "smoke" ]]; then
-  log "next steps: press F5 and choose 'Sage Plugin: Smoke Workspace'"
+  log "next steps: press F5; 'Sage Plugin: Smoke Workspace' is the default launch target"
+  log "in the [Extension Development Host] window, confirm .sage files show language mode 'SageMath'"
+  log "if the host opens empty, use Open Folder inside that host and select examples/manual-smoke-workspace"
+  log "if .sage shows Plain Text or Sage commands are missing, close that normal window and launch again with F5"
 else
   log "next steps: press F5 and choose 'Sage Plugin: Extension Host'"
 fi
 
-log "then run 'Sage: Select Interpreter' inside the extension host window"
+log "then run 'Sage: Select Interpreter' or 'Sage: Show Index Status' inside the extension host window"

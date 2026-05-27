@@ -6,6 +6,21 @@
     "vendor"
   ],
   "sage.analysis.enablePyxParsing": true,
+  "sage.analysis.enablePythonFiles": true,
   "sage.run.target": "repl",
-  "sage.docs.showOnHover": true
+  "sage.run.cleanupGeneratedPython": true,
+  "sage.docs.showOnHover": true,
+  "sage.interpreter.path": "sage",
+  "sage.languageServer.rustPath": "auto",
+  "python.analysis.extraPaths": [
+    "src",
+    "vendor"
+  ],
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "none",
+    "reportMissingModuleSource": "none"
+  },
+  "files.exclude": {
+    "**/*.sage.py": true
+  }
 }

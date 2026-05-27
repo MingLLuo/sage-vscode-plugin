@@ -82,5 +82,5 @@ The current baseline now includes:
 
 - `.sage` source mapping still needs to feed more of the diagnostics and navigation surface.
 - Semantic tokens should expand beyond the current baseline into more classifiable Sage runtime objects.
-- Code actions, inlay hints, richer diagnostics, and deeper runtime-aware analysis remain open work.
+- Richer code actions, richer diagnostics, and deeper runtime-aware analysis remain open work.
 - Library-index persistence and incremental background indexing remain open performance work.

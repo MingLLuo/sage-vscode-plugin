@@ -26,6 +26,14 @@ def test_skips_comments_and_strings_including_triple_quoted_blocks() -> None:
     assert document.line_maps[3].generated_line == "c**d"
 
 
+def test_rewrites_sage_ranges_outside_comments_and_strings() -> None:
+    document = preprocess_sage_source("xs = [1..5]\nys = [1 .. width]\ntext = '1..5'\n# [1..5]\n")
+
+    assert document.generated_text == "xs = [1,5]\nys = [1 , width]\ntext = '1..5'\n# [1..5]\n"
+    assert document.changed is True
+    assert document.map_source_to_generated(0, 8).character == 8
+
+
 def test_non_sage_documents_are_left_unchanged() -> None:
     document = preprocess_document("file:///tmp/example.py", "value = a^b\n")
 

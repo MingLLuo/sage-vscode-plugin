@@ -53,8 +53,10 @@ from pygls.lsp.server import LanguageServer
 
 from .environment import SageEnvironment
 from .index import DocumentationResult, WorkspaceIndex, iter_identifier_ranges, path_from_uri, split_docstring
+from .jedi_bridge import JediBridge
 from .model import ModuleRecord
 from .runtime_introspection import RuntimeIntrospector, RuntimeSymbolResult
+from .trace import TraceLogger
 
 
 class SageLanguageServer(LanguageServer):
@@ -63,9 +65,11 @@ class SageLanguageServer(LanguageServer):
         self.environment = SageEnvironment()
         self.workspace_index: Optional[WorkspaceIndex] = None
         self.runtime_introspector = RuntimeIntrospector(command=None, enabled=False)
+        self.jedi_bridge = JediBridge()
         self.documentation_cache: dict[tuple[str, str, str], DocumentationResult] = {}
         self.definition_cache: dict[tuple[str, str, str], Optional[Location]] = {}
         self.index_generation = 0
+        self.tracer = TraceLogger(component="sage-lsp")
 
 
 class ResolvedRequestSymbol(TypedDict):
@@ -231,6 +235,7 @@ def create_server() -> SageLanguageServer:
     def on_initialize(params: InitializeParams) -> InitializeResult:
         options = params.initialization_options if isinstance(params.initialization_options, dict) else None
         server.environment = SageEnvironment.from_initialize_options(options)
+        server.tracer.set_level(server.environment.logging.level)
         _rebuild_index(server)
         return InitializeResult(
             server_info={"name": "sage-lsp", "version": "0.3.0"},
@@ -277,49 +282,61 @@ def create_server() -> SageLanguageServer:
 
     @server.feature("textDocument/hover")
     def on_hover(params: HoverParams) -> Optional[Hover]:
-        resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
-        if resolved is None:
-            return None
+        with server.tracer.span("request", method="textDocument/hover", uri=params.text_document.uri):
+            resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
+            if resolved is None:
+                return None
 
-        documentation = _documentation_for_resolved(server, resolved, uri=params.text_document.uri)
-        if documentation is None:
-            return None
+            documentation = _documentation_for_resolved(server, resolved, uri=params.text_document.uri)
+            if documentation is None:
+                return None
 
-        return Hover(
-            contents=_hover_markup_content(server, documentation),
-            range=resolved["range"],
-        )
+            return Hover(
+                contents=_hover_markup_content(server, documentation),
+                range=resolved["range"],
+            )
 
     @server.feature("textDocument/definition")
     def on_definition(params: DefinitionParams) -> Optional[Location]:
-        resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
-        if resolved is None:
-            return None
-        return _definition_for_resolved(server, resolved, uri=params.text_document.uri)
+        with server.tracer.span("request", method="textDocument/definition", uri=params.text_document.uri):
+            resolved = _resolve_request_symbol(server, params.text_document.uri, params.position)
+            if resolved is None:
+                return None
+            return _definition_for_resolved(server, resolved, uri=params.text_document.uri)
 
     @server.feature("textDocument/completion")
     def on_completion(params: CompletionParams) -> CompletionList:
-        if server.workspace_index is None:
-            return CompletionList(is_incomplete=False, items=[])
+        with server.tracer.span("request", method="textDocument/completion", uri=params.text_document.uri):
+            if server.workspace_index is None:
+                return CompletionList(is_incomplete=False, items=[])
 
-        record, text = _record_for_uri(server, params.text_document.uri)
-        if record is None:
-            return CompletionList(is_incomplete=False, items=[])
+            record, text = _record_for_uri(server, params.text_document.uri)
+            if record is None:
+                return CompletionList(is_incomplete=False, items=[])
 
-        dotted_target, prefix = completion_target_at_position(
-            text or record.source,
-            params.position.line,
-            params.position.character,
-        )
-        if dotted_target and server.workspace_index is not None:
-            items = [
-                _as_completion_item(item)
-                for item in server.workspace_index.member_completion_items(record, dotted_target, prefix)
-            ]
+            dotted_target, prefix = completion_target_at_position(
+                text or record.source,
+                params.position.line,
+                params.position.character,
+            )
+            if dotted_target and server.workspace_index is not None:
+                items = [
+                    _as_completion_item(item)
+                    for item in server.workspace_index.member_completion_items(record, dotted_target, prefix)
+                ]
+                return CompletionList(is_incomplete=False, items=items)
+
+            items = _merged_completion_items(
+                server.workspace_index.completion_items(record, prefix),
+                server.jedi_bridge.completion_items(
+                    text or record.source,
+                    record.file_path,
+                    params.position.line,
+                    params.position.character,
+                    prefix,
+                ),
+            )
             return CompletionList(is_incomplete=False, items=items)
-
-        items = [_as_completion_item(item) for item in server.workspace_index.completion_items(record, prefix)]
-        return CompletionList(is_incomplete=False, items=items)
 
     @server.feature("textDocument/signatureHelp")
     def on_signature_help(params: SignatureHelpParams) -> Optional[SignatureHelp]:
@@ -362,9 +379,10 @@ def create_server() -> SageLanguageServer:
 
     @server.feature("workspace/symbol")
     def on_workspace_symbol(params: WorkspaceSymbolParams) -> list[dict[str, object]]:
-        if server.workspace_index is None:
-            return []
-        return server.workspace_index.workspace_symbols(params.query)
+        with server.tracer.span("request", method="workspace/symbol", query=params.query):
+            if server.workspace_index is None:
+                return []
+            return server.workspace_index.workspace_symbols(params.query)
 
     @server.feature("textDocument/references")
     def on_references(params: ReferenceParams) -> list[Location]:
@@ -452,55 +470,84 @@ def create_server() -> SageLanguageServer:
         if not isinstance(uri, str):
             return None
 
-        record, text = _record_for_uri(server, uri)
-        if record is None:
-            return None
-
-        name = params.get("symbol")
-        runtime_name: Optional[str] = name if isinstance(name, str) else None
-        if not isinstance(name, str):
-            position = params.get("position")
-            if not isinstance(position, dict):
-                return None
-            line = position.get("line")
-            character = position.get("character")
-            if not isinstance(line, int) or not isinstance(character, int):
-                return None
-            _, static_name, runtime_name, _ = symbol_at_position(text or record.source, line, character)
-            name = static_name or runtime_name
-            if name is None:
+        with server.tracer.span("request", method="sage/getDocumentation", uri=uri):
+            record, text = _record_for_uri(server, uri)
+            if record is None:
                 return None
 
-        documentation = _documentation_for_request(server, record, name, runtime_name or name, uri=uri)
-        return documentation.to_payload() if documentation is not None else None
+            name = params.get("symbol")
+            runtime_name: Optional[str] = name if isinstance(name, str) else None
+            if not isinstance(name, str):
+                position = params.get("position")
+                if not isinstance(position, dict):
+                    return None
+                line = position.get("line")
+                character = position.get("character")
+                if not isinstance(line, int) or not isinstance(character, int):
+                    return None
+                _, static_name, runtime_name, _ = symbol_at_position(text or record.source, line, character)
+                name = static_name or runtime_name
+                if name is None:
+                    return None
+
+            documentation = _documentation_for_request(server, record, name, runtime_name or name, uri=uri)
+            return documentation.to_payload() if documentation is not None else None
+
+    @server.feature("sage/__debug/indexStatus")
+    def on_debug_index_status(params: Dict[str, Any]) -> dict[str, object]:
+        del params
+        return _index_status(server)
 
     return server
 
 
 def _rebuild_index(server: SageLanguageServer) -> None:
-    source_roots = [coerce_path(entry) for entry in server.environment.workspace.source_roots if entry]
-    source_roots.extend(coerce_path(entry) for entry in server.environment.analysis.extra_paths if entry)
-    deduped_roots = list(dict.fromkeys(root.resolve() for root in source_roots))
-    deferred_roots = [root for root in deduped_roots if _should_defer_root_scan(root)]
-    eager_roots = [root for root in deduped_roots if not _should_defer_root_scan(root)]
-    server.index_generation += 1
-    server.runtime_introspector = RuntimeIntrospector.from_environment(server.environment)
+    with server.tracer.span("index.rebuild", generation=server.index_generation + 1):
+        source_roots = [coerce_path(entry) for entry in server.environment.workspace.source_roots if entry]
+        source_roots.extend(coerce_path(entry) for entry in server.environment.analysis.extra_paths if entry)
+        deduped_roots = list(dict.fromkeys(root.resolve() for root in source_roots))
+        deferred_roots = [root for root in deduped_roots if _should_defer_root_scan(root)]
+        eager_roots = [root for root in deduped_roots if not _should_defer_root_scan(root)]
+        server.index_generation += 1
+        server.runtime_introspector = RuntimeIntrospector.from_environment(server.environment)
 
-    workspace_index = WorkspaceIndex(
-        source_roots=deduped_roots,
-        excluded_globs=server.environment.workspace.excluded_globs,
-        enable_pyx=server.environment.analysis.enable_pyx_parsing,
-    )
-    hydrated = workspace_index.hydrate_from_cache()
-    if eager_roots:
-        workspace_index.load_roots(
-            eager_roots,
-            mark_fully_indexed=hydrated or not deferred_roots,
-            persist_snapshot=not deferred_roots,
+        workspace_index = WorkspaceIndex(
+            source_roots=deduped_roots,
+            excluded_globs=server.environment.workspace.excluded_globs,
+            enable_pyx=server.environment.analysis.enable_pyx_parsing,
         )
-    workspace_index.load_bootstrap_modules(("sage.all_cmdline", "sage.all"))
-    server.workspace_index = workspace_index
-    _clear_all_request_caches(server)
+        hydrated = workspace_index.hydrate_from_cache()
+        server.tracer.debug(
+            "index.cache",
+            result="hit" if hydrated else "miss",
+            source_roots=len(deduped_roots),
+            eager_roots=len(eager_roots),
+            deferred_roots=len(deferred_roots),
+        )
+        if eager_roots:
+            workspace_index.load_roots(
+                eager_roots,
+                mark_fully_indexed=hydrated or not deferred_roots,
+                persist_snapshot=not deferred_roots,
+            )
+        workspace_index.load_bootstrap_modules(("sage.all_cmdline", "sage.all"))
+        server.workspace_index = workspace_index
+        _clear_all_request_caches(server)
+
+
+def _index_status(server: SageLanguageServer) -> dict[str, object]:
+    status = (
+        server.workspace_index.debug_status()
+        if server.workspace_index is not None
+        else {}
+    )
+    return {
+        "generation": server.index_generation,
+        "loggingLevel": server.environment.logging.level,
+        "runtimeIntrospectionEnabled": server.environment.analysis.enable_runtime_introspection,
+        "runtimeIntrospectionAvailable": bool(getattr(server.runtime_introspector, "_enabled", False)),
+        **status,
+    }
 
 
 def _should_defer_root_scan(root: Path) -> bool:
@@ -757,7 +804,9 @@ def _definition_for_request(
 ) -> Optional[Location]:
     cache_key = _request_cache_key(uri, name, runtime_name)
     if cache_key is not None and cache_key in server.definition_cache:
+        server.tracer.debug("cache", cache="definition", result="hit", uri=uri, symbol=name)
         return server.definition_cache[cache_key]
+    server.tracer.debug("cache", cache="definition", result="miss", uri=uri, symbol=name)
 
     symbol = (
         server.workspace_index.resolve_symbol(record, name)
@@ -772,10 +821,19 @@ def _definition_for_request(
 
     runtime_symbol = server.runtime_introspector.lookup(runtime_name or name)
     if runtime_symbol is None or runtime_symbol.file_path is None:
+        server.tracer.debug(
+            "fallback",
+            kind="definition",
+            result="miss",
+            reason="runtime-unavailable-or-no-file",
+            uri=uri,
+            symbol=runtime_name or name,
+        )
         if cache_key is not None:
             server.definition_cache[cache_key] = None
         return None
 
+    server.tracer.debug("fallback", kind="definition", result="hit", uri=uri, symbol=runtime_name or name)
     result = _location_from_runtime_symbol(runtime_symbol)
     if cache_key is not None:
         server.definition_cache[cache_key] = result
@@ -791,7 +849,9 @@ def _documentation_for_request(
 ) -> Optional[DocumentationResult]:
     cache_key = _request_cache_key(uri, name, runtime_name)
     if cache_key is not None and cache_key in server.documentation_cache:
+        server.tracer.debug("cache", cache="documentation", result="hit", uri=uri, symbol=name)
         return server.documentation_cache[cache_key]
+    server.tracer.debug("cache", cache="documentation", result="miss", uri=uri, symbol=name)
 
     documentation = (
         server.workspace_index.documentation_for_symbol(record, name)
@@ -801,7 +861,16 @@ def _documentation_for_request(
     runtime_symbol = server.runtime_introspector.lookup(runtime_name or name)
     if documentation is None:
         if runtime_symbol is None:
+            server.tracer.debug(
+                "fallback",
+                kind="documentation",
+                result="miss",
+                reason="runtime-unavailable",
+                uri=uri,
+                symbol=runtime_name or name,
+            )
             return None
+        server.tracer.debug("fallback", kind="documentation", result="hit", uri=uri, symbol=runtime_name or name)
         result = _documentation_from_runtime_symbol(runtime_symbol)
         if cache_key is not None:
             server.documentation_cache[cache_key] = result
@@ -1090,6 +1159,22 @@ def _as_completion_item(item: CompletionItem | dict[str, object]) -> CompletionI
         kind=int(item["kind"]) if "kind" in item and item["kind"] is not None else None,
         detail=str(item["detail"]) if "detail" in item and item["detail"] is not None else None,
     )
+
+
+def _merged_completion_items(
+    *groups: list[dict[str, object]],
+) -> list[CompletionItem]:
+    merged: list[CompletionItem] = []
+    seen: set[str] = set()
+    for group in groups:
+        for item in group:
+            completion = _as_completion_item(item)
+            label = completion.label if isinstance(completion.label, str) else str(completion.label)
+            if label in seen:
+                continue
+            seen.add(label)
+            merged.append(completion)
+    return merged[:100]
 
 
 def _resolve_request_symbol(

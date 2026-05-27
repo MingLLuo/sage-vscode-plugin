@@ -13,6 +13,9 @@ limit_result = limit((1 + 1 / t)^t, t=oo)
 partitions_of_five = Partitions(5)
 partition_cardinality = partitions_of_five.cardinality()
 
+combinations_demo = Combinations([1, 2, 3, 4], 2)
+combination_count = combinations_demo.cardinality()
+
 permutation_group = SymmetricGroup(4)
 permutation_generators = permutation_group.gens()
 
@@ -26,6 +29,7 @@ advanced_symbolic_targets = [
     series_result,
     limit_result,
     partition_cardinality,
+    combination_count,
     permutation_generators,
     field_norm,
 ]

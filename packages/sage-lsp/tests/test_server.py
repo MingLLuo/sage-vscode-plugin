@@ -74,6 +74,55 @@ def test_server_imports_and_initializes_with_capabilities() -> None:
     assert server.workspace_index is not None
     assert "sage.all" in server.workspace_index.modules
     assert "workspace/didChangeConfiguration" in server.protocol.fm.features
+    assert "sage/__debug/indexStatus" in server.protocol.fm.features
+
+
+def test_server_debug_index_status_reports_traceable_index_state() -> None:
+    server = _initialized_server()
+
+    debug_handler = server.protocol.fm.features["sage/__debug/indexStatus"]
+    status = debug_handler({})
+
+    assert status["generation"] == 1
+    assert status["moduleCount"] >= 2
+    assert status["sourceRoots"] == [str(FIXTURE_ROOT)]
+    assert "loadedRoots" in status
+    assert "deferredRoots" in status
+    assert "summaryCacheComplete" in status
+
+
+def test_server_debug_trace_does_not_change_hover_response() -> None:
+    server = _initialized_server_with_options(
+        {
+            "workspace": {"sourceRoots": [str(FIXTURE_ROOT)]},
+            "analysis": {"enablePyxParsing": True},
+            "logging": {"level": "debug"},
+        }
+    )
+    uri = Path("/workspace/example.sage").as_uri()
+    source = "sqrt(4)\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    hover_handler = server.protocol.fm.features["textDocument/hover"]
+    hover = hover_handler(
+        HoverParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=0, character=2),
+        )
+    )
+
+    assert hover is not None
+    assert "Return the principal square root." in hover.contents.value
+    assert any(
+        event.fields.get("method") == "textDocument/hover"
+        for event in server.tracer.recent_events
+    )
+    assert any(
+        event.message == "cache" and event.fields.get("cache") == "documentation"
+        for event in server.tracer.recent_events
+    )
 
 
 def test_server_prefers_cached_snapshot_before_full_rebuild(tmp_path: Path, monkeypatch) -> None:
@@ -297,6 +346,26 @@ def test_server_handlers_resolve_hover_definition_completion_and_documentation()
     )
     assert signature_help is not None
     assert signature_help.signatures[0].label == "sqrt(x)"
+
+
+def test_server_completion_merges_jedi_local_python_context() -> None:
+    server = _initialized_server()
+    uri = Path("/workspace/jedi_local.sage").as_uri()
+    source = "def helper():\n    local_value = 1\n    loc\n"
+    server.workspace.put_text_document(
+        TextDocumentItem(uri=uri, language_id="sagemath", version=1, text=source)
+    )
+
+    completion_handler = server.protocol.fm.features["textDocument/completion"]
+    completion = completion_handler(
+        CompletionParams(
+            text_document=TextDocumentIdentifier(uri=uri),
+            position=Position(line=2, character=7),
+        )
+    )
+    labels = {item["label"] if isinstance(item, dict) else item.label for item in completion.items}
+
+    assert "local_value" in labels
 
 
 def test_server_document_symbols_track_open_document_contents() -> None:

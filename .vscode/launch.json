@@ -2,13 +2,16 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Sage Plugin: Extension Host",
+      "name": "Sage Plugin: Internship Workspace",
       "type": "extensionHost",
       "request": "launch",
       "runtimeExecutable": "${execPath}",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}/packages/extension-core",
-        "${workspaceFolder}"
+        "--skip-release-notes",
+        "--skip-welcome",
+        "--disable-workspace-trust",
+        "/workspace/example-workspace"
       ],
       "outFiles": [
         "${workspaceFolder}/packages/extension-core/out/**/*.js"
@@ -22,7 +25,27 @@
       "runtimeExecutable": "${execPath}",
       "args": [
         "--extensionDevelopmentPath=${workspaceFolder}/packages/extension-core",
+        "--skip-release-notes",
+        "--skip-welcome",
+        "--disable-workspace-trust",
         "${workspaceFolder}/examples/manual-smoke-workspace"
+      ],
+      "outFiles": [
+        "${workspaceFolder}/packages/extension-core/out/**/*.js"
+      ],
+      "preLaunchTask": "build"
+    },
+    {
+      "name": "Sage Plugin: Extension Host",
+      "type": "extensionHost",
+      "request": "launch",
+      "runtimeExecutable": "${execPath}",
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}/packages/extension-core",
+        "--skip-release-notes",
+        "--skip-welcome",
+        "--disable-workspace-trust",
+        "${workspaceFolder}"
       ],
       "outFiles": [
         "${workspaceFolder}/packages/extension-core/out/**/*.js"

@@ -1,29 +1,86 @@
 {
-  "name": "@sage-vscode/extension-core",
+  "name": "sage-vscode-extension",
   "displayName": "Sage VS Code Plugin",
   "description": "High-customizability SageMath tooling for Visual Studio Code.",
   "version": "0.1.0",
-  "private": true,
   "publisher": "sage-vscode",
   "license": "MIT",
+  "icon": "resources/branding/icon.png",
+  "galleryBanner": {
+    "color": "#0b3438",
+    "theme": "dark"
+  },
+  "preview": true,
+  "qna": false,
+  "extensionKind": [
+    "workspace"
+  ],
   "engines": {
     "vscode": "^1.97.0"
   },
   "categories": [
     "Programming Languages",
-    "Linters",
-    "Notebooks"
+    "Linters"
   ],
+  "keywords": [
+    "sage",
+    "sagemath",
+    "mathematics",
+    "language-server",
+    "lsp",
+    "cython"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Sage syntax remains available, but the language server, indexing, documentation workers, REPL, and run commands require workspace trust because they start local processes and can execute workspace code.",
+      "restrictedConfigurations": [
+        "sage.interpreter.path",
+        "sage.interpreter.args",
+        "sage.languageServer.pythonPath",
+        "sage.languageServer.rustPath",
+        "sage.languageServer.pythonArgs",
+        "sage.analysis.extraPaths",
+        "sage.analysis.sourceRoots",
+        "sage.analysis.enableRuntimeIntrospection",
+        "sage.analysis.enablePyxParsing",
+        "sage.analysis.enablePythonFiles",
+        "sage.run.target",
+        "sage.run.cleanupGeneratedPython"
+      ]
+    },
+    "virtualWorkspaces": {
+      "supported": "limited",
+      "description": "Sage syntax remains available in virtual workspaces; the language server, indexing, documentation workers, REPL, and run commands require a local file workspace."
+    }
+  },
   "activationEvents": [
+    "onStartupFinished",
     "onLanguage:sagemath",
     "onLanguage:sagemath-cython",
+    "onLanguage:python",
+    "workspaceContains:**/*.sage",
+    "workspaceContains:**/*.sage.py",
+    "workspaceContains:**/*sage*.py",
+    "workspaceContains:**/*.pyx",
+    "workspaceContains:**/*.pxd",
+    "workspaceContains:**/*.pxi",
+    "onCommand:sage.openGettingStarted",
     "onCommand:sage.selectInterpreter",
+    "onCommand:sage.configureWorkspace",
     "onCommand:sage.restartLanguageServer",
     "onCommand:sage.runCurrentFile",
     "onCommand:sage.runSelection",
+    "onCommand:sage.runCurrentCell",
     "onCommand:sage.startRepl",
     "onCommand:sage.showDocumentation",
-    "onCommand:sage.showEnvironmentDetails"
+    "onCommand:sage.findReferences",
+    "onCommand:sage.showEnvironmentDetails",
+    "onCommand:sage.showIndexStatus",
+    "onCommand:sage.showDocsStatus",
+    "onCommand:sage.copySupportBundle",
+    "onCommand:sage.runUxSelfCheck",
+    "onCommand:sage.rebuildIndex"
   ],
   "main": "./out/src/extension.js",
   "scripts": {
@@ -31,7 +88,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "package": "npm run build",
     "test": "npm run build && node --test out/test/**/*.test.js",
-    "test:extension-host": "npm run build && node ./out/test-host/runTest.js",
+    "test:extension-host": "cargo build -p sage-ls && npm run build && node ./out/test-host/runTest.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
@@ -65,7 +122,8 @@
         "extensions": [
           ".pyx",
           ".pxd",
-          ".pxi"
+          ".pxi",
+          ".spyx"
         ],
         "configuration": "./resources/generated/syntax/language-configuration.json"
       }
@@ -94,34 +152,226 @@
     ],
     "commands": [
       {
+        "command": "sage.openGettingStarted",
+        "title": "Open Getting Started",
+        "category": "Sage",
+        "icon": "$(rocket)"
+      },
+      {
         "command": "sage.selectInterpreter",
-        "title": "Sage: Select Interpreter"
+        "title": "Select Interpreter",
+        "category": "Sage",
+        "icon": "$(gear)"
+      },
+      {
+        "command": "sage.configureWorkspace",
+        "title": "Configure Workspace",
+        "category": "Sage",
+        "icon": "$(tools)"
       },
       {
         "command": "sage.restartLanguageServer",
-        "title": "Sage: Restart Language Server"
+        "title": "Restart Language Server",
+        "category": "Sage",
+        "icon": "$(debug-restart)"
       },
       {
         "command": "sage.runCurrentFile",
-        "title": "Sage: Run Current File"
+        "title": "Run Current File",
+        "category": "Sage",
+        "icon": "$(play)",
+        "enablement": "sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles)) && resourceScheme == file"
       },
       {
         "command": "sage.runSelection",
-        "title": "Sage: Run Selection"
+        "title": "Run Selection",
+        "category": "Sage",
+        "icon": "$(selection)",
+        "enablement": "sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles))"
+      },
+      {
+        "command": "sage.runCurrentCell",
+        "title": "Run Current Cell",
+        "category": "Sage",
+        "icon": "$(run)",
+        "enablement": "sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles))"
       },
       {
         "command": "sage.startRepl",
-        "title": "Sage: Start REPL"
+        "title": "Start REPL",
+        "category": "Sage",
+        "icon": "$(terminal)"
       },
       {
         "command": "sage.showDocumentation",
-        "title": "Sage: Show Documentation"
+        "title": "Show Documentation",
+        "category": "Sage",
+        "icon": "$(book)",
+        "enablement": "sage.workspaceRuntimeAvailable"
+      },
+      {
+        "command": "sage.findReferences",
+        "title": "Find References",
+        "category": "Sage",
+        "icon": "$(references)",
+        "enablement": "sage.workspaceRuntimeAvailable"
       },
       {
         "command": "sage.showEnvironmentDetails",
-        "title": "Sage: Show Environment Details"
+        "title": "Show Environment Details",
+        "category": "Sage",
+        "icon": "$(info)"
+      },
+      {
+        "command": "sage.showIndexStatus",
+        "title": "Show Index Status",
+        "category": "Sage",
+        "icon": "$(database)"
+      },
+      {
+        "command": "sage.showDocsStatus",
+        "title": "Show Docs Status",
+        "category": "Sage",
+        "icon": "$(book)"
+      },
+      {
+        "command": "sage.copySupportBundle",
+        "title": "Copy Support Bundle",
+        "category": "Sage",
+        "icon": "$(clippy)"
+      },
+      {
+        "command": "sage.runUxSelfCheck",
+        "title": "Run UX Self Check",
+        "category": "Sage",
+        "icon": "$(checklist)",
+        "enablement": "sage.workspaceRuntimeAvailable"
+      },
+      {
+        "command": "sage.rebuildIndex",
+        "title": "Rebuild Index",
+        "category": "Sage",
+        "icon": "$(refresh)"
       }
     ],
+    "walkthroughs": [
+      {
+        "id": "gettingStarted",
+        "title": "Get Started with Sage",
+        "description": "Configure a Sage runtime, choose a workspace profile, and verify language features.",
+        "steps": [
+          {
+            "id": "selectInterpreter",
+            "title": "Select a Sage Runtime",
+            "description": "Choose the Sage executable used for runs, REPL sessions, runtime-backed documentation, and source-root discovery.",
+            "media": {
+              "markdown": "./resources/walkthrough/select-interpreter.md"
+            },
+            "completionEvents": [
+              "onCommand:sage.selectInterpreter"
+            ]
+          },
+          {
+            "id": "configureWorkspace",
+            "title": "Configure This Workspace",
+            "description": "Apply a conservative Sage profile for `.sage`, Sage-heavy Python, native Cython, or research workspaces.",
+            "media": {
+              "markdown": "./resources/walkthrough/configure-workspace.md"
+            },
+            "completionEvents": [
+              "onCommand:sage.configureWorkspace"
+            ]
+          },
+          {
+            "id": "inspectIndex",
+            "title": "Inspect Index and Docs Status",
+            "description": "Confirm source roots, cache hydration, background indexing, and runtime documentation state.",
+            "media": {
+              "markdown": "./resources/walkthrough/inspect-status.md"
+            },
+            "completionEvents": [
+              "onCommand:sage.showEnvironmentDetails",
+              "onCommand:sage.showIndexStatus",
+              "onCommand:sage.showDocsStatus",
+              "onCommand:sage.copySupportBundle"
+            ]
+          },
+          {
+            "id": "validateEditLoop",
+            "title": "Validate the Edit Loop",
+            "description": "Run the UX self-check from a Sage symbol to verify hover, docs, navigation, references, rename preview, signature help, and diagnostics.",
+            "media": {
+              "markdown": "./resources/walkthrough/validate-edit-loop.md"
+            },
+            "completionEvents": [
+              "onCommand:sage.runUxSelfCheck"
+            ]
+          }
+        ]
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "sage.runCurrentFile",
+          "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || (resourceLangId == python && config.sage.analysis.enablePythonFiles)) && resourceScheme == file",
+          "group": "navigation@10"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "sage.runSelection",
+          "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || (resourceLangId == python && config.sage.analysis.enablePythonFiles))",
+          "group": "1_run@10"
+        },
+        {
+          "command": "sage.runCurrentCell",
+          "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || (resourceLangId == python && config.sage.analysis.enablePythonFiles))",
+          "group": "1_run@20"
+        },
+        {
+          "command": "sage.showDocumentation",
+          "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || resourceLangId == sagemath-cython || (resourceLangId == python && config.sage.analysis.enablePythonFiles))",
+          "group": "2_sage@10"
+        },
+        {
+          "command": "sage.findReferences",
+          "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || resourceLangId == sagemath-cython || (resourceLangId == python && config.sage.analysis.enablePythonFiles))",
+          "group": "2_sage@15"
+        },
+        {
+          "command": "sage.runUxSelfCheck",
+          "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || resourceLangId == sagemath-cython || (resourceLangId == python && config.sage.analysis.enablePythonFiles))",
+          "group": "2_sage@20"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "sage.runCurrentFile",
+          "when": "sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles)) && resourceScheme == file"
+        },
+        {
+          "command": "sage.runSelection",
+          "when": "sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles))"
+        },
+        {
+          "command": "sage.runCurrentCell",
+          "when": "sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles))"
+        },
+        {
+          "command": "sage.showDocumentation",
+          "when": "sage.workspaceRuntimeAvailable"
+        },
+        {
+          "command": "sage.findReferences",
+          "when": "sage.workspaceRuntimeAvailable"
+        },
+        {
+          "command": "sage.runUxSelfCheck",
+          "when": "sage.workspaceRuntimeAvailable"
+        }
+      ]
+    },
     "configuration": {
       "title": "Sage",
       "properties": {
@@ -144,7 +394,13 @@
           "type": "string",
           "default": "auto",
           "scope": "resource",
-          "markdownDescription": "Python executable used to run the language server. Use `auto` to prefer the selected interpreter when it is already a Python executable, otherwise fall back to the active Python environment."
+          "markdownDescription": "Legacy Python language-server runtime path retained for compatibility with old workspaces. Sage V2 uses `sage.languageServer.rustPath`."
+        },
+        "sage.languageServer.rustPath": {
+          "type": "string",
+          "default": "auto",
+          "scope": "resource",
+          "markdownDescription": "Path to the Rust `sage-ls` language server. Use `auto` to prefer the repository-local `target/debug/sage-ls` during local development."
         },
         "sage.languageServer.pythonArgs": {
           "type": "array",
@@ -202,6 +458,12 @@
           "scope": "resource",
           "markdownDescription": "Enable lightweight parsing for `.pyx` files during source indexing."
         },
+        "sage.analysis.enablePythonFiles": {
+          "type": "boolean",
+          "default": false,
+          "scope": "resource",
+          "markdownDescription": "Attach the Sage language server to ordinary `.py` files while preserving the Python language mode. Keep disabled for general Python workspaces; enable it for Sage-heavy Python projects that import from `sage.all`."
+        },
         "sage.indexing.exclude": {
           "type": "array",
           "default": [
@@ -255,6 +517,12 @@
             "repl"
           ],
           "markdownDescription": "Default execution target for Sage run commands."
+        },
+        "sage.run.showCellCodeLens": {
+          "type": "boolean",
+          "default": true,
+          "scope": "resource",
+          "markdownDescription": "Show inline CodeLens actions for runnable `# %%` and `# region` Sage cells."
         },
         "sage.run.cleanupGeneratedPython": {
           "type": "boolean",

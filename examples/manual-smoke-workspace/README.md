@@ -15,13 +15,29 @@ plugin baseline without depending on a full Sage source checkout.
 - Static lazy-import resolution in `.sage` files
 - Native-component highlighting for Cython keywords, includes, and typed declarations
 - Runtime-backed docs and definition fallback for Sage library APIs exposed through dotted access and heavier algebraic objects
+- Synthetic Sage-heavy Python patterns for `sage.all` constructors, matrix methods, polynomial ring/ideal methods, and
+  wrong-jump suppression on ambiguous dotted calls
 
 ## Recommended Flow
 
-1. Start the extension host with `F5`.
-2. Choose `Sage Plugin: Smoke Workspace`.
-3. In the new window, run `Sage: Select Interpreter` and point it at your Sage executable.
-4. Open the files below and follow the checklist.
+1. Open the repository root in VS Code.
+2. Press `F5`. `Sage Plugin: Smoke Workspace` is the default launch target.
+3. In the new `[Extension Development Host]` window, open `src/01_hover_and_definition.sage`.
+4. Confirm the status bar language mode is `SageMath` and the left status bar contains `Sage: ...`.
+5. If the extension host opens empty, use `Open Folder` inside that host and select this `manual-smoke-workspace`
+   folder.
+6. If `.sage` shows `Plain Text` or the command palette has no Sage commands, you opened a normal VS Code window; close
+   it and relaunch from the repository with `F5`.
+7. Run `Sage: Select Interpreter` when you want to point run commands and runtime-backed docs at a specific Sage
+   executable.
+8. Keep `sage.languageServer.rustPath = auto` unless you want to test a specific `sage-ls` binary.
+9. Run `Sage: Show Index Status`, `Sage: Show Docs Status`, or `Sage: Run UX Self Check` from any sample file when you
+   need a quick health report before deeper manual inspection.
+10. Open the files below and follow the checklist.
+
+For browser/MCP inspection, run `npm run debug:web` from the repository root and open the printed localhost URL. The
+workbench renders this same workspace with TextMate scopes, Rust semantic tokens, diagnostics, symbols, index/docs
+status, and a UX matrix for common Sage targets.
 
 ## Smoke Checklist
 
@@ -88,7 +104,7 @@ Open `src/06_runtime_graphs_and_number_theory.sage`.
 
 Open `src/07_symbolic_and_combinatorics.sage`.
 
-- Hover and use definition on `integrate`, `Partitions`, `SymmetricGroup`, and `NumberField`.
+- Hover and use definition on `integrate`, `Partitions`, `Combinations`, `SymmetricGroup`, and `NumberField`.
 - Confirm symbolic expressions using `^`, `oo`, and named generators still execute under `Sage: Run Current File`.
 - Check document symbols for `Q`, `z`, `cyclotomic_field`, and `advanced_symbolic_targets`.
 
@@ -98,10 +114,38 @@ Open `src/08_highlighting_structures.sage`.
 
 - Confirm `toric_varieties`, `ChowGroup`, `PolynomialRing`, `NumberField`, `FreeModule`, and `FilteredSimplicialComplex`
   now land in distinct visual scopes instead of collapsing into one generic support color.
+- Confirm keyword arguments such as `color=`, `legend_label=`, and `default=` are visually distinct from ordinary
+  assignment targets.
+- Confirm method calls such as `.ambient_space()` and `.hilbert_data()` stand out from variables, while dotted namespaces
+  such as `codes.HammingCode(...)` still keep the namespace readable.
 - Confirm `@cached_method`, `lazy_import`-style helpers, and factory-style names look different from ordinary function
   calls when your theme supports the richer scopes.
 - Verify the preparse assignment `R.<u, v>` still highlights the parent name, generators, and assignment operator
   separately.
+- Verify `@interact` controls and Sage ranges such as `[1..5]` are highlighted as Sage-specific syntax.
+
+### 10 Advanced Sage Patterns
+
+Open `src/09_advanced_sage_patterns.sage`.
+
+- Confirm nested `PolynomialRing`, `NumberField`, `GF`, `FunctionField`, `ProjectiveSpace`, and `codes.HammingCode`
+  code remains readable with distinct constructors, namespaces, and keyword arguments.
+- Confirm method chains such as `.groebner_basis()`, `.right_kernel().dimension()`, and `.derivative(...)`
+  stand out from variables.
+- Confirm Sage ranges, list/dict comprehensions, lambda matrix builders, keyword-only function parameters, and
+  cached functions do not collapse into a flat Python-like color treatment.
+
+### 11 Sage-Heavy Python Patterns
+
+Open `src/10_sage_heavy_python.py`.
+
+- Hover and use definition on `PolynomialRing`, `GF`, `matrix`, `vector`, and `zero_matrix`; they should resolve through
+  `sage.all` to the real Sage source modules.
+- Use definition on `mat.rank()`, `amat.solve_right(...)`, `ring.ideal(...)`, `ideal.variety(...)`,
+  `eqs[i].derivative(...)`, `pivot.resultant(...)`, and `gcd_poly.gcd(...)`.
+- Confirm method resolution shows a high-confidence Sage owner type in the debug workbench for matrix, polynomial ring,
+  polynomial element, and ideal calls.
+- Confirm low-confidence or unsupported dotted methods do not jump to unrelated global functions.
 
 ## Layout
 

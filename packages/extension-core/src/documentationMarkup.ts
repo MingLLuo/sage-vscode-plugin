@@ -6,11 +6,13 @@ function escapeHtml(value: string): string {
 }
 
 function renderInline(value: string): string {
-  return escapeHtml(value).replace(/`([^`]+)`/g, "<code>$1</code>");
+  return escapeHtml(value)
+    .replace(/``([^`]+)``/g, "<code>$1</code>")
+    .replace(/`([^`]+)`/g, "<code>$1</code>");
 }
 
 export function renderDocumentationHtml(markdown: string): string {
-  const blocks = markdown.split(/\n{2,}/).map((block) => block.trim()).filter(Boolean);
+  const blocks = splitMarkdownBlocks(markdown);
   const htmlBlocks = blocks.map((block) => {
     if (block.startsWith("# ")) {
       return `<h1>${renderInline(block.slice(2).trim())}</h1>`;
@@ -25,6 +27,14 @@ export function renderDocumentationHtml(markdown: string): string {
         .map(renderInline)
         .join("<br />");
       return `<blockquote>${body}</blockquote>`;
+    }
+    if (block.startsWith("```")) {
+      const lines = block.split("\n");
+      const firstLine = lines[0] ?? "";
+      const language = firstLine.replace(/^```/, "").trim();
+      const bodyLines = lines.at(-1)?.trim() === "```" ? lines.slice(1, -1) : lines.slice(1);
+      const languageClass = language ? ` class="language-${escapeHtml(language)}"` : "";
+      return `<pre><code${languageClass}>${escapeHtml(bodyLines.join("\n"))}</code></pre>`;
     }
     const lines = block.split("\n");
     if (lines.every((line) => line.startsWith("- "))) {
@@ -55,7 +65,7 @@ export function renderDocumentationHtml(markdown: string): string {
         margin: 0 0 12px 0;
       }
 
-      p, ul, blockquote {
+      p, ul, blockquote, pre {
         margin: 0 0 16px 0;
       }
 
@@ -64,6 +74,22 @@ export function renderDocumentationHtml(markdown: string): string {
         background: rgba(127, 127, 127, 0.12);
         padding: 2px 6px;
         border-radius: 6px;
+      }
+
+      pre {
+        overflow: auto;
+        background: rgba(127, 127, 127, 0.12);
+        border: 1px solid rgba(127, 127, 127, 0.18);
+        border-radius: 6px;
+        padding: 12px;
+      }
+
+      pre code {
+        display: block;
+        background: transparent;
+        padding: 0;
+        border-radius: 0;
+        white-space: pre;
       }
 
       blockquote {
@@ -77,4 +103,47 @@ export function renderDocumentationHtml(markdown: string): string {
     ${htmlBlocks.join("\n")}
   </body>
 </html>`;
+}
+
+function splitMarkdownBlocks(markdown: string): string[] {
+  const blocks: string[] = [];
+  const current: string[] = [];
+  let inFence = false;
+
+  const flush = () => {
+    if (current.length === 0) {
+      return;
+    }
+    const block = current.join("\n").trim();
+    if (block) {
+      blocks.push(block);
+    }
+    current.length = 0;
+  };
+
+  for (const line of markdown.split(/\r?\n/)) {
+    const isFence = line.trimStart().startsWith("```");
+    if (isFence) {
+      current.push(line);
+      inFence = !inFence;
+      if (!inFence) {
+        flush();
+      }
+      continue;
+    }
+
+    if (inFence) {
+      current.push(line);
+      continue;
+    }
+
+    if (line.trim() === "") {
+      flush();
+      continue;
+    }
+    current.push(line);
+  }
+
+  flush();
+  return blocks;
 }

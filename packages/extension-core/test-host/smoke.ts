@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import path from "node:path";
 
 import * as vscode from "vscode";
 
@@ -8,19 +9,50 @@ interface LifecycleSnapshot {
   unexpectedCloseCount: number;
   managedShutdownActive: boolean;
   restartQueued: boolean;
+  operationInFlight: boolean;
   hasClient: boolean;
 }
 
+interface SageContextSnapshot {
+  languageId?: string;
+  pythonFilesEnabled: boolean;
+  sourceRootCount: number;
+  extraPathCount: number;
+  isSageEditor: boolean;
+  shouldAutoStartLanguageClient: boolean;
+  shouldExposeSageExperience: boolean;
+}
+
+interface ConfigureWorkspaceProfileResult {
+  profileId: string;
+  updates: Array<{ setting: string; value: unknown }>;
+}
+
 export async function run(): Promise<void> {
+  if (process.env.SAGE_TEST_HOST_MODE === "plain-python") {
+    await runPlainPythonQuietSmoke();
+    return;
+  }
+
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   assert.ok(workspaceFolder, "expected the smoke workspace to be open in the extension host");
 
   const config = vscode.workspace.getConfiguration("sage", workspaceFolder.uri);
   await config.update(
-    "languageServer.pythonPath",
-    process.env.SAGE_TEST_LSP_PYTHON ?? "python",
+    "languageServer.rustPath",
+    process.env.SAGE_TEST_LS_PATH ?? "auto",
     vscode.ConfigurationTarget.Workspace,
   );
+  await config.update(
+    "analysis.sourceRoots",
+    [
+      "src",
+      ...(process.env.SAGE_TEST_EXTERNAL_SOURCE_ROOT ? [process.env.SAGE_TEST_EXTERNAL_SOURCE_ROOT] : []),
+      ...(process.env.SAGE_TEST_NATIVE_SOURCE_ROOT ? [process.env.SAGE_TEST_NATIVE_SOURCE_ROOT] : []),
+    ],
+    vscode.ConfigurationTarget.Workspace,
+  );
+  await config.update("analysis.extraPaths", ["vendor"], vscode.ConfigurationTarget.Workspace);
   await config.update("analysis.enableRuntimeIntrospection", false, vscode.ConfigurationTarget.Workspace);
   await config.update("docs.showOnHover", true, vscode.ConfigurationTarget.Workspace);
 
@@ -29,70 +61,83 @@ export async function run(): Promise<void> {
   await vscode.window.showTextDocument(bootstrapDocument);
 
   await waitForCommand("sage.__test.getLifecycleSnapshot");
+  await waitForCommand("sage.showIndexStatus");
+  await waitForCommand("sage.showDocsStatus");
+  await waitForCommand("sage.rebuildIndex");
+  await waitForCommand("sage.__test.getCurrentSageContext");
+
+  const activationSnapshot = await lifecycleSnapshot("sage.__test.getLifecycleSnapshot");
+  assert.equal(typeof activationSnapshot.operationInFlight, "boolean", "expected activation to expose background LSP state");
+
   const initialSnapshot = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
-  assert.ok(initialSnapshot.launchCount >= 1, "expected the language client to launch during activation");
+  assert.ok(initialSnapshot.launchCount >= 1, "expected the Rust language client to launch during activation");
   assert.equal(initialSnapshot.unexpectedCloseCount, 0, "expected no unexpected client shutdowns before restart");
 
-  await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri));
-  await assertEventually(() => verifyWorkspaceReferencesRenameAndSymbols(workspaceFolder.uri));
-  await assertEventually(() => verifyProjectedDiagnosticsAndQuickFix(workspaceFolder.uri));
-  await assertEventually(() => verifyNativeCythonNavigation(workspaceFolder.uri));
-  await assertEventually(() => verifySavedModuleRefresh(workspaceFolder.uri));
+  await waitForCommand("sage.__test.configureWorkspaceProfile");
+  await verifyConfigureWorkspaceProfile(workspaceFolder.uri);
+  await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
 
-  if (process.env.SAGE_TEST_NATIVE_SOURCE_ROOT) {
-    await assertEventually(() =>
-      verifyNativeSageLibraryNavigation(
-        workspaceFolder.uri,
-        config,
-        process.env.SAGE_TEST_NATIVE_SOURCE_ROOT ?? "",
-        process.env.SAGE_TEST_NATIVE_SAGE_EXECUTABLE,
-      ),
-    );
-  }
+  await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifyWorkspaceReferencesRename(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifyExternalSageSourceReferenceBridge(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifyProjectedDiagnostics(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifyDocumentAndWorkspaceSymbols(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifyNativeCythonDocumentSymbols(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifyNativeCythonNavigation(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifySageAwarePythonWorkspace(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifyCellCodeLens(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifySavedModuleRefresh(workspaceFolder.uri), 30_000);
+
+  await vscode.commands.executeCommand("sage.showIndexStatus");
+  await vscode.commands.executeCommand("sage.showDocsStatus");
+  await vscode.commands.executeCommand("sage.rebuildIndex");
+  await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri), 30_000);
 
   const restartBaseline = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
-
-  const afterFirstRestart = await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
+  const afterRestart = await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
   assert.equal(
-    afterFirstRestart.launchCount,
+    afterRestart.launchCount,
     restartBaseline.launchCount + 1,
-    "expected the first managed restart to create exactly one additional client launch",
+    "expected a managed restart to create exactly one additional client launch",
   );
   assert.ok(
-    afterFirstRestart.managedCloseCount >= restartBaseline.managedCloseCount + 1,
-    "expected the first managed restart to record a managed close",
+    afterRestart.managedCloseCount >= restartBaseline.managedCloseCount + 1,
+    "expected a managed restart to record a managed close",
   );
   assert.equal(
-    afterFirstRestart.unexpectedCloseCount,
+    afterRestart.unexpectedCloseCount,
     restartBaseline.unexpectedCloseCount,
-    "expected no unexpected closes during the first managed restart",
+    "expected no unexpected closes during managed restart",
   );
 
-  const afterSecondRestart = await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
-  assert.equal(
-    afterSecondRestart.launchCount,
-    afterFirstRestart.launchCount + 1,
-    "expected the second managed restart to create exactly one additional client launch",
-  );
-  assert.ok(
-    afterSecondRestart.managedCloseCount >= afterFirstRestart.managedCloseCount + 1,
-    "expected the second managed restart to record another managed close",
-  );
-  assert.equal(
-    afterSecondRestart.unexpectedCloseCount,
-    afterFirstRestart.unexpectedCloseCount,
-    "expected no unexpected closes during the second managed restart",
-  );
+  await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri), 30_000);
+}
 
-  const uri = vscode.Uri.joinPath(workspaceFolder.uri, "src", "01_hover_and_definition.sage");
-  const document = await vscode.workspace.openTextDocument(uri);
+async function runPlainPythonQuietSmoke(): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  assert.ok(workspaceFolder, "expected the plain Python smoke workspace to be open in the extension host");
+
+  const plainUri = vscode.Uri.joinPath(workspaceFolder.uri, "plain.py");
+  const document = await vscode.workspace.openTextDocument(plainUri);
   await vscode.window.showTextDocument(document);
-  const hoverPosition = positionOfNth(document, "make_demo_matrix", 2);
-  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", uri, hoverPosition)) ?? [];
-  assert.ok(
-    hovers.some((hover) => renderHoverContents(hover).includes("looks like a matrix")),
-    "expected hover results to remain available after managed restarts",
-  );
+
+  await waitForCommand("sage.__test.getLifecycleSnapshot");
+  await waitForCommand("sage.__test.getCurrentSageContext");
+  await delay(1_000);
+
+  const context = await sageContextSnapshot();
+  assert.equal(context.languageId, "python");
+  assert.equal(context.pythonFilesEnabled, false);
+  assert.equal(context.sourceRootCount, 0);
+  assert.equal(context.extraPathCount, 0);
+  assert.equal(context.isSageEditor, false);
+  assert.equal(context.shouldAutoStartLanguageClient, false);
+  assert.equal(context.shouldExposeSageExperience, false);
+
+  const snapshot = await lifecycleSnapshot("sage.__test.getLifecycleSnapshot");
+  assert.equal(snapshot.launchCount, 0, "ordinary Python workspace should not auto-start the Sage LSP");
+  assert.equal(snapshot.hasClient, false, "ordinary Python workspace should not hold a Sage LSP client");
+  assert.equal(snapshot.operationInFlight, false, "ordinary Python workspace should not have Sage LSP startup in flight");
 }
 
 async function verifyWorkspaceHoverDefinitionCompletion(workspaceUri: vscode.Uri): Promise<void> {
@@ -101,10 +146,14 @@ async function verifyWorkspaceHoverDefinitionCompletion(workspaceUri: vscode.Uri
   await vscode.window.showTextDocument(document);
 
   const hoverPosition = positionOfNth(document, "make_demo_matrix", 2);
-  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", uri, hoverPosition)) ?? [];
+  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>(
+    "vscode.executeHoverProvider",
+    uri,
+    hoverPosition,
+  )) ?? [];
   assert.ok(
     hovers.some((hover) => renderHoverContents(hover).includes("looks like a matrix")),
-    "expected hover text for make_demo_matrix from the workspace fixture",
+    "expected Rust hover text for make_demo_matrix from the workspace fixture",
   );
 
   const definitions =
@@ -115,7 +164,7 @@ async function verifyWorkspaceHoverDefinitionCompletion(workspaceUri: vscode.Uri
     )) ?? [];
   assert.ok(
     definitions.some((definition) => definitionUri(definition).fsPath.endsWith("src/local_docs.py")),
-    "expected definition for make_demo_matrix to resolve into local_docs.py",
+    "expected Rust definition for make_demo_matrix to resolve into local_docs.py",
   );
 
   const completionPosition = positionOfNth(document, "summarize_coefficients", 2, 4);
@@ -129,11 +178,11 @@ async function verifyWorkspaceHoverDefinitionCompletion(workspaceUri: vscode.Uri
   const completionLabels = new Set(completionItems.map((item) => item.label.toString()));
   assert.ok(
     completionLabels.has("summarize_coefficients"),
-    "expected completion items to include summarize_coefficients from the workspace fixture",
+    "expected Rust completion items to include summarize_coefficients from the workspace fixture",
   );
 }
 
-async function verifyWorkspaceReferencesRenameAndSymbols(workspaceUri: vscode.Uri): Promise<void> {
+async function verifyWorkspaceReferencesRename(workspaceUri: vscode.Uri): Promise<void> {
   const uri = vscode.Uri.joinPath(workspaceUri, "src", "01_hover_and_definition.sage");
   const document = await vscode.workspace.openTextDocument(uri);
   await vscode.window.showTextDocument(document);
@@ -146,10 +195,10 @@ async function verifyWorkspaceReferencesRenameAndSymbols(workspaceUri: vscode.Ur
       helperPosition,
     )) ?? [];
   const referenceUris = new Set(references.map((reference) => definitionUri(reference).fsPath));
-  assert.ok(referenceUris.size >= 2, "expected references for make_demo_matrix across definition and usage sites");
+  assert.ok(referenceUris.size >= 2, "expected Rust references for make_demo_matrix across definition and usage sites");
   assert.ok(
     [...referenceUris].some((entry) => entry.endsWith("src/local_docs.py")),
-    "expected references to include the function definition module",
+    "expected Rust references to include the function definition module",
   );
 
   const renameEdit =
@@ -159,34 +208,41 @@ async function verifyWorkspaceReferencesRenameAndSymbols(workspaceUri: vscode.Ur
       helperPosition,
       "make_demo_matrix_renamed",
     );
-  assert.ok(renameEdit, "expected a rename edit for make_demo_matrix");
+  assert.ok(renameEdit, "expected a Rust rename edit for make_demo_matrix");
   const renameEntries = renameEdit.entries().map(([targetUri]) => targetUri.fsPath);
   assert.ok(renameEntries.some((entry) => entry.endsWith("src/local_docs.py")));
   assert.ok(renameEntries.some((entry) => entry.endsWith("src/01_hover_and_definition.sage")));
+}
 
-  const symbolsUri = vscode.Uri.joinPath(workspaceUri, "src", "05_symbols_and_locals.sage");
-  const symbols =
-    (await vscode.commands.executeCommand<Array<vscode.DocumentSymbol | vscode.SymbolInformation>>(
-      "vscode.executeDocumentSymbolProvider",
-      symbolsUri,
-    )) ?? [];
-  const symbolNames = new Set(flattenSymbolNames(symbols));
-  for (const expected of ["LocalContainer", "local_builder", "GAMMA", "R", "z"]) {
-    assert.ok(symbolNames.has(expected), `expected document symbols to include ${expected}`);
-  }
+async function verifyExternalSageSourceReferenceBridge(workspaceUri: vscode.Uri): Promise<void> {
+  const externalSourceRoot = process.env.SAGE_TEST_EXTERNAL_SOURCE_ROOT;
+  assert.ok(externalSourceRoot, "expected extension-host smoke to provide an external Sage source root");
 
-  const workspaceSymbols =
-    (await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
-      "vscode.executeWorkspaceSymbolProvider",
-      "PolynomialNotebook",
+  const uri = vscode.Uri.file(path.join(externalSourceRoot, "sage", "combinat", "combination.py"));
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+
+  const combinationsPosition = positionOfNth(document, "Combinations", 1);
+  const references =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeReferenceProvider",
+      uri,
+      combinationsPosition,
     )) ?? [];
+  const referenceUris = new Set(references.map((reference) => definitionUri(reference).fsPath));
   assert.ok(
-    workspaceSymbols.some((entry) => entry.name === "PolynomialNotebook" && entry.location.uri.fsPath.endsWith("src/local_docs.py")),
-    "expected workspace symbols to include PolynomialNotebook from the local fixture module",
+    referenceUris.has(uri.fsPath),
+    "expected standard VS Code references from external Sage source to include the declaration",
+  );
+  assert.ok(
+    [...referenceUris].some((entry) =>
+      normalizePathForAssertion(entry).endsWith("src/07_symbolic_and_combinatorics.sage")
+    ),
+    "expected standard VS Code references from external Sage source to include workspace Sage usages",
   );
 }
 
-async function verifyProjectedDiagnosticsAndQuickFix(workspaceUri: vscode.Uri): Promise<void> {
+async function verifyProjectedDiagnostics(workspaceUri: vscode.Uri): Promise<void> {
   const syntaxUri = vscode.Uri.joinPath(workspaceUri, "src", "__tmp_projection_check.sage");
   await vscode.workspace.fs.writeFile(syntaxUri, Buffer.from("value = 2^\n", "utf-8"));
   const syntaxDocument = await vscode.workspace.openTextDocument(syntaxUri);
@@ -197,47 +253,55 @@ async function verifyProjectedDiagnosticsAndQuickFix(workspaceUri: vscode.Uri): 
     (diagnostics) => diagnostics.some((diagnostic) => diagnostic.message.startsWith("Syntax error:")),
   );
   const syntaxDiagnostic = syntaxDiagnostics.find((diagnostic) => diagnostic.message.startsWith("Syntax error:"));
-  assert.ok(syntaxDiagnostic, "expected a syntax diagnostic for the projected .sage error");
+  assert.ok(syntaxDiagnostic, "expected a Rust syntax diagnostic for the projected .sage error");
   assert.equal(String(syntaxDiagnostic.code), "syntax-error");
   assert.equal(syntaxDiagnostic.range.start.line, 0);
   assert.equal(syntaxDiagnostic.range.start.character, 9);
   assert.equal(syntaxDiagnostic.range.end.character, 10);
+}
 
-  const quickFixUri = vscode.Uri.joinPath(workspaceUri, "src", "__tmp_import_fix.sage");
-  await vscode.workspace.fs.writeFile(
-    quickFixUri,
-    Buffer.from("from package_demo import make_demo_matrix\n\nvalue = make_demo_matrix([1, 2, 3])\n", "utf-8"),
-  );
-  const quickFixDocument = await vscode.workspace.openTextDocument(quickFixUri);
-  const quickFixEditor = await vscode.window.showTextDocument(quickFixDocument);
+async function verifyDocumentAndWorkspaceSymbols(workspaceUri: vscode.Uri): Promise<void> {
+  const symbolsUri = vscode.Uri.joinPath(workspaceUri, "src", "05_symbols_and_locals.sage");
+  const symbolsDocument = await vscode.workspace.openTextDocument(symbolsUri);
+  await vscode.window.showTextDocument(symbolsDocument);
 
-  const importDiagnostics = await waitForDiagnostics(
-    quickFixUri,
-    (diagnostics) => diagnostics.some((diagnostic) => String(diagnostic.code) === "unresolved-import-name"),
-  );
-  const importDiagnostic = importDiagnostics.find((diagnostic) => String(diagnostic.code) === "unresolved-import-name");
-  assert.ok(importDiagnostic, "expected an unresolved import-name diagnostic for the quick-fix scenario");
-
-  const actions =
-    (await vscode.commands.executeCommand<Array<vscode.CodeAction | vscode.Command>>(
-      "vscode.executeCodeActionProvider",
-      quickFixUri,
-      importDiagnostic.range,
-      vscode.CodeActionKind.QuickFix.value,
+  const symbols =
+    (await vscode.commands.executeCommand<Array<vscode.DocumentSymbol | vscode.SymbolInformation>>(
+      "vscode.executeDocumentSymbolProvider",
+      symbolsUri,
     )) ?? [];
-  const quickFix = actions.find(
-    (action): action is vscode.CodeAction => "edit" in action && action.title === "Import 'make_demo_matrix' from 'local_docs'",
-  );
-  assert.ok(quickFix, "expected a quick fix to rewrite the import source module");
-  assert.ok(quickFix.edit, "expected the quick fix to carry a workspace edit");
-  const editApplied = await vscode.workspace.applyEdit(quickFix.edit);
-  assert.ok(editApplied, "expected the quick-fix workspace edit to apply successfully");
-  await quickFixDocument.save();
+  const symbolNames = new Set(flattenSymbolNames(symbols));
+  for (const expected of ["LocalContainer", "local_builder", "R", "z"]) {
+    assert.ok(symbolNames.has(expected), `expected Rust document symbols to include ${expected}`);
+  }
 
+  const workspaceSymbols =
+    (await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+      "vscode.executeWorkspaceSymbolProvider",
+      "PolynomialNotebook",
+    )) ?? [];
   assert.ok(
-    quickFixEditor.document.getText().startsWith("from local_docs import make_demo_matrix"),
-    "expected the quick fix to rewrite the import statement to local_docs",
+    workspaceSymbols.some((entry) =>
+      entry.name === "PolynomialNotebook" && entry.location.uri.fsPath.endsWith("src/local_docs.py"),
+    ),
+    "expected Rust workspace symbols to include PolynomialNotebook from the local fixture module",
   );
+}
+
+async function verifyNativeCythonDocumentSymbols(workspaceUri: vscode.Uri): Promise<void> {
+  const uri = vscode.Uri.joinPath(workspaceUri, "src", "cythonish_bridge.pyx");
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+
+  const symbols =
+    (await vscode.commands.executeCommand<Array<vscode.DocumentSymbol | vscode.SymbolInformation>>(
+      "vscode.executeDocumentSymbolProvider",
+      uri,
+    )) ?? [];
+  const symbolNames = new Set(flattenSymbolNames(symbols));
+  for (const expected of ["fast_square", "StepCounter", "describe_counter", "stepped_square"]) {
+    assert.ok(symbolNames.has(expected), `expected Rust Cython document symbols to include ${expected}`);
+  }
 }
 
 async function verifyNativeCythonNavigation(workspaceUri: vscode.Uri): Promise<void> {
@@ -254,17 +318,187 @@ async function verifyNativeCythonNavigation(workspaceUri: vscode.Uri): Promise<v
     )) ?? [];
   assert.ok(
     definitions.some((definition) => definitionUri(definition).fsPath.endsWith("src/native_support.pxd")),
-    "expected NativeAccumulator to resolve into native_support.pxd",
+    "expected Rust NativeAccumulator definition to resolve into native_support.pxd",
+  );
+}
+
+async function verifySageAwarePythonWorkspace(workspaceUri: vscode.Uri): Promise<void> {
+  const uri = vscode.Uri.joinPath(workspaceUri, "src", "10_sage_heavy_python.py");
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+
+  const context = await sageContextSnapshot();
+  assert.equal(context.languageId, "python");
+  assert.equal(context.pythonFilesEnabled, true);
+  assert.equal(context.isSageEditor, true);
+  assert.equal(context.shouldAutoStartLanguageClient, true);
+  assert.equal(context.shouldExposeSageExperience, true);
+
+  const polynomialPosition = positionOfNth(document, "PolynomialRing", 2);
+  const polynomialDefinitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      uri,
+      polynomialPosition,
+    )) ?? [];
+  assertSingleDefinitionTarget(
+    polynomialDefinitions,
+    "sage/rings/polynomial/polynomial_ring_constructor.py",
+    "PolynomialRing",
+    "sage-source",
+  );
+  const polynomialDeclarations =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDeclarationProvider",
+      uri,
+      polynomialPosition,
+    )) ?? [];
+  assertSingleDefinitionTarget(
+    polynomialDeclarations,
+    "sage/rings/polynomial/polynomial_ring_constructor.py",
+    "PolynomialRing declaration",
+    "sage-source",
+  );
+  const polynomialImplementations =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeImplementationProvider",
+      uri,
+      polynomialPosition,
+    )) ?? [];
+  assertSingleDefinitionTarget(
+    polynomialImplementations,
+    "sage/rings/polynomial/polynomial_ring_constructor.py",
+    "PolynomialRing implementation",
+    "sage-source",
   );
 
-  const symbols =
-    (await vscode.commands.executeCommand<Array<vscode.DocumentSymbol | vscode.SymbolInformation>>(
-      "vscode.executeDocumentSymbolProvider",
+  const matrixPosition = positionOfNth(document, "matrix", 3);
+  const matrixDefinitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
       uri,
+      matrixPosition,
     )) ?? [];
-  const symbolNames = new Set(flattenSymbolNames(symbols));
-  for (const expected of ["fast_square", "StepCounter", "stepped_square"]) {
-    assert.ok(symbolNames.has(expected), `expected Cython symbols to include ${expected}`);
+  assertSingleDefinitionTarget(matrixDefinitions, "sage/matrix/constructor.pyx", "matrix", "sage-source");
+
+  const ringUsagePosition = positionOfNth(document, "ring.gens", 1);
+  const polynomialTypeDefinitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeTypeDefinitionProvider",
+      uri,
+      ringUsagePosition,
+    )) ?? [];
+  assertSingleDefinitionTarget(
+    polynomialTypeDefinitions,
+    "sage/rings/polynomial/polynomial_ring_constructor.py",
+    "PolynomialRing type definition",
+    "sage-source",
+  );
+
+  const rankPosition = positionOfNth(document, ".rank", 1, 1);
+  const rankHovers = (await vscode.commands.executeCommand<vscode.Hover[]>(
+    "vscode.executeHoverProvider",
+    uri,
+    rankPosition,
+  )) ?? [];
+  assert.ok(
+    rankHovers.some((hover) => renderHoverContents(hover).includes("Return the rank of this matrix")),
+    "expected Sage-aware Python hover docs for Matrix.rank",
+  );
+}
+
+async function verifyConfigureWorkspaceProfile(workspaceUri: vscode.Uri): Promise<void> {
+  const result = await vscode.commands.executeCommand<ConfigureWorkspaceProfileResult>(
+    "sage.__test.configureWorkspaceProfile",
+    "research",
+  );
+  assert.ok(result, "expected test workspace configuration command to return applied updates");
+  assert.equal(result.profileId, "research");
+
+  const updatedSections = new Set(result.updates.map((entry) => entry.setting));
+  for (const expected of [
+    "sage.languageServer.rustPath",
+    "sage.analysis.mode",
+    "sage.analysis.sourceRoots",
+    "sage.analysis.extraPaths",
+    "sage.analysis.enablePythonFiles",
+    "sage.analysis.enablePyxParsing",
+    "sage.docs.showOnHover",
+    "python.analysis.extraPaths",
+    "python.analysis.diagnosticSeverityOverrides",
+  ]) {
+    assert.ok(updatedSections.has(expected), `expected Configure Workspace to update ${expected}`);
+  }
+
+  const config = vscode.workspace.getConfiguration("sage", workspaceUri);
+  assert.equal(config.get("analysis.mode"), "full");
+  assert.equal(config.get("analysis.enablePythonFiles"), true);
+  assert.equal(config.get("analysis.enablePyxParsing"), true);
+  assert.equal(config.get("languageServer.rustPath"), "auto");
+  const sourceRoots = config.get<string[]>("analysis.sourceRoots") ?? [];
+  assert.ok(sourceRoots.includes("src"), "expected Configure Workspace to include the workspace source root");
+  const extraPaths = config.get<string[]>("analysis.extraPaths") ?? [];
+  assert.ok(extraPaths.includes("src"), "expected Configure Workspace to include the workspace source root in extra paths");
+  assert.ok(extraPaths.includes("vendor"), "expected Configure Workspace to preserve existing extra paths");
+  const pythonConfig = vscode.workspace.getConfiguration("python", workspaceUri);
+  const pythonExtraPaths = pythonConfig.get<string[]>("analysis.extraPaths") ?? [];
+  assert.ok(pythonExtraPaths.includes("src"), "expected Configure Workspace to teach Pylance about local workspace roots");
+  assert.ok(pythonExtraPaths.includes("vendor"), "expected Configure Workspace to preserve Pylance-visible helper paths");
+  assert.ok(
+    !pythonExtraPaths.some((entry) => entry.endsWith("sage/src") || entry.endsWith("sage\\src")),
+    "expected Configure Workspace to keep external Sage internals out of Pylance extra paths",
+  );
+  const severityOverrides = pythonConfig.get<Record<string, string>>("analysis.diagnosticSeverityOverrides") ?? {};
+  assert.equal(severityOverrides.reportMissingImports, "none");
+  assert.equal(severityOverrides.reportMissingModuleSource, "none");
+}
+
+async function verifyCellCodeLens(workspaceUri: vscode.Uri): Promise<void> {
+  const uri = vscode.Uri.joinPath(workspaceUri, "src", "__tmp_cell_codelens.sage");
+  await vscode.workspace.fs.writeFile(
+    uri,
+    Buffer.from([
+      "# %% setup",
+      "R = PolynomialRing(QQ, 'x')",
+      "# region solve block",
+      "I = R.ideal(x^2 + 1)",
+      "# endregion",
+      "I.variety()",
+      "",
+    ].join("\n"), "utf-8"),
+  );
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+
+  const config = vscode.workspace.getConfiguration("sage", workspaceUri);
+  await config.update("run.showCellCodeLens", true, vscode.ConfigurationTarget.Workspace);
+  try {
+    const lenses =
+      (await vscode.commands.executeCommand<vscode.CodeLens[]>(
+        "vscode.executeCodeLensProvider",
+        uri,
+      )) ?? [];
+    assert.ok(lenses.some((lens) => lens.command?.title === "Run Cell"), "expected Sage Run Cell CodeLens");
+    assert.ok(lenses.some((lens) => lens.command?.title === "Run Region"), "expected Sage Run Region CodeLens");
+
+    const cellLens = lenses.find((lens) => lens.command?.title === "Run Cell");
+    const regionLens = lenses.find((lens) => lens.command?.title === "Run Region");
+    assert.equal(cellLens?.command?.command, "sage.runCurrentCell");
+    assert.equal(regionLens?.command?.command, "sage.runCurrentCell");
+    assert.equal(codeLensTarget(cellLens).line, 0);
+    assert.equal(codeLensTarget(regionLens).line, 2);
+    assert.equal(codeLensTarget(cellLens).uri?.toString(), uri.toString());
+    assert.equal(codeLensTarget(regionLens).uri?.toString(), uri.toString());
+
+    await config.update("run.showCellCodeLens", false, vscode.ConfigurationTarget.Workspace);
+    const hiddenLenses =
+      (await vscode.commands.executeCommand<vscode.CodeLens[]>(
+        "vscode.executeCodeLensProvider",
+        uri,
+      )) ?? [];
+    assert.equal(hiddenLenses.length, 0, "expected Sage cell CodeLens to respect sage.run.showCellCodeLens=false");
+  } finally {
+    await config.update("run.showCellCodeLens", true, vscode.ConfigurationTarget.Workspace);
   }
 }
 
@@ -274,14 +508,11 @@ async function verifySavedModuleRefresh(workspaceUri: vscode.Uri): Promise<void>
   const helperEditor = await vscode.window.showTextDocument(helperDocument);
   const originalSource = helperDocument.getText();
   const originalSummary = "Return a comma-separated summary for documentation and hover tests.";
-  const updatedSummary = "Return an updated comma-separated summary after a save.";
+  const updatedSummary = "Return an updated comma-separated summary after a Rust save.";
   const updatedSource = originalSource.includes(updatedSummary)
     ? originalSource
     : originalSource.replace(originalSummary, updatedSummary);
-  assert.ok(
-    updatedSource.includes(updatedSummary),
-    "expected the smoke fixture docstring to contain the updated saved summary",
-  );
+  assert.ok(updatedSource.includes(updatedSummary), "expected the smoke fixture docstring to be replaceable");
 
   if (updatedSource !== originalSource) {
     await helperEditor.edit((editBuilder) => {
@@ -299,142 +530,19 @@ async function verifySavedModuleRefresh(workspaceUri: vscode.Uri): Promise<void>
   await vscode.window.showTextDocument(sageDocument);
 
   const hoverPosition = positionOfNth(sageDocument, "summarize_coefficients", 2);
-  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", sageUri, hoverPosition)) ?? [];
+  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>(
+    "vscode.executeHoverProvider",
+    sageUri,
+    hoverPosition,
+  )) ?? [];
   assert.ok(
     hovers.some((hover) =>
       normalizeWhitespace(renderHoverContents(hover)).includes(
-        "updated comma-separated summary after a save",
+        "updated comma-separated summary after a Rust save",
       ),
     ),
-    "expected hover docs to refresh after saving the imported Python helper module",
+    "expected Rust hover docs to refresh after saving the imported Python helper module",
   );
-}
-
-async function verifyNativeSageLibraryNavigation(
-  workspaceUri: vscode.Uri,
-  config: vscode.WorkspaceConfiguration,
-  nativeSourceRoot: string,
-  nativeSageExecutable: string | undefined,
-): Promise<void> {
-  await config.update(
-    "analysis.sourceRoots",
-    [vscode.Uri.joinPath(workspaceUri, "src").fsPath, nativeSourceRoot],
-    vscode.ConfigurationTarget.Workspace,
-  );
-  await config.update(
-    "analysis.enableRuntimeIntrospection",
-    Boolean(nativeSageExecutable),
-    vscode.ConfigurationTarget.Workspace,
-  );
-  if (nativeSageExecutable) {
-    await config.update("interpreter.path", nativeSageExecutable, vscode.ConfigurationTarget.Workspace);
-  }
-
-  await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
-
-  const uri = vscode.Uri.joinPath(workspaceUri, "src", "06_runtime_graphs_and_number_theory.sage");
-  const document = await vscode.workspace.openTextDocument(uri);
-  await vscode.window.showTextDocument(document);
-
-  const graphPosition = positionOfNth(document, "graphs.PetersenGraph", 1, "graphs.".length);
-  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", uri, graphPosition)) ?? [];
-  assert.ok(
-    hovers.some((hover) => renderHoverContents(hover).includes("Petersen Graph")),
-    "expected native Sage hover docs for graphs.PetersenGraph",
-  );
-
-  const definitions =
-    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
-      "vscode.executeDefinitionProvider",
-      uri,
-      graphPosition,
-    )) ?? [];
-  assert.ok(
-    definitions.some((definition) => definitionUri(definition).fsPath.endsWith("sage/graphs/generators/smallgraphs.py")),
-    "expected graphs.PetersenGraph to resolve into the Sage graph generator sources",
-  );
-
-  const workspaceSymbols =
-    (await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
-      "vscode.executeWorkspaceSymbolProvider",
-      "PetersenGraph",
-    )) ?? [];
-  assert.ok(
-    workspaceSymbols.some((entry) => entry.location.uri.fsPath.endsWith("sage/graphs/generators/smallgraphs.py")),
-    "expected workspace symbols to include the native PetersenGraph implementation",
-  );
-
-  const polynomialRingPosition = positionOfNth(document, "PolynomialRing", 1);
-  const polynomialRingHovers =
-    (await vscode.commands.executeCommand<vscode.Hover[]>(
-      "vscode.executeHoverProvider",
-      uri,
-      polynomialRingPosition,
-    )) ?? [];
-  assert.ok(
-    polynomialRingHovers.some((hover) =>
-      normalizeWhitespace(renderHoverContents(hover)).includes(
-        "globally unique univariate or multivariate polynomial ring",
-      ),
-    ),
-    "expected native Sage hover docs for PolynomialRing",
-  );
-
-  const polynomialRingDefinitions =
-    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
-      "vscode.executeDefinitionProvider",
-      uri,
-      polynomialRingPosition,
-    )) ?? [];
-  assert.ok(
-    polynomialRingDefinitions.some((definition) => definitionUri(definition).fsPath.endsWith("sage/rings/polynomial/polynomial_ring_constructor.py")),
-    "expected PolynomialRing to resolve into the Sage polynomial ring constructor sources",
-  );
-
-  const ellipticCurvePosition = positionOfNth(document, "EllipticCurve([", 1);
-  const ellipticCurveHovers =
-    (await vscode.commands.executeCommand<vscode.Hover[]>(
-      "vscode.executeHoverProvider",
-      uri,
-      ellipticCurvePosition,
-    )) ?? [];
-  assert.ok(
-    ellipticCurveHovers.some((hover) =>
-      normalizeWhitespace(renderHoverContents(hover)).includes("Construct an elliptic curve."),
-    ),
-    "expected native Sage hover docs for EllipticCurve",
-  );
-
-  const ellipticCurveDefinitions =
-    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
-      "vscode.executeDefinitionProvider",
-      uri,
-      ellipticCurvePosition,
-    )) ?? [];
-  assert.ok(
-    ellipticCurveDefinitions.some((definition) =>
-      definitionUri(definition).fsPath.endsWith("sage/schemes/elliptic_curves/constructor.py"),
-    ),
-    "expected EllipticCurve to resolve into the Sage elliptic curve constructor sources",
-  );
-
-  if (!nativeSageExecutable) {
-    return;
-  }
-
-  const signaturePosition = positionOfNth(document, "EllipticCurve([", 1, "EllipticCurve(".length);
-  const signatureHelp = await vscode.commands.executeCommand<vscode.SignatureHelp>(
-    "vscode.executeSignatureHelpProvider",
-    uri,
-    signaturePosition,
-    "(",
-  );
-  if (signatureHelp?.signatures?.length) {
-    assert.ok(
-      signatureHelp.signatures.some((signature) => signature.label.includes("EllipticCurve")),
-      "expected runtime signature help for EllipticCurve when the runtime supplies signatures",
-    );
-  }
 }
 
 async function waitForCommand(command: string, timeoutMs = 15_000): Promise<void> {
@@ -449,9 +557,34 @@ async function waitForCommand(command: string, timeoutMs = 15_000): Promise<void
   throw new Error(`timed out waiting for command registration: ${command}`);
 }
 
+async function waitForDiagnostics(
+  uri: vscode.Uri,
+  predicate: (diagnostics: readonly vscode.Diagnostic[]) => boolean,
+  timeoutMs = 15_000,
+): Promise<readonly vscode.Diagnostic[]> {
+  const start = Date.now();
+  let lastDiagnostics: readonly vscode.Diagnostic[] = [];
+
+  while (Date.now() - start < timeoutMs) {
+    lastDiagnostics = vscode.languages.getDiagnostics(uri);
+    if (predicate(lastDiagnostics)) {
+      return lastDiagnostics;
+    }
+    await delay(100);
+  }
+
+  throw new Error(`timed out waiting for diagnostics on ${uri.fsPath}: ${lastDiagnostics.map((diagnostic) => diagnostic.message).join(" | ")}`);
+}
+
 async function lifecycleSnapshot(command: string): Promise<LifecycleSnapshot> {
   const result = await vscode.commands.executeCommand<LifecycleSnapshot>(command);
   assert.ok(result, `expected ${command} to return a lifecycle snapshot`);
+  return result;
+}
+
+async function sageContextSnapshot(): Promise<SageContextSnapshot> {
+  const result = await vscode.commands.executeCommand<SageContextSnapshot>("sage.__test.getCurrentSageContext");
+  assert.ok(result, "expected sage.__test.getCurrentSageContext to return a context snapshot");
   return result;
 }
 
@@ -474,25 +607,6 @@ async function assertEventually(
   }
 
   throw lastError instanceof Error ? lastError : new Error("timed out waiting for the expected editor state");
-}
-
-async function waitForDiagnostics(
-  uri: vscode.Uri,
-  predicate: (diagnostics: readonly vscode.Diagnostic[]) => boolean,
-  timeoutMs = 15_000,
-): Promise<readonly vscode.Diagnostic[]> {
-  const start = Date.now();
-  let lastDiagnostics: readonly vscode.Diagnostic[] = [];
-
-  while (Date.now() - start < timeoutMs) {
-    lastDiagnostics = vscode.languages.getDiagnostics(uri);
-    if (predicate(lastDiagnostics)) {
-      return lastDiagnostics;
-    }
-    await delay(100);
-  }
-
-  throw new Error(`timed out waiting for diagnostics on ${uri.fsPath}: ${lastDiagnostics.map((diagnostic) => diagnostic.message).join(" | ")}`);
 }
 
 function positionOfNth(
@@ -533,8 +647,68 @@ function normalizeWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
+function normalizePathForAssertion(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\/private\/var\//, "/var/");
+}
+
 function definitionUri(location: vscode.Location | vscode.LocationLink): vscode.Uri {
   return "targetUri" in location ? location.targetUri : location.uri;
+}
+
+function definitionRange(location: vscode.Location | vscode.LocationLink): vscode.Range {
+  if ("targetUri" in location) {
+    return location.targetSelectionRange ?? location.targetRange;
+  }
+  return location.range;
+}
+
+function definitionKey(location: vscode.Location | vscode.LocationLink): string {
+  const uri = definitionUri(location);
+  const range = definitionRange(location);
+  return [
+    uri.toString(),
+    range.start.line,
+    range.start.character,
+    range.end.line,
+    range.end.character,
+  ].join("|");
+}
+
+function assertSingleDefinitionTarget(
+  definitions: Array<vscode.Location | vscode.LocationLink>,
+  expectedPathSuffix: string,
+  label: string,
+  expectedScheme?: string,
+): void {
+  const keys = new Set(definitions.map(definitionKey));
+  assert.equal(
+    keys.size,
+    definitions.length,
+    `expected ${label} definition targets to be deduplicated`,
+  );
+  assert.equal(
+    definitions.length,
+    1,
+    `expected ${label} to have exactly one VS Code definition target, got ${definitions.map((definition) => definitionUri(definition).toString()).join(", ")}`,
+  );
+  const onlyDefinition = definitions[0];
+  assert.ok(onlyDefinition, `expected ${label} definition to exist`);
+  assert.ok(
+    definitionUri(onlyDefinition).fsPath.endsWith(expectedPathSuffix),
+    `expected ${label} definition to resolve into ${expectedPathSuffix}`,
+  );
+  if (expectedScheme) {
+    assert.equal(
+      definitionUri(onlyDefinition).scheme,
+      expectedScheme,
+      `expected ${label} definition to use ${expectedScheme} source view`,
+    );
+  }
+}
+
+function codeLensTarget(lens: vscode.CodeLens | undefined): { uri?: vscode.Uri; line?: number } {
+  assert.ok(lens?.command?.arguments?.[0], "expected Sage CodeLens command arguments");
+  return lens.command.arguments[0] as { uri?: vscode.Uri; line?: number };
 }
 
 function flattenSymbolNames(

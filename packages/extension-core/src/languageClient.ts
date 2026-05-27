@@ -1,5 +1,7 @@
+import fs from "node:fs";
 import path from "node:path";
 import * as vscode from "vscode";
+import type { DocumentFilter, DocumentSelector } from "vscode-languageserver-protocol";
 import {
   CloseAction,
   ErrorAction,
@@ -10,6 +12,7 @@ import {
 
 import { readSettings } from "./configuration";
 import { buildInitializationOptions } from "./settingsModel";
+import type { SageSettings } from "./settingsModel";
 import {
   buildDocumentationRequestPayload,
   normalizeDocumentationResponse,
@@ -17,12 +20,35 @@ import {
   type DocumentationResult,
 } from "./documentationRequest";
 import { buildLanguageServerLaunch } from "./serverLaunch";
+import { buildSageSourceUri, shouldUseSageSourceView } from "./sageSourceView";
 import { shouldAutoRestartOnLanguageServerClose } from "./serverRestart";
 import { buildWorkspaceInitializationData, resolveConfiguredPaths } from "./workspaceDiscovery";
+import { logToChannel } from "./extensionLogger";
+
+export const RUST_LSP_COMMANDS = {
+  indexStatus: "sage.__rust.indexStatus",
+  docsStatus: "sage.__rust.docsStatus",
+  rebuildIndex: "sage.__rust.rebuildIndex",
+  getDocumentation: "sage.__rust.getDocumentation",
+  queryAtPosition: "sage.__rust.queryAtPosition",
+} as const;
+
+export function rustIndexCacheDir(context: vscode.ExtensionContext): string {
+  return path.join(context.globalStorageUri.fsPath, "rust-index-v2");
+}
+
+export function buildDocumentSelector(settings: Pick<SageSettings, "pythonFilesEnabled">): DocumentSelector {
+  const selector: DocumentFilter[] = [{ language: "sagemath" }, { language: "sagemath-cython" }];
+  if (settings.pythonFilesEnabled) {
+    selector.push({ language: "python", scheme: "file" });
+  }
+  return selector;
+}
 
 export interface LanguageClientLifecycle {
   shouldAutoRestartOnClose?: () => boolean;
   onClose?: (event: { managedShutdown: boolean; shouldRestart: boolean }) => void;
+  runtimeDiscoveredSourceRoots?: readonly string[];
 }
 
 export function createLanguageClient(
@@ -33,29 +59,42 @@ export function createLanguageClient(
   const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   const settings = readSettings(workspaceFolder);
-  const serverModuleRoot = path.resolve(context.extensionPath, "../sage-lsp/src");
+  const effectiveSourceRoots = dedupeStrings([
+    ...settings.sourceRoots,
+    ...(lifecycle.runtimeDiscoveredSourceRoots ?? []),
+  ]);
   const workspaceData = buildWorkspaceInitializationData(
     workspaceFolders,
-    settings.sourceRoots,
+    effectiveSourceRoots,
     {
       interpreterPath: settings.interpreterPath,
       interpreterArgs: settings.interpreterArgs,
+      runtimeProbe: false,
     },
   );
   const resolvedExtraPaths = resolveConfiguredPaths(workspaceFolders, settings.extraPaths);
   const languageServerSettings = {
     ...settings,
+    sourceRoots: effectiveSourceRoots,
     extraPaths: resolvedExtraPaths,
   };
   const launch = buildLanguageServerLaunch({
     interpreterPath: settings.interpreterPath,
     interpreterArgs: settings.interpreterArgs,
+    languageServerRustPath: settings.languageServerRustPath,
     languageServerPythonPath: settings.languageServerPythonPath,
     languageServerPythonArgs: settings.languageServerPythonArgs,
+    extensionPath: context.extensionPath,
+    repositoryRoot: path.resolve(context.extensionPath, "../.."),
     homeDir: process.env.HOME,
   });
-  outputChannel.appendLine(
-    `[info] starting language server with: ${launch.command} ${launch.args.join(" ")}`,
+  logToChannel(
+    outputChannel,
+    settings.loggingLevel,
+    "info",
+    "lsp-client",
+    "starting language server",
+    { command: launch.command, args: launch.args.join(" ") },
   );
 
   const serverOptions: ServerOptions = {
@@ -65,15 +104,20 @@ export function createLanguageClient(
       cwd: context.extensionPath,
       env: {
         ...process.env,
-        PYTHONPATH: appendPythonPath(process.env.PYTHONPATH, serverModuleRoot, resolvedExtraPaths),
+        SAGE_LS_EXTRA_PATHS: resolvedExtraPaths.join(path.delimiter),
       },
     },
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ language: "sagemath" }, { language: "sagemath-cython" }],
+    documentSelector: buildDocumentSelector(settings),
     outputChannel,
-    initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData, launch.command),
+    initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData, {
+      resolvedRustPath: launch.command,
+      nodePath: process.execPath,
+      pyrightServerPath: resolvePyrightServerPath(context.extensionPath),
+      cacheDir: rustIndexCacheDir(context),
+    }),
     synchronize: {
       fileEvents: [
         vscode.workspace.createFileSystemWatcher("**/*.sage"),
@@ -83,10 +127,33 @@ export function createLanguageClient(
         vscode.workspace.createFileSystemWatcher("**/*.pxi"),
       ],
     },
+    middleware: {
+      provideDeclaration: async (document, position, token, next) => {
+        const declaration = await next(document, position, token);
+        return rewriteExternalDefinitionUris(declaration);
+      },
+      provideDefinition: async (document, position, token, next) => {
+        const definition = await next(document, position, token);
+        return rewriteExternalDefinitionUris(definition);
+      },
+      provideImplementation: async (document, position, token, next) => {
+        const implementation = await next(document, position, token);
+        return rewriteExternalDefinitionUris(implementation);
+      },
+      provideTypeDefinition: async (document, position, token, next) => {
+        const typeDefinition = await next(document, position, token);
+        return rewriteExternalDefinitionUris(typeDefinition);
+      },
+    },
     errorHandler: {
       error: (error, message, count) => {
-        outputChannel.appendLine(
-          `[error] language server error (message=${message}, count=${count}): ${String(error)}`,
+        logToChannel(
+          outputChannel,
+          settings.loggingLevel,
+          "error",
+          "lsp-client",
+          "language server error",
+          { message, count, error: String(error) },
         );
         return { action: ErrorAction.Continue };
       },
@@ -94,10 +161,15 @@ export function createLanguageClient(
         const managedShutdown = !(lifecycle.shouldAutoRestartOnClose?.() ?? true);
         const shouldRestart = shouldAutoRestartOnLanguageServerClose(managedShutdown);
         lifecycle.onClose?.({ managedShutdown, shouldRestart });
-        outputChannel.appendLine(
+        logToChannel(
+          outputChannel,
+          settings.loggingLevel,
+          managedShutdown ? "info" : "warn",
+          "lsp-client",
           managedShutdown
-            ? "[info] language server connection closed during a managed restart."
-            : "[warn] language server connection closed unexpectedly; restarting.",
+            ? "language server connection closed during managed restart"
+            : "language server connection closed unexpectedly; restarting",
+          { managedShutdown, shouldRestart },
         );
         return { action: shouldRestart ? CloseAction.Restart : CloseAction.DoNotRestart };
       },
@@ -105,6 +177,115 @@ export function createLanguageClient(
   };
 
   return new LanguageClient("sageLanguageServer", "Sage Language Server", serverOptions, clientOptions);
+}
+
+export function rewriteExternalDefinitionUris<T extends vscode.Definition | vscode.DefinitionLink[] | null | undefined>(
+  definition: T,
+): T {
+  if (!definition) {
+    return definition;
+  }
+  const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
+  if (Array.isArray(definition)) {
+    return dedupeDefinitionEntries(
+      definition.map((entry) => rewriteDefinitionEntry(entry, workspaceFolders)),
+    ) as T;
+  }
+  return rewriteDefinitionEntry(definition, workspaceFolders) as T;
+}
+
+function rewriteDefinitionEntry(
+  definition: vscode.Location | vscode.DefinitionLink,
+  workspaceFolders: readonly string[],
+): vscode.Location | vscode.DefinitionLink {
+  if (isDefinitionLink(definition)) {
+    return {
+      ...definition,
+      targetUri: rewriteExternalDefinitionUri(definition.targetUri, workspaceFolders),
+    };
+  }
+  if (isLocationLike(definition)) {
+    return new vscode.Location(
+      rewriteExternalDefinitionUri(definition.uri, workspaceFolders),
+      definition.range,
+    );
+  }
+  return definition;
+}
+
+function rewriteExternalDefinitionUri(
+  uri: vscode.Uri,
+  workspaceFolders: readonly string[],
+): vscode.Uri {
+  if (uri.scheme !== "file" || !shouldUseSageSourceView(uri.fsPath, workspaceFolders)) {
+    return uri;
+  }
+  return buildSageSourceUri(uri.fsPath);
+}
+
+function isDefinitionLink(
+  definition: vscode.Location | vscode.DefinitionLink,
+): definition is vscode.DefinitionLink {
+  return "targetUri" in definition && isUriLike(definition.targetUri);
+}
+
+function isLocationLike(
+  definition: vscode.Location | vscode.DefinitionLink,
+): definition is vscode.Location {
+  return "uri" in definition && isUriLike(definition.uri);
+}
+
+function isUriLike(uri: unknown): uri is vscode.Uri {
+  return (
+    typeof uri === "object"
+    && uri !== null
+    && "scheme" in uri
+    && typeof (uri as { scheme?: unknown }).scheme === "string"
+    && "toString" in uri
+    && typeof (uri as { toString?: unknown }).toString === "function"
+  );
+}
+
+function dedupeDefinitionEntries(
+  definitions: Array<vscode.Location | vscode.DefinitionLink>,
+): Array<vscode.Location | vscode.DefinitionLink> {
+  const seen = new Set<string>();
+  const deduped: Array<vscode.Location | vscode.DefinitionLink> = [];
+  for (const definition of definitions) {
+    const key = definitionEntryKey(definition);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    deduped.push(definition);
+  }
+  return deduped;
+}
+
+function definitionEntryKey(definition: vscode.Location | vscode.DefinitionLink): string {
+  if (isDefinitionLink(definition)) {
+    return [
+      definition.targetUri.toString(),
+      rangeKey(definition.targetSelectionRange),
+      rangeKey(definition.targetRange),
+    ].join("|");
+  }
+  if (isLocationLike(definition)) {
+    return [definition.uri.toString(), rangeKey(definition.range)].join("|");
+  }
+  return JSON.stringify(definition);
+}
+
+function rangeKey(range: vscode.Range | undefined): string {
+  if (!range) {
+    return "unknown-range";
+  }
+  return [
+    range.start.line,
+    range.start.character,
+    range.end.line,
+    range.end.character,
+  ].join(":");
 }
 
 export async function requestDocumentation(
@@ -115,20 +296,37 @@ export async function requestDocumentation(
   symbol?: string,
 ): Promise<DocumentationResult | null> {
   const response = await client.sendRequest<DocumentationResponse | null>(
-    "sage/getDocumentation",
-    buildDocumentationRequestPayload(documentUri, line, character, symbol),
+    "workspace/executeCommand",
+    {
+      command: RUST_LSP_COMMANDS.getDocumentation,
+      arguments: [buildDocumentationRequestPayload(documentUri, line, character, symbol)],
+    },
   );
   return normalizeDocumentationResponse(response);
 }
 
-function appendPythonPath(
-  existingPath: string | undefined,
-  monorepoSourceRoot: string,
-  extraPaths: string[],
-): string {
-  const entries = [monorepoSourceRoot, ...extraPaths];
-  if (existingPath) {
-    entries.push(existingPath);
-  }
-  return entries.join(path.delimiter);
+export async function executeSageCommand<T>(
+  client: LanguageClient,
+  command: string,
+  args: unknown[] = [],
+): Promise<T | null> {
+  return client.sendRequest<T | null>(
+    "workspace/executeCommand",
+    {
+      command,
+      arguments: args,
+    },
+  );
+}
+
+function resolvePyrightServerPath(extensionPath: string): string | undefined {
+  const candidates = [
+    path.resolve(extensionPath, "node_modules", "pyright", "langserver.index.js"),
+    path.resolve(extensionPath, "..", "..", "node_modules", "pyright", "langserver.index.js"),
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
+function dedupeStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
 }

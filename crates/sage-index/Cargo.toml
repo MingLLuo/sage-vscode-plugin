@@ -1,0 +1,21 @@
+[package]
+name = "sage-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+ignore.workspace = true
+rayon.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tree-sitter.workspace = true
+tree-sitter-python.workspace = true
+
+[[bin]]
+name = "sage-index-bench"
+path = "src/bin/sage-index-bench.rs"

@@ -1,0 +1,74 @@
+name: Bug report
+description: Report incorrect Sage editing behavior, crashes, diagnostics, navigation, or packaging problems.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when the Sage VS Code plugin behaves incorrectly. For slow hover, definition, completion, indexing, or docs queries, use the performance regression template instead.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+      placeholder: Hover for PolynomialRing shows ... but should ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Include the smallest code sample or fixture that reproduces the issue.
+      placeholder: |
+        1. Open ...
+        2. Put the cursor on ...
+        3. Run ...
+    validations:
+      required: true
+  - type: dropdown
+    id: surface
+    attributes:
+      label: Affected surface
+      multiple: true
+      options:
+        - Syntax highlighting
+        - Semantic tokens
+        - Hover or documentation
+        - Definition or references
+        - Completion or signature help
+        - Diagnostics or code actions
+        - Rename
+        - Runtime/REPL commands
+        - Packaging or installation
+        - Status/support bundle
+    validations:
+      required: true
+  - type: textarea
+    id: support_bundle
+    attributes:
+      label: Support bundle
+      description: Run `Sage: Copy Support Bundle` and paste the JSON here. Remove private paths if needed, but keep status fields, settings, and versions.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant output
+      description: Paste relevant lines from the `Sage` or `Sage Language Server` output channels.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: validation
+    attributes:
+      label: Checks already run
+      description: List commands or manual checks you ran.
+      placeholder: |
+        npm run test:ci
+        npm run test:lsp-latency
+        npm run debug:web
+    validations:
+      required: false

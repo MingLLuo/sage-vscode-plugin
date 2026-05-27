@@ -1,7 +1,7 @@
 {
   "name": "SageMath",
   "scopeName": "source.sagemath",
-  "fileTypes": ["sage", "pyx", "pxd", "pxi"],
+  "fileTypes": ["sage", "pyx", "pxd", "pxi", "spyx"],
   "patterns": [
     { "include": "#comments" },
     { "include": "#triple-quoted-strings" },
@@ -10,6 +10,9 @@
     { "include": "#sage-runtime-helpers" },
     { "include": "#preparse-assignment" },
     { "include": "#factory-assignment" },
+    { "include": "#sage-variable-assignment" },
+    { "include": "#sage-keyword-arguments" },
+    { "include": "#cython-declarations" },
     { "include": "#definitions" },
     { "include": "#imports" },
     { "include": "#keywords" },
@@ -25,6 +28,7 @@
     { "include": "#sage-combinatorics" },
     { "include": "#sage-graph-theory" },
     { "include": "#sage-crypto" },
+    { "include": "#sage-call-sites" },
     { "include": "#cython-support" },
     { "include": "#operators" },
     { "include": "#constants" },
@@ -82,6 +86,10 @@
     "decorators": {
       "patterns": [
         {
+          "name": "support.function.decorator.interact.sagemath",
+          "match": "^\\s*(@(?:interact|interact_manual))\\b"
+        },
+        {
           "name": "storage.type.decorator.cache.sagemath",
           "match": "^\\s*(@(?:cached_method|cached_function|cached_in_parent_method|cached_property|lazy_attribute))\\b"
         },
@@ -100,6 +108,10 @@
         {
           "name": "support.function.runtime-helper.sagemath",
           "match": "\\b(lazy_import|lazy_attribute|cached_method|cached_function|cached_in_parent_method|cached_property|UniqueFactory|ClasscallMetaclass|abstract_method)\\b"
+        },
+        {
+          "name": "support.function.interact-control.sagemath",
+          "match": "\\b(input_box|slider|range_slider|selector|checkbox|color_selector|text_control)\\b"
         }
       ]
     },
@@ -107,13 +119,27 @@
       "patterns": [
         {
           "name": "meta.assignment.preparse.sagemath",
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(\\.)\\<([A-Za-z_][A-Za-z0-9_]*(?:\\s*,\\s*[A-Za-z_][A-Za-z0-9_]*)*)\\>(\\s*=)",
-          "captures": {
+          "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(\\.)(\\<)",
+          "beginCaptures": {
             "1": { "name": "variable.other.readwrite.sagemath" },
             "2": { "name": "punctuation.accessor.dot.sagemath" },
-            "3": { "name": "variable.parameter.preparse.sagemath" },
-            "4": { "name": "keyword.operator.assignment.sagemath" }
-          }
+            "3": { "name": "punctuation.definition.generator.begin.sagemath" }
+          },
+          "end": "(\\>)(\\s*=)",
+          "endCaptures": {
+            "1": { "name": "punctuation.definition.generator.end.sagemath" },
+            "2": { "name": "keyword.operator.assignment.sagemath" }
+          },
+          "patterns": [
+            {
+              "name": "variable.parameter.preparse.generator.sagemath",
+              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+            },
+            {
+              "name": "punctuation.separator.generator.sagemath",
+              "match": ","
+            }
+          ]
         }
       ]
     },
@@ -127,6 +153,33 @@
             "2": { "name": "keyword.operator.assignment.sagemath" },
             "3": { "name": "entity.name.type.factory.sagemath" },
             "4": { "name": "punctuation.definition.parameters.begin.sagemath" }
+          }
+        }
+      ]
+    },
+    "sage-variable-assignment": {
+      "patterns": [
+        {
+          "name": "meta.assignment.variable.sagemath",
+          "match": "^(\\s*)([A-Za-z_][A-Za-z0-9_]*)(\\s*)(?:(:)(\\s*[^=\\n]+?)\\s*)?(=)(?!=)",
+          "captures": {
+            "2": { "name": "variable.other.assignment.sagemath" },
+            "4": { "name": "punctuation.separator.annotation.sagemath" },
+            "5": { "name": "storage.type.annotation.sagemath" },
+            "6": { "name": "keyword.operator.assignment.sagemath" }
+          }
+        }
+      ]
+    },
+    "sage-keyword-arguments": {
+      "patterns": [
+        {
+          "name": "meta.argument.keyword.sagemath",
+          "match": "([\\(,]\\s*)([A-Za-z_][A-Za-z0-9_]*)(\\s*=)(?!=)",
+          "captures": {
+            "1": { "name": "punctuation.separator.argument.sagemath" },
+            "2": { "name": "variable.parameter.keyword.sagemath" },
+            "3": { "name": "keyword.operator.assignment.sagemath" }
           }
         }
       ]
@@ -159,6 +212,48 @@
         }
       ]
     },
+    "cython-declarations": {
+      "patterns": [
+        {
+          "name": "keyword.declaration.cython.sagemath",
+          "match": "\\b(cdef|cpdef|ctypedef)\\b"
+        },
+        {
+          "name": "keyword.control.import.cython.sagemath",
+          "match": "\\b(cimport)\\b"
+        },
+        {
+          "name": "meta.include.cython.sagemath",
+          "match": "^(\\s*)(include)(\\s+)([\"'][^\"']+[\"'])",
+          "captures": {
+            "2": { "name": "keyword.control.include.cython.sagemath" },
+            "4": { "name": "string.quoted.include.cython.sagemath" }
+          }
+        },
+        {
+          "name": "storage.modifier.cython.sagemath",
+          "match": "\\b(nogil|gil|except|public|readonly|api|extern|inline|const|unsigned|signed)\\b"
+        },
+        {
+          "name": "meta.typed-variable.cython.sagemath",
+          "match": "\\b(bint|char|short|int|long|float|double|void|object|size_t|Py_ssize_t|mpz_t|mpq_t|mpfr_t|cppclass|[A-Za-z_][A-Za-z0-9_\\.]*)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:=|,|\\)|:|$))",
+          "captures": {
+            "1": { "name": "storage.type.cython.sagemath" },
+            "3": { "name": "variable.other.typed.cython.sagemath" }
+          }
+        },
+        {
+          "name": "meta.return-type.cython.sagemath",
+          "match": "\\b(cpdef|cdef)(?:\\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed))*\\s+([A-Za-z_][A-Za-z0-9_\\.\\*\\[\\]]+)(\\s+)([A-Za-z_][A-Za-z0-9_]*)(\\s*\\()",
+          "captures": {
+            "1": { "name": "keyword.declaration.cython.sagemath" },
+            "2": { "name": "storage.type.cython.sagemath" },
+            "4": { "name": "entity.name.function.cython.sagemath" },
+            "5": { "name": "punctuation.definition.parameters.begin.sagemath" }
+          }
+        }
+      ]
+    },
     "keywords": {
       "patterns": [
         {
@@ -171,11 +266,11 @@
       "patterns": [
         {
           "name": "support.type.ring.sagemath",
-          "match": "\\b(ZZ|QQ|RR|CC|SR|GF|QQbar|AA|CDF|RDF|IF|CIF|Integers|Rationals|ComplexField|RealField|FiniteField|PolynomialRing|LaurentPolynomialRing|OrePolynomialRing)\\b"
+          "match": "\\b(ZZ|QQ|RR|CC|SR|GF|QQbar|ZZbar|AA|RIF|CIF|RLF|CLF|CDF|RDF|IF|Integers|Rationals|ComplexField|RealField|ComplexIntervalField|RealIntervalField|ComplexDoubleField|RealDoubleField|FiniteField|IntegerModRing|Zmod|Qp|Zp|PolynomialRing|LaurentPolynomialRing|OrePolynomialRing|PowerSeriesRing|LazyPowerSeriesRing|UniversalCyclotomicField)\\b"
         },
         {
           "name": "constant.language.sagemath",
-          "match": "\\b(pi|e|I|oo|Infinity)\\b"
+          "match": "\\b(pi|e|I|oo|Infinity|NaN|unsigned_infinity|minus_infinity)\\b"
         }
       ]
     },
@@ -183,7 +278,7 @@
       "patterns": [
         {
           "name": "entity.name.namespace.sagemath",
-          "match": "\\b(graphs|toric_varieties|simplicial_complexes|matroids|mq|interacts|plot3d)\\b"
+          "match": "\\b(graphs|codes|crystals|designs|manifolds|polytopes|posets|root_system|toric_varieties|simplicial_complexes|matroids|mq|interacts|plot3d)\\b"
         }
       ]
     },
@@ -191,7 +286,7 @@
       "patterns": [
         {
           "name": "support.class.constructor.sagemath",
-          "match": "\\b(PolynomialRing|PowerSeriesRing|LaurentSeriesRing|FractionField|QuadraticField|CyclotomicField|NumberField|OrePolynomialRing|MatrixSpace|EllipticCurve|Graph|DiGraph|FreeModule|VectorSpace|SimplicialComplex|FilteredSimplicialComplex|ChowGroup|FreeAbelianMonoid)\\b"
+          "match": "\\b(PolynomialRing|PowerSeriesRing|LaurentSeriesRing|FractionField|FunctionField|QuadraticField|CyclotomicField|NumberField|OrePolynomialRing|MatrixSpace|EllipticCurve|ProjectiveSpace|AffineSpace|Graph|DiGraph|FreeModule|VectorSpace|SimplicialComplex|FilteredSimplicialComplex|ChowGroup|FreeAbelianMonoid|Parent|Set|Sequence|RootSystem|WeylGroup|CartanType|PermutationGroup|DirichletGroup|ModularSymbols|CuspForms)\\b"
         }
       ]
     },
@@ -223,7 +318,7 @@
       "patterns": [
         {
           "name": "support.function.symbolic.sagemath",
-          "match": "\\b(var|function|factor|factorial|expand|simplify|integrate|diff|limit|solve|sqrt|sin|cos|tan|exp|log)\\b"
+          "match": "\\b(var|function|assume|forget|factor|factorial|expand|simplify|integrate|diff|derivative|limit|solve|sqrt|sin|cos|tan|exp|log|floor|ceil)\\b"
         }
       ]
     },
@@ -231,7 +326,7 @@
       "patterns": [
         {
           "name": "support.function.plotting.sagemath",
-          "match": "\\b(plot|parametric_plot|implicit_plot|list_plot|line|point|circle|polygon|density_plot|text3d)\\b"
+          "match": "\\b(plot|parametric_plot|implicit_plot|list_plot|line|point|circle|polygon|density_plot|contour_plot|region_plot|text|text3d|show)\\b"
         }
       ]
     },
@@ -239,7 +334,7 @@
       "patterns": [
         {
           "name": "support.function.number-theory.sagemath",
-          "match": "\\b(sigma|euler_phi|next_prime|is_prime|cyclotomic_polynomial)\\b"
+          "match": "\\b(ideal|gcd|lcm|xgcd|prime_divisors|divisors|sigma|euler_phi|next_prime|previous_prime|is_prime|is_square|valuation|cyclotomic_polynomial)\\b"
         }
       ]
     },
@@ -247,7 +342,7 @@
       "patterns": [
         {
           "name": "support.class.combinatorics.sagemath",
-          "match": "\\b(Partitions|Permutations|SymmetricGroup|Compositions|Combinations|Subsets)\\b"
+          "match": "\\b(Partitions|Permutations|SymmetricGroup|Compositions|Combinations|Subsets|cartesian_product)\\b"
         }
       ]
     },
@@ -267,6 +362,22 @@
         }
       ]
     },
+    "sage-call-sites": {
+      "patterns": [
+        {
+          "name": "meta.method-call.sagemath",
+          "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+          "captures": {
+            "1": { "name": "punctuation.accessor.dot.sagemath" },
+            "2": { "name": "support.function.method.sagemath" }
+          }
+        },
+        {
+          "name": "support.function.call.sagemath",
+          "match": "\\b[a-z_][A-Za-z0-9_]*(?=\\s*\\()"
+        }
+      ]
+    },
     "cython-support": {
       "patterns": [
         {
@@ -282,8 +393,16 @@
           "match": "(\\*\\*|\\^|//|\\+|-|/|%|\\*=|/=|//=|%=|\\+=|-=)"
         },
         {
+          "name": "keyword.operator.range.sagemath",
+          "match": "\\.\\."
+        },
+        {
           "name": "keyword.operator.comparison.sagemath",
           "match": "(==|!=|<=|>=|<|>)"
+        },
+        {
+          "name": "keyword.operator.assignment.sagemath",
+          "match": "(:=|=)"
         }
       ]
     },
@@ -299,7 +418,7 @@
       "patterns": [
         {
           "name": "constant.numeric.sagemath",
-          "match": "\\b(?:0x[0-9A-Fa-f]+|\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)\\b"
+          "match": "\\b(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|0[oO][0-7_]+|\\d[\\d_]*(?:\\.[\\d_]*)?(?:[eE][+-]?\\d[\\d_]*)?)\\b"
         }
       ]
     }

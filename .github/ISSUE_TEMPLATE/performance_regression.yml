@@ -1,0 +1,49 @@
+name: Performance regression
+description: Report slow Sage indexing, hover, definition, docs, completion, or workspace-symbol behavior.
+title: "[Performance]: "
+labels:
+  - performance
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this when an editor operation is slower than expected. Release targets are documented in `docs/process/ci-and-release-gates.md` and guarded by `npm run test:release`.
+  - type: textarea
+    id: operation
+    attributes:
+      label: Slow operation
+      description: Name the operation, symbol, file type, and observed latency.
+      placeholder: Definition on PolynomialRing takes about 1.8s in a Sage-heavy Python file.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Index/docs status
+      description: Paste `Sage: Show Index Status`, `Sage: Show Docs Status`, or `Sage: Copy Support Bundle` output.
+      render: json
+    validations:
+      required: false
+  - type: textarea
+    id: benchmark
+    attributes:
+      label: Benchmark output
+      description: Paste relevant output from `npm run test:lsp-latency`, `npm run test:real-file-smoke`, or `SAGE_SOURCE_ROOT=/path/to/sage/src npm run test:performance -- --skip-workbench`.
+      render: text
+    validations:
+      required: false
+  - type: input
+    id: sage_root
+    attributes:
+      label: Sage source root
+      description: If available, provide the Sage source root shape without private details.
+      placeholder: /path/to/sage/src, Sage 10.x checkout, installed Sage app, etc.
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Extra context
+      description: Mention whether this is cold start, warm start, after changing source roots, or after updating Sage.
+    validations:
+      required: false

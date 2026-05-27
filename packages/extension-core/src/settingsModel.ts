@@ -6,6 +6,7 @@ export type RunTarget = "terminal" | "repl";
 export interface SageSettings {
   interpreterPath: string;
   interpreterArgs: string[];
+  languageServerRustPath: string;
   languageServerPythonPath: string;
   languageServerPythonArgs: string[];
   analysisMode: AnalysisMode;
@@ -14,11 +15,13 @@ export interface SageSettings {
   diagnosticsEnabled: boolean;
   runtimeIntrospectionEnabled: boolean;
   enablePyxParsing: boolean;
+  pythonFilesEnabled: boolean;
   indexingExcludeGlobs: string[];
   docsSource: DocsSource;
   showDocsOnHover: boolean;
   loggingLevel: LoggingLevel;
   runTarget: RunTarget;
+  showCellCodeLens: boolean;
   cleanupGeneratedPython: boolean;
   notebookSupportEnabled: boolean;
 }
@@ -29,6 +32,14 @@ export interface LanguageServerInitializationOptions {
     args: string[];
     pythonPath?: string;
   };
+  rust: {
+    binaryPath?: string;
+    cacheDir?: string;
+  };
+  pyright: {
+    nodePath?: string;
+    serverPath?: string;
+  };
   analysis: {
     mode: AnalysisMode;
     extraPaths: string[];
@@ -36,6 +47,7 @@ export interface LanguageServerInitializationOptions {
     enableDiagnostics: boolean;
     enableRuntimeIntrospection: boolean;
     enablePyxParsing: boolean;
+    enablePythonFiles: boolean;
   };
   workspace: {
     rootUri: string | null;
@@ -61,16 +73,35 @@ export interface WorkspaceInitializationInput {
   sourceRoots: string[];
 }
 
+export interface RuntimeInitializationInput {
+  resolvedRustPath?: string;
+  cacheDir?: string;
+  nodePath?: string;
+  pyrightServerPath?: string;
+  resolvedLanguageServerPythonPath?: string;
+}
+
 export function buildInitializationOptions(
   settings: SageSettings,
   workspace: WorkspaceInitializationInput,
-  resolvedLanguageServerPythonPath?: string,
+  runtimeInput: RuntimeInitializationInput | string = {},
 ): LanguageServerInitializationOptions {
+  const runtime = typeof runtimeInput === "string"
+    ? { resolvedLanguageServerPythonPath: runtimeInput }
+    : runtimeInput;
   return {
     interpreter: {
       path: settings.interpreterPath,
       args: settings.interpreterArgs,
-      ...(resolvedLanguageServerPythonPath ? { pythonPath: resolvedLanguageServerPythonPath } : {}),
+      ...(runtime.resolvedLanguageServerPythonPath ? { pythonPath: runtime.resolvedLanguageServerPythonPath } : {}),
+    },
+    rust: {
+      ...(runtime.resolvedRustPath ? { binaryPath: runtime.resolvedRustPath } : {}),
+      ...(runtime.cacheDir ? { cacheDir: runtime.cacheDir } : {}),
+    },
+    pyright: {
+      ...(runtime.nodePath ? { nodePath: runtime.nodePath } : {}),
+      ...(runtime.pyrightServerPath ? { serverPath: runtime.pyrightServerPath } : {}),
     },
     analysis: {
       mode: settings.analysisMode,
@@ -79,6 +110,7 @@ export function buildInitializationOptions(
       enableDiagnostics: settings.diagnosticsEnabled,
       enableRuntimeIntrospection: settings.runtimeIntrospectionEnabled,
       enablePyxParsing: settings.enablePyxParsing,
+      enablePythonFiles: settings.pythonFilesEnabled,
     },
     workspace: {
       rootUri: workspace.rootUri,

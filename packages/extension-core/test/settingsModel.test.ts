@@ -1,13 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildLanguageServerLaunch, resolveDefaultLanguageServerPython } from "../src/serverLaunch";
+import {
+  buildLanguageServerLaunch,
+  buildLegacyPythonLanguageServerLaunch,
+  resolveDefaultLanguageServerPython,
+  resolveLocalRustLanguageServer,
+  resolvePackagedRustLanguageServer,
+} from "../src/serverLaunch";
 import { buildInitializationOptions, type SageSettings } from "../src/settingsModel";
 
 test("buildInitializationOptions mirrors editor settings and workspace context into the LSP payload", () => {
   const settings: SageSettings = {
     interpreterPath: "/opt/sage/bin/sage",
     interpreterArgs: ["--python"],
+    languageServerRustPath: "auto",
     languageServerPythonPath: "auto",
     languageServerPythonArgs: [],
     analysisMode: "full",
@@ -16,11 +23,13 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
     diagnosticsEnabled: true,
     runtimeIntrospectionEnabled: true,
     enablePyxParsing: true,
+    pythonFilesEnabled: true,
     indexingExcludeGlobs: ["**/.venv/**"],
     docsSource: "runtime",
     showDocsOnHover: false,
     loggingLevel: "debug",
     runTarget: "terminal",
+    showCellCodeLens: false,
     cleanupGeneratedPython: true,
     notebookSupportEnabled: true,
   };
@@ -33,13 +42,25 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
         folders: ["file:///workspace"],
         sourceRoots: ["file:///workspace/src"],
       },
-      "/opt/python/bin/python3",
+      {
+        resolvedRustPath: "/workspace/target/debug/sage-ls",
+        cacheDir: "/workspace/.vscode-test/globalStorage/rust-index-v2",
+        nodePath: "/opt/node/bin/node",
+        pyrightServerPath: "/workspace/node_modules/pyright/langserver.index.js",
+      },
     ),
     {
       interpreter: {
         path: "/opt/sage/bin/sage",
         args: ["--python"],
-        pythonPath: "/opt/python/bin/python3",
+      },
+      rust: {
+        binaryPath: "/workspace/target/debug/sage-ls",
+        cacheDir: "/workspace/.vscode-test/globalStorage/rust-index-v2",
+      },
+      pyright: {
+        nodePath: "/opt/node/bin/node",
+        serverPath: "/workspace/node_modules/pyright/langserver.index.js",
       },
       analysis: {
         mode: "full",
@@ -48,6 +69,7 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
         enableDiagnostics: true,
         enableRuntimeIntrospection: true,
         enablePyxParsing: true,
+        enablePythonFiles: true,
       },
       workspace: {
         rootUri: "file:///workspace",
@@ -69,20 +91,81 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
   );
 });
 
-test("buildLanguageServerLaunch uses python interpreters directly when auto mode is active", () => {
+test("buildLanguageServerLaunch uses an explicit Rust language server path", () => {
   assert.deepEqual(buildLanguageServerLaunch({
     interpreterPath: "/opt/python/bin/python3",
     interpreterArgs: ["-X", "utf8"],
+    languageServerRustPath: "/workspace/target/debug/sage-ls",
     languageServerPythonPath: "auto",
     languageServerPythonArgs: [],
   }), {
-    command: "/opt/python/bin/python3",
-    args: ["-X", "utf8", "-m", "sage_lsp"],
+    command: "/workspace/target/debug/sage-ls",
+    args: [],
   });
 });
 
-test("buildLanguageServerLaunch falls back to a dedicated python runtime for Sage executables", () => {
+test("buildLanguageServerLaunch prefers the repository-local Rust binary in auto mode", () => {
   assert.deepEqual(buildLanguageServerLaunch({
+    interpreterPath: "/opt/sage/bin/sage",
+    interpreterArgs: [],
+    languageServerRustPath: "auto",
+    languageServerPythonPath: "auto",
+    languageServerPythonArgs: [],
+    repositoryRoot: "/workspace/plugin",
+    platform: "linux",
+    exists: (candidate) => candidate === "/workspace/plugin/target/debug/sage-ls",
+  }), {
+    command: "/workspace/plugin/target/debug/sage-ls",
+    args: [],
+  });
+});
+
+test("buildLanguageServerLaunch falls back to sage-ls on PATH", () => {
+  assert.deepEqual(buildLanguageServerLaunch({
+    interpreterPath: "/opt/sage/bin/sage",
+    interpreterArgs: [],
+    languageServerRustPath: "auto",
+    languageServerPythonPath: "auto",
+    languageServerPythonArgs: [],
+    repositoryRoot: "/workspace/plugin",
+    platform: "linux",
+    exists: () => false,
+  }), {
+    command: "sage-ls",
+    args: [],
+  });
+});
+
+test("buildLanguageServerLaunch uses a packaged Rust binary before PATH fallback", () => {
+  assert.deepEqual(buildLanguageServerLaunch({
+    interpreterPath: "/opt/sage/bin/sage",
+    interpreterArgs: [],
+    languageServerRustPath: "auto",
+    languageServerPythonPath: "auto",
+    languageServerPythonArgs: [],
+    extensionPath: "/workspace/plugin/packages/extension-core",
+    platform: "darwin",
+    arch: "arm64",
+    exists: (candidate) => candidate === "/workspace/plugin/packages/extension-core/resources/bin/darwin-arm64/sage-ls",
+  }), {
+    command: "/workspace/plugin/packages/extension-core/resources/bin/darwin-arm64/sage-ls",
+    args: [],
+  });
+});
+
+test("resolvePackagedRustLanguageServer maps Windows package binary names", () => {
+  assert.equal(resolvePackagedRustLanguageServer(
+    {
+      extensionPath: "/extensions/sage",
+      exists: (candidate) => candidate === "/extensions/sage/resources/bin/win32-x64/sage-ls.exe",
+    },
+    "win32",
+    "x64",
+  ), "/extensions/sage/resources/bin/win32-x64/sage-ls.exe");
+});
+
+test("buildLegacyPythonLanguageServerLaunch preserves old Python launch behavior", () => {
+  assert.deepEqual(buildLegacyPythonLanguageServerLaunch({
     interpreterPath: "/opt/sage/bin/sage",
     interpreterArgs: ["--nodotsage"],
     languageServerPythonPath: "auto",
@@ -97,16 +180,14 @@ test("buildLanguageServerLaunch falls back to a dedicated python runtime for Sag
   });
 });
 
-test("buildLanguageServerLaunch honors an explicit language server python override", () => {
-  assert.deepEqual(buildLanguageServerLaunch({
-    interpreterPath: "/opt/sage/bin/sage",
-    interpreterArgs: [],
-    languageServerPythonPath: "/custom/python",
-    languageServerPythonArgs: ["-X", "utf8"],
-  }), {
-    command: "/custom/python",
-    args: ["-X", "utf8", "-m", "sage_lsp"],
-  });
+test("resolveLocalRustLanguageServer finds debug before release builds", () => {
+  assert.equal(resolveLocalRustLanguageServer(
+    {
+      repositoryRoot: "/workspace/plugin",
+      exists: (candidate) => candidate === "/workspace/plugin/target/debug/sage-ls",
+    },
+    "linux",
+  ), "/workspace/plugin/target/debug/sage-ls");
 });
 
 test("resolveDefaultLanguageServerPython prefers explicit environment overrides", () => {

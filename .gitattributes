@@ -1,0 +1,38 @@
+* text=auto eol=lf
+
+*.c text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.json text eol=lf
+*.jsonc text eol=lf
+*.lock text eol=lf
+*.md text eol=lf
+*.mjs text eol=lf
+*.pxd text eol=lf
+*.pxi text eol=lf
+*.py text eol=lf
+*.pyx text eol=lf
+*.rs text eol=lf
+*.sage text eol=lf
+*.spyx text eol=lf
+*.sh text eol=lf
+*.toml text eol=lf
+*.ts text eol=lf
+*.txt text eol=lf
+*.xml text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+
+package-lock.json text eol=lf
+Cargo.lock text eol=lf
+
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.png binary
+*.vsix binary
+*.zip binary
+
+*.exe binary
+packages/extension-core/resources/bin/**/sage-ls binary
