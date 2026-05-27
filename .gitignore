@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+package-lock.json
 
 # Rust build artifacts
 target/
@@ -9,6 +10,7 @@ dist/
 out/
 packages/extension-core/out/
 packages/extension-core/.vscode-test/
+packages/extension-core/resources/bin/*/sage-ls*
 *.vsix
 *.tgz
 
