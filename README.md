@@ -1,6 +1,7 @@
 # Sage VS Code Plugin
 
 `Sage VS Code Plugin` is an independent monorepo for a SageMath-focused development experience in Visual Studio Code.
+
 It now includes a usable local development baseline: a VS Code client, a Rust language server, a persistent
 Sage/Python/Cython source index, Sage-aware `.sage` preprocessing, runtime-backed documentation fallback, and curated
 manual plus automated smoke tests.
@@ -34,8 +35,8 @@ workspace setting:
 }
 ```
 
-See [Quick Start](./docs/quick-start.md) for the short user path and [Install and Configure](./docs/install-and-configure.md)
-for the full reference.
+See [Quick Start](./docs/quick-start.md) for the short user path.
+Use [Install and Configure](./docs/install-and-configure.md) for the full reference.
 
 ## Goals
 
@@ -114,25 +115,36 @@ npm run test:native-smoke
 npm run cache:status
 ```
 
-`npm run test:ci` is the public GitHub-compatible gate: it avoids private local files and desktop VS Code while still
-covering Rust tests, clippy, lint, extension/debug/Python tests, generated asset drift checks, VSIX content/package
-smoke, cache-maintenance smoke, portable performance smoke, and whitespace checks. `npm run test:release` is the local non-desktop release gate: it adds
-VS Code CLI install smoke, release index performance against a local Sage checkout, persistent LSP latency, and real-file
-Sage-heavy smoke. Use
-`npm run test:repo-hygiene` to verify public GitHub maintenance files such as issue templates, `SECURITY.md`,
+`npm run test:ci` is the public GitHub-compatible gate. It avoids private local files and desktop VS Code while covering
+Rust tests, clippy, lint, extension/debug/Python tests, generated asset drift checks, VSIX content/package smoke,
+cache-maintenance smoke, portable performance smoke, and whitespace checks.
+
+`npm run test:release` is the local non-desktop release gate. It adds VS Code CLI install smoke, release index
+performance against a local Sage checkout, persistent LSP latency, and real-file Sage-heavy smoke.
+
+`npm run test:repo-hygiene` verifies public GitHub maintenance files such as issue templates, `SECURITY.md`,
 `SUPPORT.md`, and CI/release-gate boundaries.
+
 `npm run package:vsix` rebuilds and stages the current-platform release `sage-ls` binary, verifies generated assets and
-package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`. Use
-`npm run test:extension-host` when the local machine can launch the desktop VS Code app. Use
-`npm run debug:web` for the browser workbench surface used by MCP/Browser Use inspection.
-The VSIX package root includes its own `README.md`, `CHANGELOG.md`, and `LICENSE`; `npm run test:vsix-contents` verifies
-these release artifacts together with runtime resources, and `npm run test:vsix-package` verifies the generated VSIX
-archive structure, production dependency closure, content-type coverage, and entry CRCs. `npm run test:vsix-install`
-uses the VS Code CLI, when available, to install the generated VSIX into temporary user-data and extension directories
-without opening the desktop app.
-`npm run cache:status` inventories the root-aware Rust SQLite caches; `npm run cache:prune:dry-run` previews old-cache
-cleanup. Actual deletion requires the explicit `node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes`
-form.
+package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`.
+
+`npm run test:extension-host` should be used when the local machine can launch the desktop VS Code app.
+`npm run debug:web` starts the browser workbench surface used by MCP/Browser Use inspection.
+
+The VSIX package root includes its own `README.md`, `CHANGELOG.md`, and `LICENSE`.
+`npm run test:vsix-contents` verifies these release artifacts together with runtime resources.
+`npm run test:vsix-package` verifies the generated VSIX archive structure, production dependency closure,
+content-type coverage, and entry CRCs.
+`npm run test:vsix-install` uses the VS Code CLI, when available, to install the generated VSIX into temporary user-data
+and extension directories without opening the desktop app.
+
+`npm run cache:status` inventories the root-aware Rust SQLite caches.
+`npm run cache:prune:dry-run` previews old-cache cleanup.
+Actual deletion requires:
+
+```bash
+node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes
+```
 
 For manual GUI smoke testing, run `npm run dev:vscode:smoke`, press `F5`, and verify the new
 `[Extension Development Host]` window shows `.sage` files as `SageMath` with a left status-bar item beginning `Sage:`.
