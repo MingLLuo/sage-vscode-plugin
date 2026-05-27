@@ -174,7 +174,7 @@ test("packaged README is user-facing and support-oriented", () => {
   }
 
   assert.doesNotMatch(packagedReadme, /Current Scope/);
-  assert.doesNotMatch(packagedReadme, /\/Users\/example\//);
+  assert.doesNotMatch(packagedReadme, /\/Users\/(?!example\/|\.\.\.\/|<[^>]+>\/)[^/\s]+\//);
 });
 
 test("release scripts cover packaged Rust binaries and real Sage smoke gates", () => {

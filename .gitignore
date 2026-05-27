@@ -47,6 +47,8 @@ venv/
 .DS_Store
 Thumbs.db
 .idea/
+.vscode/settings.json
+.vscode/*.local.json
 *.swp
 *.swo
 .cache/

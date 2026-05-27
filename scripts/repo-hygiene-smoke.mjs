@@ -111,10 +111,11 @@ for (const expected of ["test:repo-hygiene", "SECURITY.md", "SUPPORT.md", ".gita
 
 for (const relativePath of requiredFiles) {
   const text = readText(relativePath);
-  pushCheck(`${relativePath} avoids maintainer-private paths`, !text.includes("/Users/example/"), relativePath);
+  pushCheck(`${relativePath} avoids maintainer-private paths`, !containsPrivateHomePath(text), relativePath);
 }
 
 for (const relativePath of [
+  ".vscode/launch.json",
   "README.md",
   "CONTRIBUTING.md",
   "SUPPORT.md",
@@ -131,7 +132,7 @@ for (const relativePath of [
   "scripts/dev-vscode.sh",
 ]) {
   const text = readText(relativePath);
-  pushCheck(`${relativePath} avoids maintainer-private paths`, !text.includes("/Users/example/"), relativePath);
+  pushCheck(`${relativePath} avoids maintainer-private paths`, !containsPrivateHomePath(text), relativePath);
 }
 
 const failures = checks.filter((check) => !check.pass);
@@ -142,6 +143,10 @@ console.log(JSON.stringify({
 }, null, 2));
 if (failures.length > 0) {
   process.exitCode = 1;
+}
+
+function containsPrivateHomePath(text) {
+  return /\/Users\/(?!example\/|\.\.\.\/|<[^>]+>\/)[^/\s]+\/|\/home\/(?!example\/|\.\.\.\/|<[^>]+>\/)[^/\s]+\/|[A-Za-z]:\\Users\\(?!example\\|<[^>]+>\\)[^\\\s]+\\/u.test(text);
 }
 
 function includesScript(name, snippet) {
