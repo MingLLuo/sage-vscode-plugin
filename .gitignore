@@ -1,15 +1,50 @@
+# Dependencies
 node_modules/
-dist/
+
+# Rust build artifacts
 target/
+
+# Node, VS Code, and package build output
+dist/
 out/
+packages/extension-core/out/
 packages/extension-core/.vscode-test/
-.DS_Store
-.pytest_cache/
+*.vsix
+*.tgz
+
+# Python build and test artifacts
 __pycache__/
-*.pyc
-*.sage.py
-.venv/
+*.py[cod]
+*$py.class
+.pytest_cache/
 .coverage
 coverage/
-*.vsix
+htmlcov/
 *.egg-info/
+.eggs/
+build/
+
+# Generated Sage preparser overlays
+*.sage.py
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Local environments and machine-specific config
+.env
+.env.*
+!.env.example
+.venv/
+venv/
+
+# Editor, OS, and local cache files
+.DS_Store
+Thumbs.db
+.idea/
+*.swp
+*.swo
+.cache/
