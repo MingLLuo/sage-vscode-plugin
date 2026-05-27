@@ -102,7 +102,7 @@ for the full reference.
 ## Quick Verification
 
 ```bash
-npm ci
+npm install
 npm run build
 npm run test:ci
 npm run test:repo-hygiene

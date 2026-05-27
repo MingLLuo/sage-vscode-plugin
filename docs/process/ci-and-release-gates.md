@@ -45,7 +45,7 @@ a machine where GUI automation is acceptable.
 
 ## Workflow Rules
 
-- GitHub Actions runs `npm ci`, installs the legacy Python test package, then executes `npm run test:ci`.
+- GitHub Actions runs `npm install`, installs the legacy Python test package, then executes `npm run test:ci`.
 - Generated syntax assets must pass lint before build writes anything.
 - `npm run test:generated-assets` must pass after changing syntax resources, generated extension-local assets,
   `scripts/generate-extension-icon.mjs`, or package branding files. `npm run package:vsix` runs the same gate before

@@ -243,7 +243,8 @@ test("portable CI gate is public-repository safe", () => {
   }
 
   const workflow = readCiWorkflow();
-  assert.match(workflow, /npm ci/);
+  assert.match(workflow, /npm install/);
+  assert.doesNotMatch(workflow, /package-lock\.json/);
   assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
   assert.match(workflow, /python -m pip install -e \.\/packages\/sage-lsp\[dev\]/);
   assert.match(workflow, /npm run test:ci/);
