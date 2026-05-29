@@ -18,6 +18,8 @@
     "generate:icon": "node scripts/generate-extension-icon.mjs",
     "cache:status": "node scripts/cache-maintenance.mjs",
     "cache:prune:dry-run": "node scripts/cache-maintenance.mjs --prune --max-age-days 30",
+    "clean": "node scripts/clean-artifacts.mjs",
+    "clean:dry-run": "node scripts/clean-artifacts.mjs",
     "sync:syntax": "node scripts/sync-syntax-assets.mjs",
     "test:generated-assets": "node scripts/sync-syntax-assets.mjs --check && node scripts/generate-extension-icon.mjs --check",
     "debug:web": "npm run build:debug-inspector && node scripts/debug-workbench.mjs",

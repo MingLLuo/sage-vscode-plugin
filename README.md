@@ -113,6 +113,7 @@ npm run test:vsix-install
 npm run test:release
 npm run test:native-smoke
 npm run cache:status
+npm run clean:dry-run
 ```
 
 `npm run test:ci` is the public GitHub-compatible gate. It avoids private local files and desktop VS Code while covering
@@ -145,6 +146,10 @@ Actual deletion requires:
 ```bash
 node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes
 ```
+
+`npm run clean:dry-run` previews build and test artifacts that can be removed after packaging or validation.
+Use `npm run clean -- --yes` to remove those artifacts.
+Add `--deps` only when you also want to remove `node_modules`, local virtualenvs, and `package-lock.json`.
 
 For manual GUI smoke testing, run `npm run dev:vscode:smoke`, press `F5`, and verify the new
 `[Extension Development Host]` window shows `.sage` files as `SageMath` with a left status-bar item beginning `Sage:`.
