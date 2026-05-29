@@ -13,7 +13,8 @@ app, or a working Sage runtime. It runs:
 - TypeScript, debug workbench, and legacy Python regression tests through `npm run test`.
 - Generated asset drift smoke for extension-local syntax assets, stale generated syntax files, and the deterministic
   package icon.
-- Current-platform Rust binary staging plus VSIX content/package smokes.
+- Rust binary staging plus VSIX content/package smokes. The maintained release target is macOS; non-macOS CI staging is
+  only a packaging integrity check.
 - Cache-maintenance smoke.
 - Repository hygiene smoke for GitHub issue templates, PR template, `SECURITY.md`, `SUPPORT.md`, `.gitattributes`,
   `.editorconfig`, and gate boundaries.
@@ -50,9 +51,9 @@ a machine where GUI automation is acceptable.
 - `npm run test:generated-assets` must pass after changing syntax resources, generated extension-local assets,
   `scripts/generate-extension-icon.mjs`, or package branding files. `npm run package:vsix` runs the same gate before
   packaging so stale generated syntax files do not get bundled accidentally.
-- `npm run package:vsix` stages a current-platform release `sage-ls` binary before package-content checks, so direct local
-  packaging does not reuse a stale server binary. CI/release staging remains a current-platform artifact, not a
-  cross-platform release promise.
+- `npm run package:vsix` stages the current macOS release `sage-ls` binary before package-content checks, so direct local
+  packaging does not reuse a stale server binary. Non-macOS script paths are retained only for defensive tests and are not
+  a release promise.
 - VSIX packaging is deterministic by default. The packager uses a fixed archive timestamp unless `SOURCE_DATE_EPOCH` is
   set, and `npm run test:vsix-package` verifies repeated packaging produces the same archive hash.
 - `npm run test:repo-hygiene` must pass after changing issue templates, PR templates, `SECURITY.md`, `SUPPORT.md`,

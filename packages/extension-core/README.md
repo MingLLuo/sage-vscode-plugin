@@ -70,8 +70,8 @@ the query is a cold start or warm query. For navigation bugs, include the file t
 
 ## Preview Limitations
 
-- Packaged native binaries are staged per platform; cross-platform signing and marketplace upload automation are still
-  deferred.
+- Packaged native binaries are maintained for local macOS use; cross-platform signing, marketplace upload automation, and
+  non-macOS release binaries are deferred.
 - Notebook and kernel UX are not part of this preview.
 - Pyright sidecar integration and deeper `.sage.py` overlay behavior remain future work.
 - The legacy Python LSP remains in the repository as a migration and regression baseline, but Rust is the primary runtime

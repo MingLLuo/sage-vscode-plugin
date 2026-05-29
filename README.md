@@ -8,7 +8,7 @@ manual plus automated smoke tests.
 
 ## Quick Start
 
-Install and use the current local build:
+Install and use the current local macOS build:
 
 ```bash
 npm install
@@ -126,7 +126,7 @@ performance against a local Sage checkout, persistent LSP latency, and real-file
 `npm run test:repo-hygiene` verifies public GitHub maintenance files such as issue templates, `SECURITY.md`,
 `SUPPORT.md`, and CI/release-gate boundaries.
 
-`npm run package:vsix` rebuilds and stages the current-platform release `sage-ls` binary, verifies generated assets and
+`npm run package:vsix` rebuilds and stages the current macOS release `sage-ls` binary, verifies generated assets and
 package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`.
 
 `npm run test:extension-host` should be used when the local machine can launch the desktop VS Code app.
@@ -147,7 +147,7 @@ Actual deletion requires:
 node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes
 ```
 
-`npm run clean:dry-run` previews build and test artifacts that can be removed after packaging or validation.
+`npm run clean:dry-run` previews macOS local build and test artifacts that can be removed after packaging or validation.
 Use `npm run clean -- --yes` to remove those artifacts.
 Add `--deps` only when you also want to remove `node_modules`, local virtualenvs, and `package-lock.json`.
 

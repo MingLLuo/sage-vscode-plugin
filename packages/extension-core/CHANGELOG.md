@@ -34,5 +34,5 @@ Initial preview release surface for the Sage VS Code Plugin.
 - The extension is marked as preview.
 - The Rust language server is the primary runtime path; the legacy Python LSP remains in the repository as a migration and
   regression baseline.
-- Marketplace support links, signing, and cross-platform binary release automation remain deferred until the publishing
-  channel is finalized.
+- Marketplace support links, signing, and non-macOS binary release automation remain deferred until the publishing channel
+  is finalized.
