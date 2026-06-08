@@ -15,8 +15,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  portable-checks:
-    runs-on: ubuntu-latest
+  macos-checks:
+    runs-on: macos-latest
     timeout-minutes: 45
     env:
       CI: "1"
@@ -47,5 +47,5 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -e ./packages/sage-lsp[dev]
 
-      - name: Run portable CI gate
+      - name: Run macOS CI gate
         run: npm run test:ci

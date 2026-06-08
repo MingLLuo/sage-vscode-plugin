@@ -14,7 +14,7 @@ const profile = args.profile ?? "release";
 const dryRun = args.dryRun === true;
 
 const target = packageTarget(platform, arch);
-const executable = platform === "win32" ? "sage-ls.exe" : "sage-ls";
+const executable = "sage-ls";
 const source = args.source
   ? path.resolve(args.source)
   : path.join(repositoryRoot, "target", profile, executable);
@@ -49,9 +49,7 @@ const metadata = {
 if (!dryRun) {
   await fs.mkdir(destinationDirectory, { recursive: true });
   await fs.copyFile(source, destination);
-  if (platform !== "win32") {
-    await fs.chmod(destination, 0o755);
-  }
+  await fs.chmod(destination, 0o755);
   await fs.writeFile(sha256Path, `${sha256}  ${target.executable}\n`, "utf8");
   await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 }
@@ -66,16 +64,14 @@ function packageTarget(rawPlatform, rawArch) {
   const supported = new Set([
     "darwin-arm64",
     "darwin-x64",
-    "linux-x64",
-    "win32-x64",
   ]);
   const directory = `${rawPlatform}-${normalizedArch}`;
   if (!supported.has(directory)) {
-    fail(`unsupported packaged binary target: ${directory}`);
+    fail(`unsupported packaged binary target: ${directory}. This preview only stages macOS binaries.`);
   }
   return {
     directory,
-    executable: rawPlatform === "win32" ? "sage-ls.exe" : "sage-ls",
+    executable: "sage-ls",
   };
 }
 

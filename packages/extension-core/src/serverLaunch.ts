@@ -118,12 +118,12 @@ export function resolvePackagedRustLanguageServer(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
 ): string | undefined {
-  if (!input.extensionPath) {
+  if (!input.extensionPath || platform !== "darwin") {
     return undefined;
   }
 
   const exists = input.exists ?? fs.existsSync;
-  const executable = platform === "win32" ? "sage-ls.exe" : "sage-ls";
+  const executable = "sage-ls";
   const platformDirectory = `${platform}-${arch}`;
   const candidate = path.resolve(input.extensionPath, "resources", "bin", platformDirectory, executable);
   return exists(candidate) ? candidate : undefined;

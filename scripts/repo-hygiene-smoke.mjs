@@ -45,7 +45,8 @@ for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:nativ
 
 const workflow = readText(".github/workflows/ci.yml");
 pushCheck("GitHub workflow installs Node dependencies without a tracked lockfile", /npm install/.test(workflow) && !/package-lock\.json/.test(workflow), ".github/workflows/ci.yml");
-pushCheck("GitHub workflow runs portable CI gate", /npm run test:ci/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow runs on macOS for the maintained release target", /runs-on:\s*macos-latest/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow runs macOS CI gate", /npm run test:ci/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow avoids local release gate", !/npm run test:release/.test(workflow), ".github/workflows/ci.yml");
 
 const editorConfig = readText(".editorconfig");

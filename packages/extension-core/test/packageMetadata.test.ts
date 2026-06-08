@@ -217,7 +217,7 @@ test("release scripts cover packaged Rust binaries and real Sage smoke gates", (
   assert.match(fullGate, /npm run test:extension-host/);
 });
 
-test("portable CI gate is public-repository safe", () => {
+test("macOS CI gate is public-repository safe", () => {
   const rootPackage = readRootPackage();
   const ciGate = rootPackage.scripts?.["test:ci"] ?? "";
   for (const expected of [
@@ -243,6 +243,7 @@ test("portable CI gate is public-repository safe", () => {
   }
 
   const workflow = readCiWorkflow();
+  assert.match(workflow, /runs-on:\s*macos-latest/);
   assert.match(workflow, /npm install/);
   assert.doesNotMatch(workflow, /package-lock\.json/);
   assert.match(workflow, /dtolnay\/rust-toolchain@stable/);

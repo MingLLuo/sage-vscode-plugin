@@ -169,9 +169,9 @@ npm run test:release
 npm run test:full
 ```
 
-Use `npm run test:ci` for the public GitHub-compatible gate. It intentionally avoids private real-file paths and desktop
-VS Code while still checking Rust, clippy, lint, tests, package contents, generated VSIX structure, cache maintenance,
-repository hygiene, and portable performance smoke. Use `npm run test:repo-hygiene` after changing issue templates,
+Use `npm run test:ci` for the public GitHub-compatible macOS gate. It intentionally avoids private real-file paths and
+desktop VS Code while still checking Rust, clippy, lint, tests, package contents, generated VSIX structure, cache
+maintenance, repository hygiene, and portable performance smoke. Use `npm run test:repo-hygiene` after changing issue templates,
 `SECURITY.md`, `SUPPORT.md`, PR templates, or gate definitions. Use `npm run test:release` for local release candidates
 that have access to a Sage checkout and the real Sage-heavy smoke inputs. See `docs/process/ci-and-release-gates.md` for
 the exact split.

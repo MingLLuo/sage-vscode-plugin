@@ -5,16 +5,15 @@ reproducible while local release candidates still exercise real Sage-heavy workl
 
 ## `npm run test:ci`
 
-`test:ci` is the portable GitHub Actions gate. It must not require private paths under `/Users/...`, a desktop VS Code
-app, or a working Sage runtime. It runs:
+`test:ci` is the GitHub Actions gate for the maintained macOS release path. It must not require private paths under
+`/Users/...`, a desktop VS Code app, or a working Sage runtime. It runs:
 
 - Rust tests and `cargo clippy --all-targets --all-features -- -D warnings`.
 - Syntax and extension lint.
 - TypeScript, debug workbench, and legacy Python regression tests through `npm run test`.
 - Generated asset drift smoke for extension-local syntax assets, stale generated syntax files, and the deterministic
   package icon.
-- Rust binary staging plus VSIX content/package smokes. The maintained release target is macOS; non-macOS CI staging is
-  only a packaging integrity check.
+- macOS Rust binary staging plus VSIX content/package smokes.
 - Cache-maintenance smoke.
 - Repository hygiene smoke for GitHub issue templates, PR template, `SECURITY.md`, `SUPPORT.md`, `.gitattributes`,
   `.editorconfig`, and gate boundaries.
@@ -46,7 +45,7 @@ a machine where GUI automation is acceptable.
 
 ## Workflow Rules
 
-- GitHub Actions runs `npm install`, installs the legacy Python test package, then executes `npm run test:ci`.
+- GitHub Actions runs on `macos-latest`, installs Node and Python dependencies, then executes `npm run test:ci`.
 - Generated syntax assets must pass lint before build writes anything.
 - `npm run test:generated-assets` must pass after changing syntax resources, generated extension-local assets,
   `scripts/generate-extension-icon.mjs`, or package branding files. `npm run package:vsix` runs the same gate before

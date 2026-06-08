@@ -153,7 +153,7 @@ test("buildLanguageServerLaunch uses a packaged Rust binary before PATH fallback
   });
 });
 
-test("resolvePackagedRustLanguageServer maps Windows package binary names", () => {
+test("resolvePackagedRustLanguageServer ignores non-macOS packaged binary paths", () => {
   assert.equal(resolvePackagedRustLanguageServer(
     {
       extensionPath: "/extensions/sage",
@@ -161,7 +161,7 @@ test("resolvePackagedRustLanguageServer maps Windows package binary names", () =
     },
     "win32",
     "x64",
-  ), "/extensions/sage/resources/bin/win32-x64/sage-ls.exe");
+  ), undefined);
 });
 
 test("buildLegacyPythonLanguageServerLaunch preserves old Python launch behavior", () => {

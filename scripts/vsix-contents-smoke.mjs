@@ -10,7 +10,7 @@ const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
 const platform = process.env.SAGE_VSIX_PLATFORM ?? process.platform;
 const arch = normalizeArch(process.env.SAGE_VSIX_ARCH ?? process.arch);
 const binaryDirectory = `${platform}-${arch}`;
-const binaryName = platform === "win32" ? "sage-ls.exe" : "sage-ls";
+const binaryName = "sage-ls";
 
 const requiredFiles = [
   "package.json",
@@ -48,6 +48,7 @@ const forbiddenRuntimeIgnorePatterns = [
 
 const checks = [];
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+pushCheck("VSIX binary target is macOS", platform === "darwin", binaryDirectory);
 for (const relativePath of requiredFiles) {
   pushCheck(
     `required file ${relativePath}`,
@@ -100,15 +101,13 @@ if (fs.existsSync(binaryPath)) {
     pushCheck(`packaged binary metadata arch ${arch}`, metadata.arch === arch, metadata.arch);
     pushCheck(`packaged binary metadata sha256`, metadata.sha256 === hash, metadata.sha256);
   }
-  if (platform !== "win32") {
-    const mode = fs.statSync(binaryPath).mode;
-    pushCheck(`packaged binary executable for ${binaryDirectory}`, Boolean(mode & 0o111), mode.toString(8));
-  }
+  const mode = fs.statSync(binaryPath).mode;
+  pushCheck(`packaged binary executable for ${binaryDirectory}`, Boolean(mode & 0o111), mode.toString(8));
 } else {
   pushCheck(
-    `packaged binary optional for ${binaryDirectory}`,
-    true,
-    "not staged; extension will fall back to PATH on this platform",
+    `packaged macOS binary exists for ${binaryDirectory}`,
+    false,
+    "run npm run package:rust-binary before packaging",
   );
 }
 

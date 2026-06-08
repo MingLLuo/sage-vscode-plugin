@@ -159,8 +159,10 @@ if (failures.length) {
 function platformBinaryEntry() {
   const platform = process.env.SAGE_VSIX_PLATFORM ?? process.platform;
   const arch = normalizeArch(process.env.SAGE_VSIX_ARCH ?? process.arch);
-  const binaryName = platform === "win32" ? "sage-ls.exe" : "sage-ls";
-  return `extension/resources/bin/${platform}-${arch}/${binaryName}`;
+  if (platform !== "darwin") {
+    return `unsupported-non-macos-platform/${platform}-${arch}/sage-ls`;
+  }
+  return `extension/resources/bin/${platform}-${arch}/sage-ls`;
 }
 
 function readZip(filePath) {
