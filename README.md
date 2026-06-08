@@ -128,7 +128,8 @@ performance against a local Sage checkout, persistent LSP latency, and real-file
 `SUPPORT.md`, and CI/release-gate boundaries.
 
 `npm run test:product-readiness` verifies the high-level editor experience matrix: interaction, language coverage,
-latency gates, debuggability, Mac packaging, future Sage-update resilience, and maintainability.
+visual polish, latency gates, debuggability, Mac packaging, future Sage-update resilience, and maintainability. Add
+`-- --json` for complete machine-readable details.
 
 `npm run package:vsix` rebuilds and stages the current macOS release `sage-ls` binary, verifies generated assets and
 package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`.

@@ -70,6 +70,8 @@ coverage remains testable without maintaining parallel manuals.
 Use Pyright and rust-analyzer as the comparison bar for user experience:
 
 - Interaction: commands should be discoverable, iconed, context-aware, and backed by a first-run walkthrough.
+- Visual polish: icon, gallery banner, command icons, walkthrough media, and visible status surfaces should feel coherent
+  and consistent with modern VS Code language extensions.
 - Latency: warm hover, definition, completion, references, and documentation queries should stay inside the release
   budgets tracked by the latency and real-file smoke tests.
 - Status: startup, indexing, cache hydration, source roots, docs runtime state, and degraded modes should be visible

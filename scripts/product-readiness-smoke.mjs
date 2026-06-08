@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
 const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
+const args = parseArgs(process.argv.slice(2));
 
 const rootPackage = readJson("package.json");
 const manifest = readJson("packages/extension-core/package.json");
@@ -38,18 +39,24 @@ checkInteractionReadiness();
 checkLspFeatureParity();
 checkPerformanceReadiness();
 checkDiagnosticsAndDebuggability();
+checkVisualPolishReadiness();
 checkMacPackagingReadiness();
 checkFutureSageUpdateReadiness();
 checkMaintenanceReadiness();
 checkModernPluginComparisonCoverage();
 
 const failures = checks.filter((check) => !check.pass);
-console.log(JSON.stringify({
+const report = {
   schema_version: 1,
   status: failures.length ? "failed" : "passed",
   summary: summarizeChecks(checks),
   checks,
-}, null, 2));
+};
+if (args.json) {
+  console.log(JSON.stringify(report, null, 2));
+} else {
+  printHuman(report);
+}
 if (failures.length > 0) {
   process.exitCode = 1;
 }
@@ -173,6 +180,28 @@ function checkDiagnosticsAndDebuggability() {
     && readText("scripts/debug-workbench.mjs").includes("latency budget exceeded"), "scripts/debug-workbench.mjs");
 }
 
+function checkVisualPolishReadiness() {
+  const iconPath = manifest.icon ? path.join(packageRoot, manifest.icon) : "";
+  const iconDimensions = iconPath && fs.existsSync(iconPath) ? pngDimensions(iconPath) : { width: 0, height: 0 };
+  pushCheck("visual-polish", "extension manifest has a packaged icon", manifest.icon === "resources/branding/icon.png"
+    && fs.existsSync(iconPath), manifest.icon);
+  pushCheck("visual-polish", "extension icon is 256x256 PNG", iconDimensions.width === 256 && iconDimensions.height === 256, iconDimensions);
+  pushCheck("visual-polish", "gallery banner is configured with restrained dark theme", manifest.galleryBanner?.theme === "dark"
+    && /^#[0-9a-f]{6}$/i.test(manifest.galleryBanner?.color ?? ""), manifest.galleryBanner);
+  pushCheck("visual-polish", "all commands have VS Code product icons", commands.every((command) => /^\$\([^)]+\)$/.test(command.icon ?? "")), commands.map((command) => ({
+    command: command.command,
+    icon: command.icon,
+  })));
+  const walkthroughSteps = contributes.walkthroughs?.flatMap((walkthrough) => walkthrough.steps ?? []) ?? [];
+  for (const step of walkthroughSteps) {
+    const markdownPath = step.media?.markdown;
+    const relativePath = markdownPath ? `packages/extension-core/${markdownPath.replace(/^\.\//, "")}` : "";
+    pushCheck("visual-polish", `walkthrough step has markdown media: ${step.id}`, Boolean(markdownPath) && exists(relativePath), markdownPath ?? step.id);
+  }
+  pushCheck("visual-polish", "visual polish is part of public readiness docs", includesCaseInsensitive(combinedDocs, "visual polish")
+    || includesCaseInsensitive(combinedDocs, "interface"), "docs/plugin-completeness.md");
+}
+
 function checkMacPackagingReadiness() {
   const packageRust = readText("scripts/package-rust-binary.mjs");
   const workflow = readText(".github/workflows/ci.yml");
@@ -237,13 +266,53 @@ function checkMaintenanceReadiness() {
 function checkModernPluginComparisonCoverage() {
   pushCheck("modern-plugin-comparison", "feature template asks for Pyright/rust-analyzer comparison", docs.featureTemplate.includes("Pyright")
     && docs.featureTemplate.includes("rust-analyzer"), ".github/ISSUE_TEMPLATE/feature_request.yml");
-  for (const dimension of ["interaction", "latency", "status", "workspace", "diagnostics"]) {
+  for (const dimension of ["interaction", "latency", "status", "workspace", "diagnostics", "visual polish"]) {
     pushCheck("modern-plugin-comparison", `public docs mention ${dimension} dimension`, includesCaseInsensitive(combinedDocs, dimension), dimension);
   }
   pushCheck("modern-plugin-comparison", "extension uses workspace trust and virtual workspace capability limits", manifest.capabilities?.untrustedWorkspaces?.supported === "limited"
     && (typeof manifest.capabilities?.virtualWorkspaces === "object"
       ? manifest.capabilities.virtualWorkspaces.supported === "limited"
       : manifest.capabilities?.virtualWorkspaces === "limited"), manifest.capabilities);
+}
+
+function printHuman(report) {
+  console.log(`Sage VS Code product readiness: ${report.status}`);
+  console.log("");
+  for (const [category, summary] of Object.entries(report.summary)) {
+    const total = summary.passed + summary.failed;
+    const marker = summary.failed === 0 ? "PASS" : "FAIL";
+    console.log(`${marker} ${category}: ${summary.passed}/${total}`);
+  }
+  if (report.status === "passed") {
+    console.log("");
+    console.log("All product readiness checks passed.");
+    console.log("Run `npm run test:product-readiness -- --json` for machine-readable details.");
+    return;
+  }
+  console.log("");
+  console.log("Failures:");
+  for (const failure of report.checks.filter((check) => !check.pass)) {
+    console.log(`- [${failure.category}] ${failure.name}`);
+    console.log(`  actual: ${JSON.stringify(failure.actual)}`);
+  }
+}
+
+function parseArgs(values) {
+  const parsed = { json: false };
+  for (const value of values) {
+    if (value === "--json") {
+      parsed.json = true;
+    } else if (value === "--help" || value === "-h") {
+      console.log(`Usage: node scripts/product-readiness-smoke.mjs [--json]
+
+Default output is a compact human-readable product readiness matrix.
+Use --json for complete machine-readable check details.`);
+      process.exit(0);
+    } else {
+      throw new Error(`Unknown argument: ${value}`);
+    }
+  }
+  return parsed;
 }
 
 function pushCheck(category, name, pass, actual) {
@@ -321,4 +390,16 @@ function readText(relativePath) {
 
 function readJson(relativePath) {
   return JSON.parse(readText(relativePath));
+}
+
+function pngDimensions(filePath) {
+  const buffer = fs.readFileSync(filePath);
+  const signature = buffer.subarray(0, 8).toString("hex");
+  if (signature !== "89504e470d0a1a0a") {
+    return { width: 0, height: 0, error: "not a png" };
+  }
+  return {
+    width: buffer.readUInt32BE(16),
+    height: buffer.readUInt32BE(20),
+  };
 }
