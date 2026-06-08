@@ -162,6 +162,7 @@ npm run test:vsix-install
 npm run test:cache-maintenance
 npm run test:repo-hygiene
 npm run test:native-smoke
+npm run test:product-readiness
 npm run test:performance
 npm run test:lsp-latency
 npm run test:extension-host
@@ -171,8 +172,10 @@ npm run test:full
 
 Use `npm run test:ci` for the public GitHub-compatible macOS gate. It intentionally avoids private real-file paths and
 desktop VS Code while still checking Rust, clippy, lint, tests, package contents, generated VSIX structure, cache
-maintenance, repository hygiene, and portable performance smoke. Use `npm run test:repo-hygiene` after changing issue templates,
-`SECURITY.md`, `SUPPORT.md`, PR templates, or gate definitions. Use `npm run test:release` for local release candidates
+maintenance, repository hygiene, product readiness, and portable performance smoke. Use `npm run test:repo-hygiene`
+after changing issue templates, `SECURITY.md`, `SUPPORT.md`, PR templates, or gate definitions. Use
+`npm run test:product-readiness` after changing interaction surfaces, performance gates, smoke fixtures, packaging, or
+future Sage-update support. Use `npm run test:release` for local release candidates
 that have access to a Sage checkout and the real Sage-heavy smoke inputs. See `docs/process/ci-and-release-gates.md` for
 the exact split.
 

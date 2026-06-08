@@ -107,6 +107,7 @@ npm install
 npm run build
 npm run test:ci
 npm run test:repo-hygiene
+npm run test:product-readiness
 npm run package:rust-binary
 npm run package:vsix
 npm run test:vsix-install
@@ -125,6 +126,9 @@ performance against a local Sage checkout, persistent LSP latency, and real-file
 
 `npm run test:repo-hygiene` verifies public GitHub maintenance files such as issue templates, `SECURITY.md`,
 `SUPPORT.md`, and CI/release-gate boundaries.
+
+`npm run test:product-readiness` verifies the high-level editor experience matrix: interaction, language coverage,
+latency gates, debuggability, Mac packaging, future Sage-update resilience, and maintainability.
 
 `npm run package:vsix` rebuilds and stages the current macOS release `sage-ls` binary, verifies generated assets and
 package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`.

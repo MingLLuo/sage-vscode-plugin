@@ -17,6 +17,8 @@ reproducible while local release candidates still exercise real Sage-heavy workl
 - Cache-maintenance smoke.
 - Repository hygiene smoke for GitHub issue templates, PR template, `SECURITY.md`, `SUPPORT.md`, `.gitattributes`,
   `.editorconfig`, and gate boundaries.
+- Product readiness smoke for interaction, language coverage, latency gates, debuggability, Mac packaging, future Sage
+  update resilience, and maintainability.
 - Performance smoke with `--skip-workbench`; this reports a structured skip when no Sage source checkout is present.
 - `git diff --check` for whitespace errors.
 

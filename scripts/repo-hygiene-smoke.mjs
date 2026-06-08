@@ -38,6 +38,8 @@ pushCheck("test:ci includes repo hygiene", includesScript("test:ci", "npm run te
 pushCheck("test:release includes repo hygiene", includesScript("test:release", "npm run test:repo-hygiene"), scripts["test:release"]);
 pushCheck("test:ci includes generated asset drift check", includesScript("test:ci", "npm run test:generated-assets"), scripts["test:ci"]);
 pushCheck("test:release includes generated asset drift check", includesScript("test:release", "npm run test:generated-assets"), scripts["test:release"]);
+pushCheck("test:ci includes product readiness smoke", includesScript("test:ci", "npm run test:product-readiness"), scripts["test:ci"]);
+pushCheck("test:release includes product readiness smoke", includesScript("test:release", "npm run test:product-readiness"), scripts["test:release"]);
 
 for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:native-smoke", "test:extension-host"]) {
   pushCheck(`test:ci excludes local-only ${localOnly}`, !includesScript("test:ci", localOnly), scripts["test:ci"]);

@@ -60,6 +60,21 @@ coverage remains testable without maintaining parallel manuals.
 
 - `npm run test --workspace sage-vscode-extension`
 - `npm run test:debug-web`
+- `npm run test:product-readiness`
 - `npm run test:lsp-latency`
 - `npm run test:real-file-smoke`
 - `npm run test:extension-host`
+
+## Modern Plugin Alignment
+
+Use Pyright and rust-analyzer as the comparison bar for user experience:
+
+- Interaction: commands should be discoverable, iconed, context-aware, and backed by a first-run walkthrough.
+- Latency: warm hover, definition, completion, references, and documentation queries should stay inside the release
+  budgets tracked by the latency and real-file smoke tests.
+- Status: startup, indexing, cache hydration, source roots, docs runtime state, and degraded modes should be visible
+  through the status bar, index/docs status commands, and support bundle.
+- Workspace: ordinary Python projects should not be forced into Sage analysis; Sage-heavy Python and Cython projects
+  should opt in predictably.
+- Diagnostics: syntax diagnostics, UX self-check output, support bundles, and performance issue templates should make
+  failures reproducible without exposing private source contents.

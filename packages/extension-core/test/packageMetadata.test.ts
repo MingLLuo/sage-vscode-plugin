@@ -204,6 +204,7 @@ test("release scripts cover packaged Rust binaries and real Sage smoke gates", (
     "npm run test:vsix-install",
     "npm run test:cache-maintenance",
     "npm run test:repo-hygiene",
+    "npm run test:product-readiness",
     "npm run test:performance -- --skip-workbench",
     "npm run test:lsp-latency",
     "npm run test:real-file-smoke",
