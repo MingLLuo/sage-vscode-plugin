@@ -7,6 +7,7 @@ This is the shortest path to use the Sage VS Code extension from this repository
 ```bash
 npm install
 npm run package:vsix
+npm run doctor:mac
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
 
@@ -44,6 +45,9 @@ Leave `sage.analysis.sourceRoots` empty if you want the extension to discover ne
 explicitly when you want faster and more predictable indexing.
 
 ## Check That It Works
+
+Before opening VS Code, `npm run doctor:mac` should report `ready` or `usable-with-warnings`. If it reports
+`action-needed`, run the listed command, usually `npm run package:vsix`, then run the doctor again.
 
 Run these commands from the VS Code command palette:
 

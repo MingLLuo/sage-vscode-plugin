@@ -13,6 +13,7 @@ Install and use the current local macOS build:
 ```bash
 npm install
 npm run package:vsix
+npm run doctor:mac
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
 
@@ -133,6 +134,10 @@ visual polish, latency gates, debuggability, Mac packaging, future Sage-update r
 
 `npm run package:vsix` rebuilds and stages the current macOS release `sage-ls` binary, verifies generated assets and
 package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`.
+
+`npm run doctor:mac` checks the local Mac package, staged Rust language server, VS Code CLI, Sage runtime, and Sage
+source root before you open a workspace. Use `-- --json` for a machine-readable report or `-- --strict` to fail when
+required packaged artifacts are missing.
 
 `npm run test:extension-host` should be used when the local machine can launch the desktop VS Code app.
 `npm run debug:web` starts the browser workbench surface used by MCP/Browser Use inspection.

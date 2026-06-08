@@ -155,6 +155,7 @@ Automated verification:
 cargo test
 npm run test:ci
 npm run package:vsix
+npm run doctor:mac
 npm run test
 npm run test:vsix-contents
 npm run test:vsix-package
@@ -169,6 +170,10 @@ npm run test:extension-host
 npm run test:release
 npm run test:full
 ```
+
+Use `npm run doctor:mac` when a local Mac package, VS Code CLI, Sage runtime, or Sage source root does not behave as
+expected. The command is diagnostic by default; add `-- --strict` for a shell-failing package-artifact check or
+`-- --json` for automation.
 
 Use `npm run test:ci` for the public GitHub-compatible macOS gate. It intentionally avoids private real-file paths and
 desktop VS Code while still checking Rust, clippy, lint, tests, package contents, generated VSIX structure, cache

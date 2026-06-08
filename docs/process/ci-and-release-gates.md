@@ -55,6 +55,9 @@ a machine where GUI automation is acceptable.
 - `npm run package:vsix` stages the current macOS release `sage-ls` binary before package-content checks, so direct local
   packaging does not reuse a stale server binary. Non-macOS script paths are retained only for defensive tests and are not
   a release promise.
+- `npm run doctor:mac` is a local diagnostic check for the current Mac package, staged Rust server, VS Code CLI, Sage
+  runtime, and Sage source root. It is intentionally not part of `test:ci` because a clean CI checkout may not have a
+  user-installed Sage runtime or VS Code CLI.
 - VSIX packaging is deterministic by default. The packager uses a fixed archive timestamp unless `SOURCE_DATE_EPOCH` is
   set, and `npm run test:vsix-package` verifies repeated packaging produces the same archive hash.
 - `npm run test:repo-hygiene` must pass after changing issue templates, PR templates, `SECURITY.md`, `SUPPORT.md`,

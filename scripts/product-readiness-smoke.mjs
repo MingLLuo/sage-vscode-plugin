@@ -204,8 +204,16 @@ function checkVisualPolishReadiness() {
 
 function checkMacPackagingReadiness() {
   const packageRust = readText("scripts/package-rust-binary.mjs");
+  const macDoctor = readText("scripts/macos-doctor.mjs");
   const workflow = readText(".github/workflows/ci.yml");
   pushCheck("mac-packaging", "GitHub CI uses macOS", workflow.includes("runs-on: macos-latest"), ".github/workflows/ci.yml");
+  pushCheck("mac-packaging", "macOS doctor script is registered", scripts["doctor:mac"] === "node scripts/macos-doctor.mjs"
+    && exists("scripts/macos-doctor.mjs"), scripts["doctor:mac"]);
+  pushCheck("mac-packaging", "macOS doctor covers package, VS Code, Sage runtime, and source root", macDoctor.includes("VSIX package exists")
+    && macDoctor.includes("packaged Rust language server")
+    && macDoctor.includes("VS Code CLI")
+    && macDoctor.includes("Sage runtime")
+    && macDoctor.includes("Sage source root"), "scripts/macos-doctor.mjs");
   pushCheck("mac-packaging", "packaging supports Apple Silicon and Intel Mac", packageRust.includes("darwin-arm64")
     && packageRust.includes("darwin-x64"), "scripts/package-rust-binary.mjs");
   pushCheck("mac-packaging", "packaging rejects non-macOS release targets", packageRust.includes("This preview only stages macOS binaries")
