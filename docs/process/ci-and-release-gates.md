@@ -19,6 +19,8 @@ reproducible while local release candidates still exercise real Sage-heavy workl
   `.editorconfig`, and gate boundaries.
 - Product readiness smoke for interaction, language coverage, visual polish, latency gates, debuggability, Mac packaging,
   future Sage update resilience, and maintainability.
+- Offline reference export smoke for the static `.sage-reference/` viewer, search index, source shards, and private-path
+  stripping.
 - Performance smoke with `--skip-workbench`; this reports a structured skip when no Sage source checkout is present.
 - `git diff --check` for whitespace errors.
 

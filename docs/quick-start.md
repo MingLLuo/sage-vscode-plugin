@@ -68,6 +68,18 @@ In a working setup, hover, definition, completion, references, rename preview, s
 documentation should respond from the Rust language server. Cold indexing can take longer; warm hover and definition
 queries should be fast after the index is hydrated.
 
+## Share an Offline Reference
+
+To share a readable project reference without requiring VS Code, Sage, or this extension on another machine:
+
+```bash
+npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src
+```
+
+Open `/path/to/project/.sage-reference/index.html` in a browser. The offline reference viewer includes search, symbol
+details, documentation, definitions, references, source snippets, light/dark theme, and URL hashes such as
+`#symbol=PolynomialRing`. It stores virtual paths only, not local home paths.
+
 ## Develop the Extension Without Installing
 
 ```bash

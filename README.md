@@ -40,6 +40,19 @@ workspace setting:
 See [Quick Start](./docs/quick-start.md) for the short user path.
 Use [Install and Configure](./docs/install-and-configure.md) for the full reference.
 
+## Offline Reference Export
+
+Generate a shareable static reference viewer for a project:
+
+```bash
+npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src
+```
+
+The command writes `/path/to/project/.sage-reference/index.html`. Open that file directly in a browser to search symbols,
+read docs, inspect definitions, and follow references without VS Code, this plugin, Sage, or a local server. The exporter
+uses virtual paths such as `project://src/demo.py` and `sage://sage/rings/...`; generated packages are checked so local
+home paths are not leaked.
+
 ## Goals
 
 - Deliver a maintainable Sage editor experience for `.sage` files.
@@ -110,6 +123,7 @@ npm run build
 npm run test:ci
 npm run test:repo-hygiene
 npm run test:product-readiness
+npm run test:reference-export
 npm run package:rust-binary
 npm run package:vsix
 npm run test:vsix-install
@@ -132,6 +146,9 @@ performance against a local Sage checkout, persistent LSP latency, and real-file
 `npm run test:product-readiness` verifies the high-level editor experience matrix: interaction, language coverage,
 visual polish, latency gates, debuggability, Mac packaging, future Sage-update resilience, and maintainability. Add
 `-- --json` for complete machine-readable details.
+
+`npm run test:reference-export` generates a temporary `.sage-reference` package and verifies the static viewer, source
+shards, search index, keyboard/hash interactions, documentation rendering, and private-path stripping.
 
 `npm run package:vsix` rebuilds and stages the current macOS release `sage-ls` binary, verifies generated assets and
 package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`.

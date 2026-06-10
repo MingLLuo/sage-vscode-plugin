@@ -31,6 +31,8 @@ const scripts = packageJson.scripts ?? {};
 pushCheck("test:repo-hygiene script is registered", scripts["test:repo-hygiene"] === "node scripts/repo-hygiene-smoke.mjs", scripts["test:repo-hygiene"]);
 pushCheck("configure:workspace script is registered", scripts["configure:workspace"] === "node scripts/configure-workspace.mjs", scripts["configure:workspace"]);
 pushCheck("doctor:mac script is registered", scripts["doctor:mac"] === "node scripts/macos-doctor.mjs", scripts["doctor:mac"]);
+pushCheck("export:reference script is registered", scripts["export:reference"] === "node scripts/export-reference.mjs", scripts["export:reference"]);
+pushCheck("test:reference-export script is registered", scripts["test:reference-export"] === "npm run build:debug-inspector && node scripts/reference-export-smoke.mjs", scripts["test:reference-export"]);
 pushCheck(
   "test:generated-assets script checks syntax and icon drift",
   scripts["test:generated-assets"] === "node scripts/sync-syntax-assets.mjs --check && node scripts/generate-extension-icon.mjs --check",
@@ -42,6 +44,8 @@ pushCheck("test:ci includes generated asset drift check", includesScript("test:c
 pushCheck("test:release includes generated asset drift check", includesScript("test:release", "npm run test:generated-assets"), scripts["test:release"]);
 pushCheck("test:ci includes product readiness smoke", includesScript("test:ci", "npm run test:product-readiness"), scripts["test:ci"]);
 pushCheck("test:release includes product readiness smoke", includesScript("test:release", "npm run test:product-readiness"), scripts["test:release"]);
+pushCheck("test:ci includes offline reference export smoke", includesScript("test:ci", "npm run test:reference-export"), scripts["test:ci"]);
+pushCheck("test:release includes offline reference export smoke", includesScript("test:release", "npm run test:reference-export"), scripts["test:release"]);
 
 for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:native-smoke", "test:extension-host"]) {
   pushCheck(`test:ci excludes local-only ${localOnly}`, !includesScript("test:ci", localOnly), scripts["test:ci"]);
@@ -110,7 +114,7 @@ const docs = [
   readText("docs/process/ci-and-release-gates.md"),
   readText("docs/developer-guide.md"),
 ].join("\n");
-for (const expected of ["configure:workspace", "doctor:mac", "test:repo-hygiene", "SECURITY.md", "SUPPORT.md", ".gitattributes", ".editorconfig"]) {
+for (const expected of ["configure:workspace", "doctor:mac", "export:reference", "test:reference-export", "test:repo-hygiene", "SECURITY.md", "SUPPORT.md", ".gitattributes", ".editorconfig"]) {
   pushCheck(`public docs mention ${expected}`, docs.includes(expected), expected);
 }
 
@@ -136,11 +140,22 @@ for (const relativePath of [
   "scripts/lsp-latency-smoke.mjs",
   "scripts/real-file-smoke.mjs",
   "scripts/macos-doctor.mjs",
+  "scripts/export-reference.mjs",
+  "scripts/reference-export-smoke.mjs",
   "scripts/dev-vscode.sh",
 ]) {
   const text = readText(relativePath);
   pushCheck(`${relativePath} avoids maintainer-private paths`, !containsPrivateHomePath(text), relativePath);
 }
+
+const referenceExporter = readText("scripts/export-reference.mjs");
+pushCheck("reference exporter writes static viewer entrypoint", referenceExporter.includes("index.html")
+  && referenceExporter.includes("assets/viewer.js")
+  && referenceExporter.includes("data/symbols.js"), "scripts/export-reference.mjs");
+pushCheck("reference exporter strips local home paths", referenceExporter.includes("sanitizeText")
+  && referenceExporter.includes("assertNoPrivatePaths"), "scripts/export-reference.mjs");
+pushCheck("reference exporter stores URL-shareable viewer state", referenceExporter.includes("restoreFromHash")
+  && referenceExporter.includes("history.replaceState"), "scripts/export-reference.mjs");
 
 const failures = checks.filter((check) => !check.pass);
 console.log(JSON.stringify({

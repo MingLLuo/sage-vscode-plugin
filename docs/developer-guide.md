@@ -38,6 +38,9 @@ current static-analysis baseline should be extended safely.
 - `scripts/debug-workbench.mjs`
   Local Browser Use debugging workbench. It serves smoke fixtures with TextMate scope matches, Rust semantic spans,
   diagnostics, symbols, and index/docs status without depending on VS Code Web screenshots.
+- `scripts/export-reference.mjs`
+  Static offline reference exporter. It writes `.sage-reference/index.html` plus local JS/CSS/data shards so a project can
+  be searched and read without VS Code, Sage, this extension, or a local server.
 - `scripts/cache-maintenance.mjs`
   Safe inventory and prune helper for root-aware Rust SQLite index caches. Inventory is the default; prune mode is a
   dry-run unless `--yes` is explicitly supplied.
@@ -165,6 +168,7 @@ npm run test:cache-maintenance
 npm run test:repo-hygiene
 npm run test:native-smoke
 npm run test:product-readiness
+npm run test:reference-export
 npm run test:performance
 npm run test:lsp-latency
 npm run test:extension-host
@@ -245,6 +249,11 @@ fails the run on known runtime regressions.
 `npm run debug:web` builds the Rust debug inspector and starts the local Browser Use workbench. Open the printed
 `http://127.0.0.1:<port>/` URL to inspect `08_highlighting_structures.sage`, native Cython fixtures, TextMate scopes,
 semantic tokens, diagnostics, symbols, and Rust index/docs status in a stable browser surface.
+
+`npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src` generates a shareable
+`.sage-reference/` static viewer for a project. `npm run test:reference-export` validates the generated manifest, symbol
+index, source shards, keyboard/hash viewer behavior, documentation rendering, and private-path stripping in a temporary
+fixture.
 
 `npm run cache:status` inventories root-aware Rust index caches without deleting files. Use `npm run cache:prune:dry-run`
 to preview old-cache cleanup; only the explicit `node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes`

@@ -39,6 +39,7 @@ checkInteractionReadiness();
 checkLspFeatureParity();
 checkPerformanceReadiness();
 checkDiagnosticsAndDebuggability();
+checkOfflineReferenceReadiness();
 checkVisualPolishReadiness();
 checkMacPackagingReadiness();
 checkFutureSageUpdateReadiness();
@@ -178,6 +179,35 @@ function checkDiagnosticsAndDebuggability() {
     && readText("scripts/debug-workbench.mjs").includes("Run UX Matrix"), "scripts/debug-workbench.mjs");
   pushCheck("debuggability", "debug web smoke validates query documentation and latency", readText("scripts/debug-workbench.mjs").includes("expected documentation payload")
     && readText("scripts/debug-workbench.mjs").includes("latency budget exceeded"), "scripts/debug-workbench.mjs");
+}
+
+function checkOfflineReferenceReadiness() {
+  const exporter = readText("scripts/export-reference.mjs");
+  const smoke = readText("scripts/reference-export-smoke.mjs");
+  pushCheck("offline-reference", "offline reference export script is registered", scripts["export:reference"] === "node scripts/export-reference.mjs"
+    && exists("scripts/export-reference.mjs"), scripts["export:reference"]);
+  pushCheck("offline-reference", "offline reference export smoke is registered", scripts["test:reference-export"] === "npm run build:debug-inspector && node scripts/reference-export-smoke.mjs"
+    && exists("scripts/reference-export-smoke.mjs"), scripts["test:reference-export"]);
+  pushCheck("offline-reference", "CI and release gates include offline reference export smoke", includesScript("test:ci", "npm run test:reference-export")
+    && includesScript("test:release", "npm run test:reference-export"), {
+    ci: scripts["test:ci"],
+    release: scripts["test:release"],
+  });
+  pushCheck("offline-reference", "exporter writes a static no-server viewer", exporter.includes(".sage-reference")
+    && exporter.includes("index.html")
+    && exporter.includes("assets/viewer.js")
+    && exporter.includes("data/manifest.js")
+    && exporter.includes("data/sources"), "scripts/export-reference.mjs");
+  pushCheck("offline-reference", "viewer supports search, hash restore, theme, references, and source lazy loading", exporter.includes("searchIndex")
+    && exporter.includes("restoreFromHash")
+    && exporter.includes("themeButton")
+    && exporter.includes("referenceList")
+    && exporter.includes("loadSource"), "scripts/export-reference.mjs");
+  pushCheck("offline-reference", "exporter strips private absolute paths", exporter.includes("sanitizeText")
+    && exporter.includes("assertNoPrivatePaths")
+    && smoke.includes("generated package avoids private paths"), "scripts/export-reference.mjs / scripts/reference-export-smoke.mjs");
+  pushCheck("offline-reference", "public docs explain offline reference export", combinedDocs.includes("export:reference")
+    && includesCaseInsensitive(combinedDocs, "offline reference"), "README.md / docs");
 }
 
 function checkVisualPolishReadiness() {

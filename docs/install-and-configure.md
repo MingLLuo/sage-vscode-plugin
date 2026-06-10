@@ -137,6 +137,9 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
 
 ## Command Reference
 
+- `npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src`: generate
+  `/path/to/project/.sage-reference/index.html`, a static offline reference viewer for sharing symbol docs, definitions,
+  references, and source snapshots without VS Code, Sage, this extension, or a local server.
 - `sage.openGettingStarted`: open the VS Code Getting Started walkthrough for first-run setup.
 - `sage.selectInterpreter`: choose a detected Sage runtime profile or a custom path.
 - `sage.configureWorkspace`: write a conservative workspace profile for standard Sage, Sage-heavy Python, native Cython,
@@ -210,6 +213,32 @@ check the `Sage Language Server` output channel for the resolved binary path.
   symbols, index/docs status, and UX matrix checks in a browser surface suitable for MCP-driven inspection.
 - The release performance gate is available through `npm run test:performance`. Set `SAGE_SOURCE_ROOT=/path/to/sage/src`
   when the Sage checkout is not beside this repository; use `-- --skip-workbench` to run only the release index budgets.
+
+## Offline Reference Package
+
+Use the offline reference export when you need a read-only project reference that another person can open locally without
+installing the Sage VS Code plugin or Sage:
+
+```bash
+npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src
+```
+
+The generated `.sage-reference/` directory contains only static files:
+
+- `index.html`: browser entrypoint.
+- `assets/viewer.css` and `assets/viewer.js`: light/dark interactive viewer.
+- `data/manifest.js`: project name, generated time, and counts.
+- `data/symbols.js`: symbol summaries, search index, references, and source metadata.
+- `data/sources/source-*.js`: lazily loaded source snapshots or snippets.
+
+The viewer is designed for quick reading and navigation: global search, grouped symbol list, source browser with line
+numbers, definition/reference highlights, documentation panel, recent history, copy actions, theme toggle, and URL hashes
+for sharing state. It is intentionally read-only; use VS Code for editing, rename, diagnostics, and live LSP behavior.
+
+By default, project source is snapshotted and Sage source is limited to related files. Use `--source-mode snippets` to
+reduce Sage source size, or `--source-mode none` when you only want symbol metadata and docs. The exporter writes virtual
+paths such as `project://src/main.py` and `sage://sage/rings/...`, sanitizes source/doc text, and fails if a generated
+package contains private local home paths.
 
 ## Current Limits
 
