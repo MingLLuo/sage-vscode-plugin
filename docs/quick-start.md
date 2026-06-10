@@ -8,6 +8,7 @@ This is the shortest path to use the Sage VS Code extension from this repository
 npm install
 npm run package:vsix
 npm run doctor:mac
+npm run configure:workspace -- --workspace /path/to/your/project --profile auto
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
 
@@ -15,9 +16,10 @@ Then open your Sage workspace in VS Code.
 
 ## First VS Code Setup
 
-1. Run `Sage: Open Getting Started`.
-2. Run `Sage: Select Interpreter` and choose a Sage executable.
-3. Run `Sage: Configure Workspace`.
+1. Run `npm run configure:workspace -- --workspace /path/to/your/project --profile auto` before opening VS Code, or run
+   `Sage: Configure Workspace` from the command palette after opening it.
+2. Run `Sage: Open Getting Started`.
+3. Run `Sage: Select Interpreter` if the script did not find Sage automatically.
 4. Pick the closest profile:
    - `Standard Sage workspace` for `.sage` files.
    - `Sage-heavy Python workspace` for `.py` files that import `sage.all`.
@@ -48,6 +50,12 @@ explicitly when you want faster and more predictable indexing.
 
 Before opening VS Code, `npm run doctor:mac` should report `ready` or `usable-with-warnings`. If it reports
 `action-needed`, run the listed command, usually `npm run package:vsix`, then run the doctor again.
+
+For projects outside this repository, the fastest fix is usually:
+
+```bash
+npm run configure:workspace -- --workspace /path/to/project --profile python --sage /path/to/sage --source-root /path/to/sage/src
+```
 
 Run these commands from the VS Code command palette:
 

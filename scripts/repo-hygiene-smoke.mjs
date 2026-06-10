@@ -29,6 +29,7 @@ for (const relativePath of requiredFiles) {
 const packageJson = readJson("package.json");
 const scripts = packageJson.scripts ?? {};
 pushCheck("test:repo-hygiene script is registered", scripts["test:repo-hygiene"] === "node scripts/repo-hygiene-smoke.mjs", scripts["test:repo-hygiene"]);
+pushCheck("configure:workspace script is registered", scripts["configure:workspace"] === "node scripts/configure-workspace.mjs", scripts["configure:workspace"]);
 pushCheck("doctor:mac script is registered", scripts["doctor:mac"] === "node scripts/macos-doctor.mjs", scripts["doctor:mac"]);
 pushCheck(
   "test:generated-assets script checks syntax and icon drift",
@@ -109,7 +110,7 @@ const docs = [
   readText("docs/process/ci-and-release-gates.md"),
   readText("docs/developer-guide.md"),
 ].join("\n");
-for (const expected of ["doctor:mac", "test:repo-hygiene", "SECURITY.md", "SUPPORT.md", ".gitattributes", ".editorconfig"]) {
+for (const expected of ["configure:workspace", "doctor:mac", "test:repo-hygiene", "SECURITY.md", "SUPPORT.md", ".gitattributes", ".editorconfig"]) {
   pushCheck(`public docs mention ${expected}`, docs.includes(expected), expected);
 }
 
@@ -131,6 +132,7 @@ for (const relativePath of [
   "docs/design/rust-lsp-v2.md",
   "packages/extension-core/README.md",
   "packages/extension-core/CHANGELOG.md",
+  "scripts/configure-workspace.mjs",
   "scripts/lsp-latency-smoke.mjs",
   "scripts/real-file-smoke.mjs",
   "scripts/macos-doctor.mjs",

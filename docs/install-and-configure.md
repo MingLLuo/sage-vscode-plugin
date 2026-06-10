@@ -7,6 +7,7 @@ Use this path when you want to try the extension quickly from this repository:
 ```bash
 npm install
 npm run package:vsix
+npm run configure:workspace -- --workspace /path/to/your/project --profile auto
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
 
@@ -58,6 +59,9 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
   workspace in an extension-development host.
 - Run `./scripts/dev-vscode.sh --bootstrap --python /path/to/python` when you want the helper script to install Node
   dependencies and editable-install the legacy `sage-lsp` package before opening VS Code.
+- Run `npm run configure:workspace -- --workspace /path/to/project --profile auto` when you want a cross-platform
+  command-line setup for `.sage`, Sage-heavy Python, Cython, or mixed research workspaces before opening VS Code. Add
+  `-- --sage /path/to/sage --source-root /path/to/sage/src` when Sage is not on `PATH`.
 - The sync and dev helper path is compatible with Node 20 and newer; it no longer depends on `import.meta.dirname`.
 
 ## Extension Development Host

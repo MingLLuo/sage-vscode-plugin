@@ -227,6 +227,13 @@ function checkMacPackagingReadiness() {
 }
 
 function checkFutureSageUpdateReadiness() {
+  const configureWorkspace = readText("scripts/configure-workspace.mjs");
+  pushCheck("future-sage-updates", "cross-platform workspace configure script is registered", scripts["configure:workspace"] === "node scripts/configure-workspace.mjs"
+    && exists("scripts/configure-workspace.mjs"), scripts["configure:workspace"]);
+  pushCheck("future-sage-updates", "workspace configure script can pin Sage runtime and source roots", configureWorkspace.includes("--sage")
+    && configureWorkspace.includes("--source-root")
+    && configureWorkspace.includes("sage.analysis.sourceRoots")
+    && configureWorkspace.includes("sage.interpreter.path"), "scripts/configure-workspace.mjs");
   for (const setting of [
     "sage.analysis.sourceRoots",
     "sage.analysis.extraPaths",
