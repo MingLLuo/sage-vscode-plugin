@@ -10,7 +10,10 @@ export class DocumentationPanel {
         "sageDocumentation",
         title,
         vscode.ViewColumn.Beside,
-        { enableFindWidget: true },
+        {
+          enableFindWidget: true,
+          enableScripts: false,
+        },
       );
       this.panel.onDidDispose(() => {
         this.panel = undefined;

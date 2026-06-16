@@ -21,6 +21,9 @@ test("renderDocumentationHtml converts headings, markers, lists, and inline code
   assert.match(html, /<code>sage\.graphs\.graph<\/code>/);
   assert.match(html, /<blockquote><code>kind:class<\/code> <code>source:py<\/code><\/blockquote>/);
   assert.match(html, /<ul><li>vertices<\/li><li>edges<\/li><\/ul>/);
+  assert.match(html, /<p class="eyebrow">Sage Documentation<\/p>/);
+  assert.match(html, /<p class="title">Graph<\/p>/);
+  assert.match(html, /<article class="card">/);
 });
 
 test("renderDocumentationHtml preserves Sage doctest code fences", () => {
@@ -42,4 +45,32 @@ test("renderDocumentationHtml preserves Sage doctest code fences", () => {
 
   assert.match(html, /<pre><code class="language-sage">sage: C = Combinations\(range\(3\)\); C\nCombinations of \[0, 1, 2\]\n\nsage: C\.cardinality\(\)\n8<\/code><\/pre>/);
   assert.match(html, /Parameter <code>mset<\/code> is shown as inline code\./);
+});
+
+test("renderDocumentationHtml uses a script-free webview shell", () => {
+  const html = renderDocumentationHtml("# PolynomialRing\n\nBuild a polynomial ring.");
+
+  assert.match(html, /Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';"/);
+  assert.match(html, /<title>PolynomialRing<\/title>/);
+  assert.doesNotMatch(html, /<script\b/);
+});
+
+test("renderDocumentationHtml handles empty docs and sanitizes language classes", () => {
+  const html = renderDocumentationHtml([
+    "",
+    "```sage onclick=alert(1)",
+    "x < y",
+    "```",
+  ].join("\n"));
+
+  assert.match(html, /<p class="title">Sage Documentation<\/p>/);
+  assert.match(html, /<code class="language-sage-onclick-alert-1-">x &lt; y<\/code>/);
+});
+
+test("renderDocumentationHtml escapes quoted content", () => {
+  const html = renderDocumentationHtml('# "Unsafe" <Symbol>\n\nUse `"quoted"` values.');
+
+  assert.match(html, /<title>&quot;Unsafe&quot; &lt;Symbol&gt;<\/title>/);
+  assert.match(html, /<h1>&quot;Unsafe&quot; &lt;Symbol&gt;<\/h1>/);
+  assert.match(html, /Use <code>&quot;quoted&quot;<\/code> values\./);
 });
