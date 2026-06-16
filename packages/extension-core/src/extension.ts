@@ -14,7 +14,6 @@ import { DocumentationPanel } from "./docsPanel";
 import { renderDocumentationMarkdown } from "./documentationRequest";
 import {
   formatEnvironmentDetails,
-  formatDocsStatusMessage,
   formatIndexStatusMessage,
   formatStatusBarText,
   formatStatusBarTooltip,
@@ -25,6 +24,7 @@ import {
 } from "./environmentPresentation";
 import { createOutputLogger } from "./extensionLogger";
 import { createLanguageClient, executeSageCommand, requestDocumentation, RUST_LSP_COMMANDS, rustIndexCacheDir } from "./languageClient";
+import { formatDocsStatusReport, formatIndexStatusReport } from "./statusReports";
 import {
   DEFAULT_INDEX_CACHE_KEEP_LATEST_DATABASES,
   DEFAULT_INDEX_CACHE_MAX_AGE_DAYS,
@@ -1386,7 +1386,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updateStatusBar();
       showStatusReport(
         "Sage Index Status",
-        formatIndexStatusMessage(status),
+        formatIndexStatusReport(status),
         "Sage index status written to the Sage output channel.",
       );
     }),
@@ -1400,7 +1400,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updateStatusBar();
       showStatusReport(
         "Sage Documentation Status",
-        formatDocsStatusMessage(status),
+        formatDocsStatusReport(status),
         "Sage documentation status written to the Sage output channel.",
       );
     }),

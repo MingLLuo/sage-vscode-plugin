@@ -181,6 +181,10 @@ function checkDiagnosticsAndDebuggability() {
     && readText("scripts/debug-workbench.mjs").includes("latency budget exceeded"), "scripts/debug-workbench.mjs");
   pushCheck("debuggability", "documentation webview supports find without enabling scripts", readText("packages/extension-core/src/docsPanel.ts").includes("enableFindWidget: true")
     && readText("packages/extension-core/src/docsPanel.ts").includes("enableScripts: false"), "packages/extension-core/src/docsPanel.ts");
+  pushCheck("debuggability", "index and docs status commands use readable reports", readText("packages/extension-core/src/statusReports.ts").includes("formatIndexStatusReport")
+    && readText("packages/extension-core/src/statusReports.ts").includes("Summary")
+    && readText("packages/extension-core/src/extension.ts").includes("formatIndexStatusReport(status)")
+    && readText("packages/extension-core/src/extension.ts").includes("formatDocsStatusReport(status)"), "packages/extension-core/src/statusReports.ts");
 }
 
 function checkOfflineReferenceReadiness() {

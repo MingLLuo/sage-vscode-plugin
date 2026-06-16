@@ -83,6 +83,9 @@ current static-analysis baseline should be extended safely.
   Normalizes documentation payloads into a render-friendly shape.
 - `src/docsPanel.ts`
   Owns the documentation webview lifecycle.
+- `src/statusReports.ts`
+  Formats index and documentation status payloads into readable output-channel reports. Keep command handlers thin and
+  put status presentation changes here.
 
 ## Key Language Server Modules
 
