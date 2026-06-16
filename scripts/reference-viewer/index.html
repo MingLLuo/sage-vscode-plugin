@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sage Offline Reference</title>
+  <link rel="stylesheet" href="./assets/viewer.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <h1 id="projectName">Sage Reference</h1>
+      <p id="projectMeta">Loading...</p>
+    </div>
+    <div class="toolbar">
+      <label class="searchbox">
+        <span class="visually-hidden">Search symbols</span>
+        <input id="searchInput" type="search" placeholder="Search symbols, modules, docs, paths" autocomplete="off">
+      </label>
+      <button id="themeButton" type="button" title="Toggle theme">Theme</button>
+    </div>
+  </header>
+  <nav class="mobile-tabs" aria-label="Reference panels">
+    <button type="button" data-panel="symbols">Symbols</button>
+    <button type="button" data-panel="source">Source</button>
+    <button type="button" data-panel="details">Details</button>
+  </nav>
+  <main class="layout">
+    <aside class="sidebar" data-panel-target="symbols">
+      <div class="section-title">
+        <span>Symbols</span>
+        <span id="resultCount">0</span>
+      </div>
+      <div id="symbolGroups" class="symbol-groups"></div>
+    </aside>
+    <section class="source-panel" data-panel-target="source">
+      <div class="panel-header">
+        <span id="sourceTitle">Source</span>
+        <span id="sourceHint"></span>
+      </div>
+      <pre id="sourceView" class="source-view"></pre>
+    </section>
+    <aside class="detail-panel" data-panel-target="details">
+      <div id="detailView" class="detail-view"></div>
+      <div class="section-title">References</div>
+      <div id="referenceList" class="reference-list"></div>
+      <div class="section-title">Recent</div>
+      <div id="recentList" class="recent-list"></div>
+    </aside>
+  </main>
+  <script src="./data/manifest.js"></script>
+  <script src="./data/symbols.js"></script>
+  <script src="./assets/viewer.js"></script>
+</body>
+</html>

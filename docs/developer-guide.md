@@ -41,6 +41,9 @@ current static-analysis baseline should be extended safely.
 - `scripts/export-reference.mjs`
   Static offline reference exporter. It writes `.sage-reference/index.html` plus local JS/CSS/data shards so a project can
   be searched and read without VS Code, Sage, this extension, or a local server.
+- `scripts/reference-viewer`
+  Source assets for the offline reference viewer. Keep presentation and browser interaction work here; the exporter
+  should stay focused on inspection, data shaping, sanitization, and file emission.
 - `scripts/cache-maintenance.mjs`
   Safe inventory and prune helper for root-aware Rust SQLite index caches. Inventory is the default; prune mode is a
   dry-run unless `--yes` is explicitly supplied.

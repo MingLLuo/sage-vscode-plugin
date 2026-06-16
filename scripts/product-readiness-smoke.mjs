@@ -183,6 +183,9 @@ function checkDiagnosticsAndDebuggability() {
 
 function checkOfflineReferenceReadiness() {
   const exporter = readText("scripts/export-reference.mjs");
+  const viewerHtml = readText("scripts/reference-viewer/index.html");
+  const viewerJs = readText("scripts/reference-viewer/viewer.js");
+  const viewerCss = readText("scripts/reference-viewer/viewer.css");
   const smoke = readText("scripts/reference-export-smoke.mjs");
   pushCheck("offline-reference", "offline reference export script is registered", scripts["export:reference"] === "node scripts/export-reference.mjs"
     && exists("scripts/export-reference.mjs"), scripts["export:reference"]);
@@ -194,15 +197,21 @@ function checkOfflineReferenceReadiness() {
     release: scripts["test:release"],
   });
   pushCheck("offline-reference", "exporter writes a static no-server viewer", exporter.includes(".sage-reference")
+    && exporter.includes("referenceViewerRoot")
+    && exporter.includes("fs.copyFile")
     && exporter.includes("index.html")
-    && exporter.includes("assets/viewer.js")
-    && exporter.includes("data/manifest.js")
-    && exporter.includes("data/sources"), "scripts/export-reference.mjs");
-  pushCheck("offline-reference", "viewer supports search, hash restore, theme, references, and source lazy loading", exporter.includes("searchIndex")
-    && exporter.includes("restoreFromHash")
-    && exporter.includes("themeButton")
-    && exporter.includes("referenceList")
-    && exporter.includes("loadSource"), "scripts/export-reference.mjs");
+    && exporter.includes("viewer.js")
+    && exporter.includes("manifest.js")
+    && exporter.includes("sources"), "scripts/export-reference.mjs");
+  pushCheck("offline-reference", "viewer supports search, hash restore, theme, references, and source lazy loading", viewerJs.includes("searchIndex")
+    && viewerJs.includes("restoreFromHash")
+    && viewerJs.includes("themeButton")
+    && viewerJs.includes("referenceList")
+    && viewerJs.includes("loadSource"), "scripts/reference-viewer/viewer.js");
+  pushCheck("offline-reference", "viewer assets are maintainable and responsive", exporter.includes("reference-viewer")
+    && viewerHtml.includes("mobile-tabs")
+    && viewerJs.includes("setPanel")
+    && viewerCss.includes("@media (max-width: 1100px)"), "scripts/reference-viewer");
   pushCheck("offline-reference", "exporter strips private absolute paths", exporter.includes("sanitizeText")
     && exporter.includes("assertNoPrivatePaths")
     && smoke.includes("generated package avoids private paths"), "scripts/export-reference.mjs / scripts/reference-export-smoke.mjs");

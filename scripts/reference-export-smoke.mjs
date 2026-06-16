@@ -81,6 +81,9 @@ pushCheck("viewer supports keyboard search shortcut", viewerText.includes("event
 pushCheck("viewer supports reference navigation shortcuts", viewerText.includes("event.key === \"[\"") && viewerText.includes("event.key === \"]\""), "assets/viewer.js");
 pushCheck("viewer renders detail documentation", viewerText.includes("symbol.doc") && viewerText.includes("full-doc"), "assets/viewer.js");
 pushCheck("viewer initializes lazy source shard store", viewerText.includes("window.__SAGE_REFERENCE_SOURCES__ = window.__SAGE_REFERENCE_SOURCES__ || {}"), "assets/viewer.js");
+pushCheck("viewer shows search result count", viewerText.includes("resultCount.textContent"), "assets/viewer.js");
+pushCheck("viewer supports narrow-screen panel switching", viewerText.includes("setPanel") && indexText.includes("mobile-tabs"), "index.html / assets/viewer.js");
+pushCheck("viewer shows source loading and error states", viewerText.includes("Loading source") && viewerText.includes("Failed to load source shard"), "assets/viewer.js");
 pushCheck("viewer does not preload source shards in index.html", !indexText.includes("data/sources/source-"), "index.html");
 pushCheck("viewer has light and dark themes", cssText.includes("html[data-theme=\"dark\"]") && cssText.includes("color-scheme"), "assets/viewer.css");
 pushCheck("generated package avoids private paths", !containsPrivateHomePath(readAllGeneratedText(outputRoot)), outputRoot);

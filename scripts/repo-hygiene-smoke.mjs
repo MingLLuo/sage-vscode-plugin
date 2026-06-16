@@ -143,6 +143,10 @@ for (const relativePath of [
   "scripts/macos-doctor.mjs",
   "scripts/export-reference.mjs",
   "scripts/reference-export-smoke.mjs",
+  "scripts/reference-viewer/index.html",
+  "scripts/reference-viewer/viewer.css",
+  "scripts/reference-viewer/viewer.js",
+  "scripts/reference-viewer/README.md",
   "scripts/dev-vscode.sh",
 ]) {
   const text = readText(relativePath);
@@ -150,13 +154,22 @@ for (const relativePath of [
 }
 
 const referenceExporter = readText("scripts/export-reference.mjs");
-pushCheck("reference exporter writes static viewer entrypoint", referenceExporter.includes("index.html")
-  && referenceExporter.includes("assets/viewer.js")
-  && referenceExporter.includes("data/symbols.js"), "scripts/export-reference.mjs");
+const referenceViewerHtml = readText("scripts/reference-viewer/index.html");
+const referenceViewerJs = readText("scripts/reference-viewer/viewer.js");
+const referenceViewerCss = readText("scripts/reference-viewer/viewer.css");
+pushCheck("reference exporter writes static viewer entrypoint", referenceExporter.includes("referenceViewerRoot")
+  && referenceExporter.includes("fs.copyFile")
+  && referenceExporter.includes("index.html")
+  && referenceExporter.includes("viewer.js")
+  && referenceExporter.includes("symbols.js"), "scripts/export-reference.mjs");
 pushCheck("reference exporter strips local home paths", referenceExporter.includes("sanitizeText")
   && referenceExporter.includes("assertNoPrivatePaths"), "scripts/export-reference.mjs");
-pushCheck("reference exporter stores URL-shareable viewer state", referenceExporter.includes("restoreFromHash")
-  && referenceExporter.includes("history.replaceState"), "scripts/export-reference.mjs");
+pushCheck("reference viewer is kept in maintainable static assets", referenceExporter.includes("reference-viewer")
+  && referenceViewerHtml.includes("mobile-tabs")
+  && referenceViewerJs.includes("restoreFromHash")
+  && referenceViewerCss.includes("html[data-theme=\"dark\"]"), "scripts/reference-viewer");
+pushCheck("reference viewer stores URL-shareable viewer state", referenceViewerJs.includes("restoreFromHash")
+  && referenceViewerJs.includes("history.replaceState"), "scripts/reference-viewer/viewer.js");
 
 const failures = checks.filter((check) => !check.pass);
 console.log(JSON.stringify({
