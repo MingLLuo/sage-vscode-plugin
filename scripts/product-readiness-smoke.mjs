@@ -193,6 +193,10 @@ function checkDiagnosticsAndDebuggability() {
     && readText("packages/extension-core/src/documentationFallback.ts").includes("Show Index Status")
     && readText("packages/extension-core/src/documentationFallback.ts").includes("Run UX Self Check")
     && readText("packages/extension-core/src/extension.ts").includes("documentationFallbackActions()"), "packages/extension-core/src/documentationFallback.ts");
+  pushCheck("debuggability", "status bar opens a consolidated troubleshooting menu", readText("packages/extension-core/src/statusMenu.ts").includes("sage.showEnvironmentDetails")
+    && readText("packages/extension-core/src/statusMenu.ts").includes("sage.showIndexStatus")
+    && readText("packages/extension-core/src/statusMenu.ts").includes("sage.copySupportBundle")
+    && readText("packages/extension-core/src/extension.ts").includes("STATUS_MENU_COMMAND"), "packages/extension-core/src/statusMenu.ts");
 }
 
 function checkOfflineReferenceReadiness() {

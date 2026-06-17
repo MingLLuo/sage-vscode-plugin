@@ -30,6 +30,7 @@ import {
 import { createOutputLogger } from "./extensionLogger";
 import { createLanguageClient, executeSageCommand, requestDocumentation, RUST_LSP_COMMANDS, rustIndexCacheDir } from "./languageClient";
 import { formatDocsStatusReport, formatIndexStatusReport } from "./statusReports";
+import { STATUS_MENU_COMMAND, statusMenuActions } from "./statusMenu";
 import {
   DEFAULT_INDEX_CACHE_KEEP_LATEST_DATABASES,
   DEFAULT_INDEX_CACHE_MAX_AGE_DAYS,
@@ -579,7 +580,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const presentationInput = buildEnvironmentPresentationInput(Boolean(languageClientOperation && !client));
     statusBarItem.text = formatStatusBarText(presentationInput);
     statusBarItem.tooltip = formatStatusBarTooltip(presentationInput);
-    statusBarItem.command = "sage.showEnvironmentDetails";
+    statusBarItem.command = STATUS_MENU_COMMAND;
     statusBarItem.show();
   };
 
@@ -950,6 +951,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         `${context.extension.id}#${GETTING_STARTED_WALKTHROUGH_ID}`,
         false,
       );
+    }),
+    vscode.commands.registerCommand(STATUS_MENU_COMMAND, async () => {
+      const picked = await vscode.window.showQuickPick(statusMenuActions(), {
+        title: "Sage Status",
+        placeHolder: "Open diagnostics, rebuild the index, or copy a support bundle.",
+        matchOnDescription: true,
+        matchOnDetail: true,
+      });
+      if (picked) {
+        await vscode.commands.executeCommand(picked.command);
+      }
     }),
     vscode.commands.registerCommand("sage.selectInterpreter", async () => {
       if (!(await ensureWorkspaceRuntimeAvailable("Selecting a Sage interpreter"))) {
