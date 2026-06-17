@@ -92,6 +92,9 @@ current static-analysis baseline should be extended safely.
 - `src/referenceQuickPick.ts`
   Contains VS Code-specific reference fallback UI. It converts LSP locations into editor locations, adds source-line
   previews, and opens the selected result.
+- `src/documentationFallback.ts`
+  Keeps the no-documentation action labels and command mapping in one place. Use it when adding diagnostics or recovery
+  actions for documentation misses.
 
 ## Key Language Server Modules
 

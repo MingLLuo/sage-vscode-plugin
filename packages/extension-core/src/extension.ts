@@ -11,6 +11,11 @@ import {
 import { readSettings } from "./configuration";
 import { SageCellCodeLensProvider } from "./cellCodeLens";
 import { DocumentationPanel } from "./docsPanel";
+import {
+  documentationFallbackActions,
+  documentationFallbackCommand,
+  documentationFallbackMessage,
+} from "./documentationFallback";
 import { renderDocumentationMarkdown } from "./documentationRequest";
 import {
   formatEnvironmentDetails,
@@ -1175,7 +1180,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
 
       if (!result) {
-        void vscode.window.showInformationMessage("No documentation available for the current symbol.");
+        const selectedAction = await vscode.window.showInformationMessage(
+          documentationFallbackMessage(selectedText),
+          ...documentationFallbackActions(),
+        );
+        if (selectedAction) {
+          await vscode.commands.executeCommand(documentationFallbackCommand(selectedAction));
+        }
         return;
       }
 

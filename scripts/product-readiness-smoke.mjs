@@ -189,6 +189,10 @@ function checkDiagnosticsAndDebuggability() {
     && readText("packages/extension-core/src/sageNavigation.ts").includes("referenceQuickPickLabel")
     && readText("packages/extension-core/src/referenceQuickPick.ts").includes("referenceLinePreview")
     && readText("packages/extension-core/src/extension.ts").includes(".filter(isLspLocationPayload)"), "packages/extension-core/src/referenceQuickPick.ts");
+  pushCheck("debuggability", "documentation misses offer status and self-check recovery actions", readText("packages/extension-core/src/documentationFallback.ts").includes("Show Docs Status")
+    && readText("packages/extension-core/src/documentationFallback.ts").includes("Show Index Status")
+    && readText("packages/extension-core/src/documentationFallback.ts").includes("Run UX Self Check")
+    && readText("packages/extension-core/src/extension.ts").includes("documentationFallbackActions()"), "packages/extension-core/src/documentationFallback.ts");
 }
 
 function checkOfflineReferenceReadiness() {
