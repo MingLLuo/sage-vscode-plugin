@@ -36,10 +36,12 @@ import {
 import { currentSageCell } from "./sageCells";
 import {
   isLspLocationPayload,
-  referenceQuickPickLabel,
   type LspLocationPayload,
-  type QuerySourceRange,
 } from "./sageNavigation";
+import {
+  locationFromLspPayload,
+  showReferencesQuickPick,
+} from "./referenceQuickPick";
 import {
   SageSourceTextDocumentProvider,
   SAGE_SOURCE_SCHEME,
@@ -261,52 +263,6 @@ function diagnosticCodeLabel(code: vscode.Diagnostic["code"]): string | number |
 
 function diagnosticRangeLabel(range: vscode.Range): string {
   return `${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`;
-}
-
-function locationFromLspPayload(payload: LspLocationPayload): vscode.Location | undefined {
-  try {
-    return new vscode.Location(
-      vscode.Uri.parse(payload.uri),
-      new vscode.Range(
-        payload.range.start.line,
-        payload.range.start.character,
-        payload.range.end.line,
-        payload.range.end.character,
-      ),
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-function sourceRangeFromLocation(location: vscode.Location): QuerySourceRange {
-  return {
-    start_line: location.range.start.line,
-    start_character: location.range.start.character,
-    end_line: location.range.end.line,
-    end_character: location.range.end.character,
-  };
-}
-
-async function showReferencesQuickPick(locations: vscode.Location[]): Promise<void> {
-  const picked = await vscode.window.showQuickPick(
-    locations.map((location) => ({
-      ...referenceQuickPickLabel(
-        location.uri.toString(),
-        sourceRangeFromLocation(location),
-        () => vscode.workspace.asRelativePath(location.uri, false),
-      ),
-      location,
-    })),
-    { placeHolder: "Select a Sage reference to open" },
-  );
-  if (!picked) {
-    return;
-  }
-  const document = await vscode.workspace.openTextDocument(picked.location.uri);
-  const editor = await vscode.window.showTextDocument(document);
-  editor.revealRange(picked.location.range, vscode.TextEditorRevealType.InCenterIfOutsideViewport);
-  editor.selection = new vscode.Selection(picked.location.range.start, picked.location.range.end);
 }
 
 function clearLanguageServerStatusRefresh(): void {

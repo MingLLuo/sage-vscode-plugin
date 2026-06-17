@@ -89,6 +89,9 @@ current static-analysis baseline should be extended safely.
 - `src/sageNavigation.ts`
   Holds pure navigation helpers for definition targets, LSP location payload validation, and reference quick-pick labels.
   Keep request handling in `extension.ts`, but keep reference display formatting here.
+- `src/referenceQuickPick.ts`
+  Contains VS Code-specific reference fallback UI. It converts LSP locations into editor locations, adds source-line
+  previews, and opens the selected result.
 
 ## Key Language Server Modules
 

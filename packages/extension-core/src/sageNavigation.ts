@@ -94,14 +94,16 @@ export function referenceQuickPickLabel(
   uri: string,
   range: QuerySourceRange,
   asRelativePath: (uri: string) => string,
+  previewLine?: string,
 ): ReferenceQuickPickLabel {
   const line = range.start_line + 1;
   const column = range.start_character + 1;
   const relativePath = asRelativePath(uri);
+  const trimmedPreview = previewLine?.trim();
   return {
     label: `${relativePath}:${line}:${column}`,
     description: `${line}:${column}`,
-    detail: uri,
+    detail: trimmedPreview ? `${trimmedPreview}\n${uri}` : uri,
   };
 }
 

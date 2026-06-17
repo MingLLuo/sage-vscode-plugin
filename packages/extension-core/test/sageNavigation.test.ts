@@ -138,3 +138,24 @@ test("referenceQuickPickLabel includes path, position, and uri detail", () => {
     },
   );
 });
+
+test("referenceQuickPickLabel includes source preview when available", () => {
+  assert.deepEqual(
+    referenceQuickPickLabel(
+      "file:///workspace/src/example.sage",
+      {
+        start_line: 3,
+        start_character: 4,
+        end_line: 3,
+        end_character: 12,
+      },
+      () => "src/example.sage",
+      "  result = PolynomialRing(QQ, 'x')  ",
+    ),
+    {
+      label: "src/example.sage:4:5",
+      description: "4:5",
+      detail: "result = PolynomialRing(QQ, 'x')\nfile:///workspace/src/example.sage",
+    },
+  );
+});

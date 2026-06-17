@@ -187,7 +187,8 @@ function checkDiagnosticsAndDebuggability() {
     && readText("packages/extension-core/src/extension.ts").includes("formatDocsStatusReport(status)"), "packages/extension-core/src/statusReports.ts");
   pushCheck("debuggability", "reference fallback uses validated payloads and readable quick-pick labels", readText("packages/extension-core/src/sageNavigation.ts").includes("isLspLocationPayload")
     && readText("packages/extension-core/src/sageNavigation.ts").includes("referenceQuickPickLabel")
-    && readText("packages/extension-core/src/extension.ts").includes(".filter(isLspLocationPayload)"), "packages/extension-core/src/sageNavigation.ts");
+    && readText("packages/extension-core/src/referenceQuickPick.ts").includes("referenceLinePreview")
+    && readText("packages/extension-core/src/extension.ts").includes(".filter(isLspLocationPayload)"), "packages/extension-core/src/referenceQuickPick.ts");
 }
 
 function checkOfflineReferenceReadiness() {
