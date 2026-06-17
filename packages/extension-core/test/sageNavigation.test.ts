@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 
 import {
   definitionTargetFromQuery,
+  isLspLocationPayload,
+  referenceQuickPickLabel,
+  sourceRangeFromLspLocation,
   sourceRangeFromUnknown,
 } from "../src/sageNavigation";
 import type { QueryResponse } from "../src/uxSelfCheck";
@@ -82,4 +85,56 @@ test("sourceRangeFromUnknown validates Rust query range payloads", () => {
     },
   );
   assert.equal(sourceRangeFromUnknown({ start_line: 1 }), undefined);
+});
+
+test("isLspLocationPayload validates reference payload shape", () => {
+  const payload = {
+    uri: "file:///workspace/example.sage",
+    range: {
+      start: { line: 2, character: 4 },
+      end: { line: 2, character: 11 },
+    },
+  };
+
+  assert.equal(isLspLocationPayload(payload), true);
+  assert.equal(isLspLocationPayload({ ...payload, uri: 12 }), false);
+  assert.equal(isLspLocationPayload({ ...payload, range: { start: { line: 2 } } }), false);
+});
+
+test("sourceRangeFromLspLocation normalizes LSP ranges for reference display", () => {
+  assert.deepEqual(
+    sourceRangeFromLspLocation({
+      uri: "file:///workspace/example.sage",
+      range: {
+        start: { line: 2, character: 4 },
+        end: { line: 2, character: 11 },
+      },
+    }),
+    {
+      start_line: 2,
+      start_character: 4,
+      end_line: 2,
+      end_character: 11,
+    },
+  );
+});
+
+test("referenceQuickPickLabel includes path, position, and uri detail", () => {
+  assert.deepEqual(
+    referenceQuickPickLabel(
+      "file:///workspace/src/example.sage",
+      {
+        start_line: 9,
+        start_character: 2,
+        end_line: 9,
+        end_character: 8,
+      },
+      () => "src/example.sage",
+    ),
+    {
+      label: "src/example.sage:10:3",
+      description: "10:3",
+      detail: "file:///workspace/src/example.sage",
+    },
+  );
 });

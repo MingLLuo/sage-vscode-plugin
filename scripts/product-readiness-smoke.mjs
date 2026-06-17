@@ -185,6 +185,9 @@ function checkDiagnosticsAndDebuggability() {
     && readText("packages/extension-core/src/statusReports.ts").includes("Summary")
     && readText("packages/extension-core/src/extension.ts").includes("formatIndexStatusReport(status)")
     && readText("packages/extension-core/src/extension.ts").includes("formatDocsStatusReport(status)"), "packages/extension-core/src/statusReports.ts");
+  pushCheck("debuggability", "reference fallback uses validated payloads and readable quick-pick labels", readText("packages/extension-core/src/sageNavigation.ts").includes("isLspLocationPayload")
+    && readText("packages/extension-core/src/sageNavigation.ts").includes("referenceQuickPickLabel")
+    && readText("packages/extension-core/src/extension.ts").includes(".filter(isLspLocationPayload)"), "packages/extension-core/src/sageNavigation.ts");
 }
 
 function checkOfflineReferenceReadiness() {
@@ -252,6 +255,9 @@ function checkMacPackagingReadiness() {
   const macDoctor = readText("scripts/macos-doctor.mjs");
   const workflow = readText(".github/workflows/ci.yml");
   pushCheck("mac-packaging", "GitHub CI uses macOS", workflow.includes("runs-on: macos-latest"), ".github/workflows/ci.yml");
+  pushCheck("mac-packaging", "GitHub CI caches and prefetches Rust dependencies", workflow.includes("Swatinem/rust-cache@v2")
+    && workflow.includes("cache-on-failure: true")
+    && workflow.includes("cargo fetch --locked"), ".github/workflows/ci.yml");
   pushCheck("mac-packaging", "macOS doctor script is registered", scripts["doctor:mac"] === "node scripts/macos-doctor.mjs"
     && exists("scripts/macos-doctor.mjs"), scripts["doctor:mac"]);
   pushCheck("mac-packaging", "macOS doctor covers package, VS Code, Sage runtime, and source root", macDoctor.includes("VSIX package exists")

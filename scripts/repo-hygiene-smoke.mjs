@@ -55,6 +55,9 @@ const workflow = readText(".github/workflows/ci.yml");
 pushCheck("GitHub workflow installs Node dependencies without a tracked lockfile", /npm install/.test(workflow) && !/package-lock\.json/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow does not enable setup-node npm cache without a lockfile", !/cache:\s*npm/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow runs on macOS for the maintained release target", /runs-on:\s*macos-latest/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow caches Rust dependencies", /Swatinem\/rust-cache@v2/.test(workflow)
+  && /cache-on-failure:\s*true/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow prefetches locked Rust dependencies", /cargo fetch --locked/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow runs macOS CI gate", /npm run test:ci/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow avoids local release gate", !/npm run test:release/.test(workflow), ".github/workflows/ci.yml");
 

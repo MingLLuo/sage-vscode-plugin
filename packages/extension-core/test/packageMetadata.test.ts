@@ -248,6 +248,9 @@ test("macOS CI gate is public-repository safe", () => {
   assert.match(workflow, /npm install/);
   assert.doesNotMatch(workflow, /package-lock\.json/);
   assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
+  assert.match(workflow, /Swatinem\/rust-cache@v2/);
+  assert.match(workflow, /cache-on-failure:\s*true/);
+  assert.match(workflow, /cargo fetch --locked/);
   assert.match(workflow, /python -m pip install -e \.\/packages\/sage-lsp\[dev\]/);
   assert.match(workflow, /npm run test:ci/);
   assert.doesNotMatch(workflow, /npm run test:release/);

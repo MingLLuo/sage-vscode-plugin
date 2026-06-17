@@ -35,6 +35,12 @@ import {
 } from "./indexCacheMaintenance";
 import { currentSageCell } from "./sageCells";
 import {
+  isLspLocationPayload,
+  referenceQuickPickLabel,
+  type LspLocationPayload,
+  type QuerySourceRange,
+} from "./sageNavigation";
+import {
   SageSourceTextDocumentProvider,
   SAGE_SOURCE_SCHEME,
 } from "./sageSourceView";
@@ -242,14 +248,6 @@ function sourceRootContainsDocument(sourceRoots: readonly string[], documentPath
   });
 }
 
-interface LspLocationPayload {
-  uri: string;
-  range: {
-    start: { line: number; character: number };
-    end: { line: number; character: number };
-  };
-}
-
 function diagnosticCodeLabel(code: vscode.Diagnostic["code"]): string | number | undefined {
   if (typeof code === "string" || typeof code === "number") {
     return code;
@@ -281,16 +279,23 @@ function locationFromLspPayload(payload: LspLocationPayload): vscode.Location | 
   }
 }
 
-function formatLocationLabel(location: vscode.Location): string {
-  const line = location.range.start.line + 1;
-  const column = location.range.start.character + 1;
-  return `${vscode.workspace.asRelativePath(location.uri, false)}:${line}:${column}`;
+function sourceRangeFromLocation(location: vscode.Location): QuerySourceRange {
+  return {
+    start_line: location.range.start.line,
+    start_character: location.range.start.character,
+    end_line: location.range.end.line,
+    end_character: location.range.end.character,
+  };
 }
 
 async function showReferencesQuickPick(locations: vscode.Location[]): Promise<void> {
   const picked = await vscode.window.showQuickPick(
     locations.map((location) => ({
-      label: formatLocationLabel(location),
+      ...referenceQuickPickLabel(
+        location.uri.toString(),
+        sourceRangeFromLocation(location),
+        () => vscode.workspace.asRelativePath(location.uri, false),
+      ),
       location,
     })),
     { placeHolder: "Select a Sage reference to open" },
@@ -867,6 +872,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
               token,
             );
             const locations = (references ?? [])
+              .filter(isLspLocationPayload)
               .map(locationFromLspPayload)
               .filter((location): location is vscode.Location => Boolean(location));
             logger.info("navigation", "external Sage source references resolved", {
@@ -1257,6 +1263,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       const locations = (references ?? [])
+        .filter(isLspLocationPayload)
         .map(locationFromLspPayload)
         .filter((location): location is vscode.Location => Boolean(location));
 

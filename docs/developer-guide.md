@@ -86,6 +86,9 @@ current static-analysis baseline should be extended safely.
 - `src/statusReports.ts`
   Formats index and documentation status payloads into readable output-channel reports. Keep command handlers thin and
   put status presentation changes here.
+- `src/sageNavigation.ts`
+  Holds pure navigation helpers for definition targets, LSP location payload validation, and reference quick-pick labels.
+  Keep request handling in `extension.ts`, but keep reference display formatting here.
 
 ## Key Language Server Modules
 
