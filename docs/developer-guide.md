@@ -79,6 +79,9 @@ current static-analysis baseline should be extended safely.
 - `src/serverLaunch.ts`
   Resolves the Rust language-server binary from `sage.languageServer.rustPath`, `SAGE_LS_PATH`, local `target/*`
   builds, or `PATH`. The legacy Python launch resolver remains for migration tests.
+- `src/interpreterDiscovery.ts`
+  Finds Sage runtime/Python candidates and resolves quick-pick selections into configuration updates. Keep path probing
+  and selection handling here so `extension.ts` only applies settings and reports the result.
 - `src/documentationRequest.ts`
   Normalizes documentation payloads into a render-friendly shape.
 - `src/docsPanel.ts`

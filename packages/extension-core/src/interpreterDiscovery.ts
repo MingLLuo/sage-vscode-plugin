@@ -14,6 +14,16 @@ export interface InterpreterConfigurationUpdate {
   value: string;
 }
 
+export interface InterpreterSelectionSettings {
+  interpreterPath: string;
+  languageServerPythonPath: string;
+}
+
+export interface InterpreterSelectionPrompts {
+  runtimePath(initialValue: string): PromiseLike<string | undefined>;
+  languageServerPythonPath(initialValue: string): PromiseLike<string | undefined>;
+}
+
 export interface InterpreterCandidate extends vscode.QuickPickItem {
   interpreterPath?: string;
   languageServerPythonPath?: string;
@@ -150,6 +160,43 @@ export function discoverInterpreterCandidates(input: DiscoveryInput): Interprete
     },
   );
   return items;
+}
+
+export async function resolveInterpreterConfigurationUpdates(
+  picked: InterpreterCandidate,
+  settings: InterpreterSelectionSettings,
+  prompts: InterpreterSelectionPrompts,
+): Promise<InterpreterConfigurationUpdate[] | undefined> {
+  if (picked.selectionTarget === "languageServerAuto") {
+    return [{ section: "languageServer.pythonPath", value: "auto" }];
+  }
+
+  if (picked.selectionTarget === "runtimeCustom") {
+    const selection = await prompts.runtimePath(settings.interpreterPath);
+    if (!selection) {
+      return undefined;
+    }
+    return [{ section: "interpreter.path", value: selection }];
+  }
+
+  if (picked.selectionTarget === "languageServerCustom") {
+    const initialValue = settings.languageServerPythonPath === "auto" ? "" : settings.languageServerPythonPath;
+    const selection = await prompts.languageServerPythonPath(initialValue);
+    if (!selection) {
+      return undefined;
+    }
+    return [{ section: "languageServer.pythonPath", value: selection }];
+  }
+
+  if (picked.updates && picked.updates.length > 0) {
+    return picked.updates;
+  }
+
+  if (!picked.interpreterPath) {
+    return undefined;
+  }
+
+  return [{ section: "interpreter.path", value: picked.interpreterPath }];
 }
 
 function dedupeProfiles(profiles: EnvironmentProfile[]): EnvironmentProfile[] {

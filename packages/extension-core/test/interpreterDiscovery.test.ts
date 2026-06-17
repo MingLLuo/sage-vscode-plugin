@@ -4,7 +4,10 @@ import { chmodSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { discoverInterpreterCandidates } from "../src/interpreterDiscovery";
+import {
+  discoverInterpreterCandidates,
+  resolveInterpreterConfigurationUpdates,
+} from "../src/interpreterDiscovery";
 
 test("discoverInterpreterCandidates prioritizes local development and system Sage environments", () => {
   const tempRoot = mkdtempSync(path.join(os.tmpdir(), "sage-discovery-"));
@@ -53,6 +56,80 @@ test("discoverInterpreterCandidates prioritizes local development and system Sag
   assert.ok(items.some((item) => item.selectionTarget === "languageServerCustom"));
   assert.ok(items.some((item) => item.selectionTarget === "languageServerAuto"));
 });
+
+test("resolveInterpreterConfigurationUpdates maps environment and auto selections", async () => {
+  assert.deepEqual(
+    await resolveInterpreterConfigurationUpdates(
+      {
+        label: "Use auto-detected language-server Python",
+        selectionTarget: "languageServerAuto",
+      },
+      { interpreterPath: "/usr/bin/sage", languageServerPythonPath: "/usr/bin/python3" },
+      unusedPrompts(),
+    ),
+    [{ section: "languageServer.pythonPath", value: "auto" }],
+  );
+
+  assert.deepEqual(
+    await resolveInterpreterConfigurationUpdates(
+      {
+        label: "Detected",
+        selectionTarget: "environment",
+        updates: [
+          { section: "interpreter.path", value: "/opt/sage" },
+          { section: "languageServer.pythonPath", value: "/opt/python" },
+        ],
+      },
+      { interpreterPath: "/usr/bin/sage", languageServerPythonPath: "auto" },
+      unusedPrompts(),
+    ),
+    [
+      { section: "interpreter.path", value: "/opt/sage" },
+      { section: "languageServer.pythonPath", value: "/opt/python" },
+    ],
+  );
+});
+
+test("resolveInterpreterConfigurationUpdates prompts for custom paths", async () => {
+  assert.deepEqual(
+    await resolveInterpreterConfigurationUpdates(
+      { label: "Custom Sage", selectionTarget: "runtimeCustom" },
+      { interpreterPath: "/old/sage", languageServerPythonPath: "auto" },
+      {
+        runtimePath: async (initialValue) => `${initialValue}-new`,
+        languageServerPythonPath: async () => {
+          throw new Error("unexpected language-server prompt");
+        },
+      },
+    ),
+    [{ section: "interpreter.path", value: "/old/sage-new" }],
+  );
+
+  assert.deepEqual(
+    await resolveInterpreterConfigurationUpdates(
+      { label: "Custom Python", selectionTarget: "languageServerCustom" },
+      { interpreterPath: "/usr/bin/sage", languageServerPythonPath: "auto" },
+      {
+        runtimePath: async () => {
+          throw new Error("unexpected runtime prompt");
+        },
+        languageServerPythonPath: async (initialValue) => initialValue || "/custom/python",
+      },
+    ),
+    [{ section: "languageServer.pythonPath", value: "/custom/python" }],
+  );
+});
+
+function unusedPrompts() {
+  return {
+    runtimePath: async () => {
+      throw new Error("unexpected runtime prompt");
+    },
+    languageServerPythonPath: async () => {
+      throw new Error("unexpected language-server prompt");
+    },
+  };
+}
 
 function assertEnvironmentCandidate(
   items: ReturnType<typeof discoverInterpreterCandidates>,

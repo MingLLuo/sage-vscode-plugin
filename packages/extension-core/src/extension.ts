@@ -53,7 +53,7 @@ import {
 } from "./sageSourceView";
 import {
   discoverInterpreterCandidates,
-  type InterpreterCandidate,
+  resolveInterpreterConfigurationUpdates,
 } from "./interpreterDiscovery";
 import { shouldRestartLanguageServer } from "./serverRestart";
 import { SageTerminalManager } from "./terminalManager";
@@ -972,7 +972,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
 
-      const updates = await resolveInterpreterConfigurationUpdate(picked, settings);
+      const updates = await resolveInterpreterConfigurationUpdates(picked, settings, {
+        runtimePath: (initialValue) => vscode.window.showInputBox({
+          title: "Sage runtime path",
+          value: initialValue,
+          prompt: "Enter the Sage executable used for run commands and the managed REPL.",
+        }),
+        languageServerPythonPath: (initialValue) => vscode.window.showInputBox({
+          title: "Language-server Python path",
+          value: initialValue,
+          prompt: "Enter the Python executable used to run sage_lsp.",
+        }),
+      });
       if (!updates || updates.length === 0) {
         return;
       }
@@ -991,6 +1002,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (shouldResetRepl) {
         terminalManager.resetReplTerminal();
       }
+      showExecutionStatus("Sage environment updated", {
+        settings: updates.map((update) => `sage.${update.section}`).join(","),
+      });
     }),
     vscode.commands.registerCommand("sage.restartLanguageServer", async () => {
       if (!(await ensureWorkspaceRuntimeAvailable("Restarting the Sage language server"))) {
@@ -1503,47 +1517,4 @@ export async function deactivate(): Promise<void> {
       languageClientManagedShutdown = false;
     }
   }
-}
-
-async function resolveInterpreterConfigurationUpdate(
-  picked: InterpreterCandidate,
-  settings: ReturnType<typeof readSettings>,
-): Promise<Array<{ section: "interpreter.path" | "languageServer.pythonPath"; value: string }> | undefined> {
-  if (picked.selectionTarget === "languageServerAuto") {
-    return [{ section: "languageServer.pythonPath", value: "auto" }];
-  }
-
-  if (picked.selectionTarget === "runtimeCustom") {
-    const selection = await vscode.window.showInputBox({
-      title: "Sage runtime path",
-      value: settings.interpreterPath,
-      prompt: "Enter the Sage executable used for run commands and the managed REPL.",
-    });
-    if (!selection) {
-      return undefined;
-    }
-    return [{ section: "interpreter.path", value: selection }];
-  }
-
-  if (picked.selectionTarget === "languageServerCustom") {
-    const selection = await vscode.window.showInputBox({
-      title: "Language-server Python path",
-      value: settings.languageServerPythonPath === "auto" ? "" : settings.languageServerPythonPath,
-      prompt: "Enter the Python executable used to run sage_lsp.",
-    });
-    if (!selection) {
-      return undefined;
-    }
-    return [{ section: "languageServer.pythonPath", value: selection }];
-  }
-
-  if (picked.updates && picked.updates.length > 0) {
-    return picked.updates;
-  }
-
-  if (!picked.interpreterPath) {
-    return undefined;
-  }
-
-  return [{ section: "interpreter.path", value: picked.interpreterPath }];
 }
