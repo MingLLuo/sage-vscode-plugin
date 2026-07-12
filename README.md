@@ -10,8 +10,11 @@ manual plus automated smoke tests.
 
 Install and use the current local macOS build:
 
+Release packaging uses the exact Node version in `.node-version`, npm version in `package.json`, and Rust toolchain in
+`rust-toolchain.toml`. Select those versions before running the packaging commands.
+
 ```bash
-npm install
+npm ci
 npm run package:vsix
 npm run doctor:mac
 npm run configure:workspace -- --workspace /path/to/your/project --profile auto
@@ -118,7 +121,7 @@ home paths are not leaked.
 ## Quick Verification
 
 ```bash
-npm install
+npm ci
 npm run build
 npm run test:ci
 npm run test:repo-hygiene
@@ -167,7 +170,8 @@ when Sage is not on `PATH`.
 The VSIX package root includes its own `README.md`, `CHANGELOG.md`, and `LICENSE`.
 `npm run test:vsix-contents` verifies these release artifacts together with runtime resources.
 `npm run test:vsix-package` verifies the generated VSIX archive structure, production dependency closure,
-content-type coverage, and entry CRCs.
+content-type coverage, entry CRCs, compression and size limits, normalized file modes, repeated-build determinism, and
+that the packaged Rust binary does not expose build-machine paths.
 `npm run test:vsix-install` uses the VS Code CLI, when available, to install the generated VSIX into temporary user-data
 and extension directories without opening the desktop app.
 
@@ -181,7 +185,7 @@ node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes
 
 `npm run clean:dry-run` previews macOS local build and test artifacts that can be removed after packaging or validation.
 Use `npm run clean -- --yes` to remove those artifacts.
-Add `--deps` only when you also want to remove `node_modules`, local virtualenvs, and `package-lock.json`.
+Add `--deps` only when you also want to remove `node_modules` and local virtualenvs.
 
 For manual GUI smoke testing, run `npm run dev:vscode:smoke`, press `F5`, and verify the new
 `[Extension Development Host]` window shows `.sage` files as `SageMath` with a left status-bar item beginning `Sage:`.

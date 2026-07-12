@@ -55,7 +55,6 @@
     }
   },
   "activationEvents": [
-    "onStartupFinished",
     "onLanguage:sagemath",
     "onLanguage:sagemath-cython",
     "onLanguage:python",
@@ -65,6 +64,7 @@
     "workspaceContains:**/*.pyx",
     "workspaceContains:**/*.pxd",
     "workspaceContains:**/*.pxi",
+    "workspaceContains:**/*.spyx",
     "onCommand:sage.openGettingStarted",
     "onCommand:sage.selectInterpreter",
     "onCommand:sage.configureWorkspace",
@@ -84,14 +84,16 @@
   ],
   "main": "./out/src/extension.js",
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('node:fs').rmSync('out', { recursive: true, force: true })\"",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "lint": "tsc -p tsconfig.json --noEmit",
     "package": "npm run build",
     "test": "npm run build && node --test out/test/**/*.test.js",
-    "test:extension-host": "cargo build -p sage-ls && npm run build && node ./out/test-host/runTest.js",
+    "test:extension-host": "cargo build --locked -p sage-ls && npm run build && node ./out/test-host/runTest.js",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "jsonc-parser": "^3.3.1",
     "vscode-languageclient": "^9.0.1"
   },
   "devDependencies": {

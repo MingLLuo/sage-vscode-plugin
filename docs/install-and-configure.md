@@ -5,11 +5,14 @@
 Use this path when you want to try the extension quickly from this repository:
 
 ```bash
-npm install
+npm ci
 npm run package:vsix
 npm run configure:workspace -- --workspace /path/to/your/project --profile auto
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
+
+This packaging path requires the exact Node version in `.node-version`; `rust-toolchain.toml` selects the matching Rust
+compiler automatically.
 
 Open your Sage workspace in VS Code, then run:
 
@@ -42,8 +45,9 @@ Sage library. Leave it empty only when you want automatic nearby/runtime discove
 
 ## Development Bootstrap
 
-1. Install Node.js, Rust/Cargo, and Python 3.9 or newer.
-2. From the repository root, run `npm install`.
+1. Select the exact Node.js version from `.node-version` and the Rust/Cargo toolchain from `rust-toolchain.toml`; install
+   Python 3.9 or newer. The npm version is pinned by the root `packageManager` field.
+2. From the repository root, run `npm ci`.
 3. Build the Rust language server with `npm run build:rust`.
 4. Sync syntax assets with `npm run sync:syntax`.
 5. Build the workspace with `npm run build`.
@@ -62,7 +66,8 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
 - Run `npm run configure:workspace -- --workspace /path/to/project --profile auto` when you want a cross-platform
   command-line setup for `.sage`, Sage-heavy Python, Cython, or mixed research workspaces before opening VS Code. Add
   `-- --sage /path/to/sage --source-root /path/to/sage/src` when Sage is not on `PATH`.
-- The sync and dev helper path is compatible with Node 20 and newer; it no longer depends on `import.meta.dirname`.
+- Development commands require Node 22 or newer. Release packaging is stricter and accepts only the exact version in
+  `.node-version`, keeping compressed VSIX output reproducible across release runs.
 
 ## Extension Development Host
 

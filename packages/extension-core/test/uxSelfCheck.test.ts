@@ -3,9 +3,38 @@ import assert from "node:assert/strict";
 
 import {
   buildQueryRequestPayload,
+  diagnosticCodeLabel,
+  diagnosticRangeLabel,
   formatUxSelfCheckReport,
+  shouldRunFullUxSelfCheckQuery,
   type QueryResponse,
 } from "../src/uxSelfCheck";
+
+test("UX self-check helpers normalize workspace definitions and diagnostics", () => {
+  assert.equal(
+    shouldRunFullUxSelfCheckQuery(
+      { definition: { path: "/workspace/sage/local.py" } },
+      ["/workspace"],
+    ),
+    true,
+  );
+  assert.equal(
+    shouldRunFullUxSelfCheckQuery(
+      { definition: { path: "/workspace-copy/local.py" } },
+      ["/workspace"],
+    ),
+    false,
+  );
+  assert.equal(diagnosticCodeLabel({ value: "syntax-error" }), "syntax-error");
+  assert.equal(diagnosticCodeLabel({ value: true }), "true");
+  assert.equal(
+    diagnosticRangeLabel({
+      start: { line: 1, character: 2 },
+      end: { line: 3, character: 4 },
+    }),
+    "1:2-3:4",
+  );
+});
 
 test("buildQueryRequestPayload mirrors the active editor position and rename preview target", () => {
   assert.deepEqual(

@@ -10,10 +10,11 @@
 
 ## Current Quality Gates
 
-- `cargo test`
-- `cargo clippy --all-targets --all-features -- -D warnings`
+- `cargo test --locked`
+- `cargo clippy --locked --all-targets --all-features -- -D warnings`
 - `npm run lint`
 - `npm run test`
+- `npm run test:lsp-shutdown`
 - `npm run test:lsp-latency`
 - `npm run test:real-file-smoke`
 - `npm run test:extension-host`

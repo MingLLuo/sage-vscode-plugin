@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { assertPinnedNodeVersion } from "./package-toolchain.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
@@ -23,6 +24,10 @@ if (!codeCli) {
   }, null, 2));
   process.exit(0);
 }
+
+assertPinnedNodeVersion(repositoryRoot);
+stagePackagedRustBinary();
+buildExtension();
 
 const packageResult = spawnSync(
   process.execPath,
@@ -129,6 +134,32 @@ function findCodeCli() {
     }
   }
   return null;
+}
+
+function buildExtension() {
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const result = spawnSync(npmCommand, ["run", "build", "--workspace", "sage-vscode-extension"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    process.stderr.write(result.stdout);
+    process.stderr.write(result.stderr);
+    process.exit(result.status ?? 1);
+  }
+}
+
+function stagePackagedRustBinary() {
+  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+  const result = spawnSync(npmCommand, ["run", "package:rust-binary"], {
+    cwd: repositoryRoot,
+    encoding: "utf8",
+  });
+  if (result.status !== 0) {
+    process.stderr.write(result.stdout);
+    process.stderr.write(result.stderr);
+    process.exit(result.status ?? 1);
+  }
 }
 
 function runCode(args) {

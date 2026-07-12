@@ -33,7 +33,6 @@ const dependencyPaths = [
   "packages/syntax-pack/node_modules",
   ".venv",
   "venv",
-  "package-lock.json",
 ];
 
 const directoryNames = new Set([
@@ -227,7 +226,7 @@ function printHuman(report) {
   console.log(`Total size: ${formatBytes(report.totals.candidate_bytes)}`);
   if (report.mode === "dry-run") {
     console.log("Run `npm run clean -- --yes` to delete these artifacts.");
-    console.log("Add `--deps` only when you also want to remove dependencies and package-lock.json.");
+    console.log("Add `--deps` only when you also want to remove dependencies and virtual environments.");
   }
 }
 
@@ -253,7 +252,7 @@ function printUsageAndExit() {
   console.log(`Usage: node scripts/clean-artifacts.mjs [--yes] [--deps] [--json]
 
 Default mode is a dry run. Pass --yes to delete cleanup candidates.
-Pass --deps to also include node_modules, virtualenvs, and package-lock.json.`);
+Pass --deps to also include node_modules and virtualenvs.`);
   process.exit(0);
 }
 

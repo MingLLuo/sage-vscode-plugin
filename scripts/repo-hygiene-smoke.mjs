@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assertPinnedNodeVersion, pinnedNodeVersion } from "./package-toolchain.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
@@ -20,6 +21,12 @@ const requiredFiles = [
   ".github/ISSUE_TEMPLATE/bug_report.yml",
   ".github/ISSUE_TEMPLATE/performance_regression.yml",
   ".github/ISSUE_TEMPLATE/feature_request.yml",
+  ".node-version",
+  "package-lock.json",
+  "rust-toolchain.toml",
+  "scripts/build-packaged-rust-binary.mjs",
+  "scripts/check-package-toolchain.mjs",
+  "scripts/package-toolchain.mjs",
 ];
 
 for (const relativePath of requiredFiles) {
@@ -28,11 +35,61 @@ for (const relativePath of requiredFiles) {
 
 const packageJson = readJson("package.json");
 const scripts = packageJson.scripts ?? {};
+pushCheck("Node package manager is pinned", packageJson.packageManager === "npm@11.17.0", packageJson.packageManager);
+const expectedNodeVersion = pinnedNodeVersion(repositoryRoot);
+pushCheck("Node runtime is pinned", expectedNodeVersion === "22.23.1", expectedNodeVersion);
+let rejectsMismatchedNode = false;
+try {
+  assertPinnedNodeVersion(repositoryRoot, "0.0.0");
+} catch (error) {
+  rejectsMismatchedNode = String(error).includes(`requires Node ${expectedNodeVersion}`);
+}
+pushCheck("packaging rejects a mismatched Node runtime", rejectsMismatchedNode, expectedNodeVersion);
+let acceptsPinnedNode = true;
+try {
+  assertPinnedNodeVersion(repositoryRoot, expectedNodeVersion);
+} catch {
+  acceptsPinnedNode = false;
+}
+pushCheck("packaging accepts the exact pinned Node runtime", acceptsPinnedNode, expectedNodeVersion);
+const rustToolchain = readText("rust-toolchain.toml");
+pushCheck("Rust runtime is pinned", /channel\s*=\s*["']1\.92\.0["']/.test(rustToolchain), "rust-toolchain.toml");
+pushCheck(
+  "Rust lint and format components are pinned",
+  rustToolchain.includes('components = ["clippy", "rustfmt"]'),
+  "rust-toolchain.toml",
+);
+const packageLock = readJson("package-lock.json");
+const remoteLockEntries = Object.values(packageLock.packages ?? {}).filter(
+  (entry) => typeof entry?.resolved === "string" && entry.resolved.startsWith("https://"),
+);
+pushCheck(
+  "remote Node dependencies have integrity hashes",
+  remoteLockEntries.length > 0 && remoteLockEntries.every((entry) => typeof entry.integrity === "string"),
+  { remoteEntries: remoteLockEntries.length, hashedEntries: remoteLockEntries.filter((entry) => entry.integrity).length },
+);
 pushCheck("test:repo-hygiene script is registered", scripts["test:repo-hygiene"] === "node scripts/repo-hygiene-smoke.mjs", scripts["test:repo-hygiene"]);
 pushCheck("configure:workspace script is registered", scripts["configure:workspace"] === "node scripts/configure-workspace.mjs", scripts["configure:workspace"]);
 pushCheck("doctor:mac script is registered", scripts["doctor:mac"] === "node scripts/macos-doctor.mjs", scripts["doctor:mac"]);
 pushCheck("export:reference script is registered", scripts["export:reference"] === "node scripts/export-reference.mjs", scripts["export:reference"]);
 pushCheck("test:reference-export script is registered", scripts["test:reference-export"] === "npm run build:debug-inspector && node scripts/reference-export-smoke.mjs", scripts["test:reference-export"]);
+pushCheck("test:lsp-shutdown script is registered", scripts["test:lsp-shutdown"] === "npm run build:rust && node scripts/lsp-shutdown-smoke.mjs", scripts["test:lsp-shutdown"]);
+pushCheck(
+  "packaging toolchain check is registered",
+  scripts["check:package-toolchain"] === "node scripts/check-package-toolchain.mjs",
+  scripts["check:package-toolchain"],
+);
+pushCheck(
+  "Rust release packaging uses the locked reproducible builder",
+  includesScript("package:rust-binary", "npm run check:package-toolchain")
+    && includesScript("package:rust-binary", "node scripts/build-packaged-rust-binary.mjs"),
+  scripts["package:rust-binary"],
+);
+pushCheck(
+  "VSIX packaging checks the pinned toolchain before building",
+  scripts["package:vsix"]?.startsWith("npm run check:package-toolchain &&") === true,
+  scripts["package:vsix"],
+);
 pushCheck(
   "test:generated-assets script checks syntax and icon drift",
   scripts["test:generated-assets"] === "node scripts/sync-syntax-assets.mjs --check && node scripts/generate-extension-icon.mjs --check",
@@ -46,14 +103,20 @@ pushCheck("test:ci includes product readiness smoke", includesScript("test:ci", 
 pushCheck("test:release includes product readiness smoke", includesScript("test:release", "npm run test:product-readiness"), scripts["test:release"]);
 pushCheck("test:ci includes offline reference export smoke", includesScript("test:ci", "npm run test:reference-export"), scripts["test:ci"]);
 pushCheck("test:release includes offline reference export smoke", includesScript("test:release", "npm run test:reference-export"), scripts["test:release"]);
+pushCheck("test:ci includes LSP shutdown smoke", includesScript("test:ci", "npm run test:lsp-shutdown"), scripts["test:ci"]);
+pushCheck("test:release includes LSP shutdown smoke", includesScript("test:release", "npm run test:lsp-shutdown"), scripts["test:release"]);
 
 for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:native-smoke", "test:extension-host"]) {
   pushCheck(`test:ci excludes local-only ${localOnly}`, !includesScript("test:ci", localOnly), scripts["test:ci"]);
 }
 
 const workflow = readText(".github/workflows/ci.yml");
-pushCheck("GitHub workflow installs Node dependencies without a tracked lockfile", /npm install/.test(workflow) && !/package-lock\.json/.test(workflow), ".github/workflows/ci.yml");
-pushCheck("GitHub workflow does not enable setup-node npm cache without a lockfile", !/cache:\s*npm/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow installs locked Node dependencies", /npm ci/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow pins the declared npm version", /npm install --global npm@11\.17\.0/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow uses the pinned Node runtime", /node-version-file:\s*["']?\.node-version["']?/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow uses the pinned Rust runtime", /toolchain:\s*["']?1\.92\.0["']?/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow enables setup-node npm cache", /cache:\s*["']?npm["']?/.test(workflow)
+  && /cache-dependency-path:\s*package-lock\.json/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow runs on macOS for the maintained release target", /runs-on:\s*macos-latest/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow caches Rust dependencies", /Swatinem\/rust-cache@v2/.test(workflow)
   && /cache-on-failure:\s*true/.test(workflow), ".github/workflows/ci.yml");

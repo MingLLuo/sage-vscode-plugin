@@ -1,33 +1,49 @@
 import * as path from "node:path";
 
 import type { RunTarget } from "./settingsModel";
-import { buildShellCommand } from "./runtimeCommand";
 
-export interface InterpreterCommandInput {
+export interface RunFileProcessInput {
   interpreterPath: string;
   interpreterArgs: readonly string[];
   cleanupGeneratedPython?: boolean;
   runtimePythonPaths?: readonly string[];
   platform?: NodeJS.Platform;
+  environment?: NodeJS.ProcessEnv;
 }
 
-export function buildInterpreterCommand(input: InterpreterCommandInput): string {
-  return buildShellCommand([input.interpreterPath, ...input.interpreterArgs]);
+export interface RunFileProcessPlan {
+  command: string;
+  args: string[];
+  cwd: string;
+  environment: Record<string, string>;
+  cleanupPath?: string;
 }
 
-export function buildRunFileCommand(input: InterpreterCommandInput, filePath: string): string {
+export function buildRunFileProcessPlan(
+  input: RunFileProcessInput,
+  filePath: string,
+): RunFileProcessPlan {
   const platform = input.platform ?? process.platform;
-  const command = withRuntimePythonPath(
-    buildShellCommand([input.interpreterPath, ...input.interpreterArgs, filePath]),
-    runtimePythonPaths(filePath, input.runtimePythonPaths ?? []),
-    platform,
-  );
-  if (!input.cleanupGeneratedPython || !filePath.endsWith(".sage") || platform === "win32") {
-    return command;
-  }
+  const platformPath = platform === "win32" ? path.win32 : path;
+  const resolvedFilePath = platformPath.resolve(filePath);
+  const pythonPaths = runtimePythonPaths(resolvedFilePath, input.runtimePythonPaths ?? [], platform);
+  const inheritedPythonPath = input.environment === undefined
+    ? process.env.PYTHONPATH
+    : input.environment.PYTHONPATH;
+  const delimiter = platform === "win32" ? ";" : ":";
+  const pythonPath = [pythonPaths.join(delimiter), inheritedPythonPath]
+    .filter((entry): entry is string => Boolean(entry))
+    .join(delimiter);
 
-  const generatedPath = buildShellCommand([`${filePath}.py`]);
-  return `__sage_status=0; ${command} || __sage_status=$?; rm -f ${generatedPath}; exit $__sage_status`;
+  return {
+    command: input.interpreterPath,
+    args: [...input.interpreterArgs, resolvedFilePath],
+    cwd: platformPath.dirname(resolvedFilePath),
+    environment: pythonPath ? { PYTHONPATH: pythonPath } : {},
+    cleanupPath: input.cleanupGeneratedPython && resolvedFilePath.endsWith(".sage")
+      ? `${resolvedFilePath}.py`
+      : undefined,
+  };
 }
 
 export function buildReplLoadCommand(
@@ -37,13 +53,17 @@ export function buildReplLoadCommand(
   platform: NodeJS.Platform = process.platform,
 ): string {
   return [
-    buildReplPathBootstrapCommand(runtimePythonPaths(filePath, pythonPaths)),
+    buildReplPathBootstrapCommand(runtimePythonPaths(filePath, pythonPaths, platform), platform),
     buildReplLoadExpression(filePath, cleanupGeneratedPython, platform),
   ].filter(Boolean).join("; ");
 }
 
-export function buildReplPathBootstrapCommand(pythonPaths: readonly string[]): string {
-  const paths = dedupe(pythonPaths.map((candidate) => path.resolve(candidate)));
+export function buildReplPathBootstrapCommand(
+  pythonPaths: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const platformPath = platform === "win32" ? path.win32 : path;
+  const paths = dedupe(pythonPaths.map((candidate) => platformPath.resolve(candidate)));
   if (paths.length === 0) {
     return "";
   }
@@ -58,17 +78,16 @@ export function shouldRunInRepl(runTarget: RunTarget): boolean {
   return runTarget === "repl";
 }
 
-function runtimePythonPaths(filePath: string, configuredPaths: readonly string[]): string[] {
-  return dedupe([path.dirname(filePath), ...configuredPaths].map((candidate) => path.resolve(candidate)));
-}
-
-function withRuntimePythonPath(command: string, pythonPaths: readonly string[], platform = process.platform): string {
-  if (platform === "win32" || pythonPaths.length === 0) {
-    return command;
-  }
-
-  const joinedPaths = pythonPaths.join(":");
-  return `PYTHONPATH=${buildShellCommand([joinedPaths])}\${PYTHONPATH:+:$PYTHONPATH} ${command}`;
+function runtimePythonPaths(
+  filePath: string,
+  configuredPaths: readonly string[],
+  platform: NodeJS.Platform,
+): string[] {
+  const platformPath = platform === "win32" ? path.win32 : path;
+  return dedupe(
+    [platformPath.dirname(filePath), ...configuredPaths]
+      .map((candidate) => platformPath.resolve(candidate)),
+  );
 }
 
 function buildReplLoadExpression(

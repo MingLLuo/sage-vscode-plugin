@@ -1,3 +1,5 @@
+import path from "node:path";
+
 import {
   formatDocsStatusMessage,
   formatIndexStatusMessage,
@@ -111,6 +113,47 @@ export interface UxSelfCheckResult {
   passed: number;
   total: number;
   report: string;
+}
+
+export function shouldRunFullUxSelfCheckQuery(
+  query: QueryResponse | null | undefined,
+  workspaceFolders: readonly string[],
+): boolean {
+  const definitionPath = query?.definition?.path;
+  if (!definitionPath) {
+    return false;
+  }
+  const normalizedDefinition = path.resolve(definitionPath);
+  return workspaceFolders
+    .map((folder) => path.resolve(folder))
+    .some((folder) => normalizedDefinition === folder
+      || normalizedDefinition.startsWith(`${folder}${path.sep}`));
+}
+
+export function diagnosticCodeLabel(code: unknown): string | number | undefined {
+  if (typeof code === "string" || typeof code === "number") {
+    return code;
+  }
+  if (code && typeof code === "object" && "value" in code) {
+    const value = code.value;
+    return typeof value === "string" || typeof value === "number" ? value : String(value);
+  }
+  return undefined;
+}
+
+export function diagnosticRangeLabel(range: {
+  start: { line: number; character: number };
+  end: { line: number; character: number };
+}): string {
+  return `${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`;
+}
+
+export async function measureAsync<T>(
+  operation: () => Promise<T>,
+): Promise<{ value: T; elapsedMs: number }> {
+  const started = Date.now();
+  const value = await operation();
+  return { value, elapsedMs: Date.now() - started };
 }
 
 interface UxCheck {

@@ -8,9 +8,10 @@ reproducible while local release candidates still exercise real Sage-heavy workl
 `test:ci` is the GitHub Actions gate for the maintained macOS release path. It must not require private paths under
 `/Users/...`, a desktop VS Code app, or a working Sage runtime. It runs:
 
-- Rust tests and `cargo clippy --all-targets --all-features -- -D warnings`.
+- Locked Rust tests and `cargo clippy --locked --all-targets --all-features -- -D warnings`.
 - Syntax and extension lint.
 - TypeScript, debug workbench, and legacy Python regression tests through `npm run test`.
+- LSP shutdown smoke proving rebuild and cache-reconcile work cannot block restart or process exit.
 - Generated asset drift smoke for extension-local syntax assets, stale generated syntax files, and the deterministic
   package icon.
 - macOS Rust binary staging plus VSIX content/package smokes.
@@ -49,8 +50,9 @@ a machine where GUI automation is acceptable.
 
 ## Workflow Rules
 
-- GitHub Actions runs on `macos-latest`, installs Node and Python dependencies, restores Cargo build/cache state, runs
-  `cargo fetch --locked`, then executes `npm run test:ci`.
+- GitHub Actions runs on `macos-latest`, uses the exact Node and Rust versions declared by `.node-version` and
+  `rust-toolchain.toml`, installs Python dependencies, restores Cargo build/cache state, runs `cargo fetch --locked`,
+  then executes `npm run test:ci`.
 - Generated syntax assets must pass lint before build writes anything.
 - `npm run test:generated-assets` must pass after changing syntax resources, generated extension-local assets,
   `scripts/generate-extension-icon.mjs`, or package branding files. `npm run package:vsix` runs the same gate before
@@ -58,11 +60,17 @@ a machine where GUI automation is acceptable.
 - `npm run package:vsix` stages the current macOS release `sage-ls` binary before package-content checks, so direct local
   packaging does not reuse a stale server binary. Non-macOS script paths are retained only for defensive tests and are not
   a release promise.
+- VSIX package and install smokes also restage `sage-ls` unconditionally, so an existing binary cannot hide newer Rust
+  source changes.
+- Release Rust staging uses `cargo build --locked` and remaps repository, Cargo-home, and user-home source prefixes before
+  copying the binary. The VSIX smoke rejects binaries that retain build-machine home or repository paths.
 - `npm run doctor:mac` is a local diagnostic check for the current Mac package, staged Rust server, VS Code CLI, Sage
   runtime, and Sage source root. It is intentionally not part of `test:ci` because a clean CI checkout may not have a
   user-installed Sage runtime or VS Code CLI.
-- VSIX packaging is deterministic by default. The packager uses a fixed archive timestamp unless `SOURCE_DATE_EPOCH` is
-  set, and `npm run test:vsix-package` verifies repeated packaging produces the same archive hash.
+- VSIX packaging requires the exact Node runtime in `.node-version`, uses a fixed archive timestamp unless
+  `SOURCE_DATE_EPOCH` is set, normalizes regular-file modes to `0644` and `sage-ls` to `0755`, and enforces a 6 MiB
+  archive budget. `npm run test:vsix-package` rebuilds under both normal and restrictive umasks and verifies the archive
+  hash remains identical.
 - `npm run test:repo-hygiene` must pass after changing issue templates, PR templates, `SECURITY.md`, `SUPPORT.md`,
   `CONTRIBUTING.md`, `.gitattributes`, `.editorconfig`, or CI/release scripts.
 - New public gates should be added here, in `CONTRIBUTING.md`, and in the package metadata tests in the same change.

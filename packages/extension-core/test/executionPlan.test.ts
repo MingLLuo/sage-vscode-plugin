@@ -2,78 +2,107 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  buildInterpreterCommand,
   buildReplLoadCommand,
-  buildRunFileCommand,
+  buildRunFileProcessPlan,
   shouldRunInRepl,
 } from "../src/executionPlan";
 
-test("buildInterpreterCommand quotes interpreter arguments for REPL startup", () => {
-  assert.equal(
-    buildInterpreterCommand({
-      interpreterPath: "/Applications/Sage Math.app/Contents/MacOS/sage",
-      interpreterArgs: ["--nodotsage"],
-    }),
-    "\"/Applications/Sage Math.app/Contents/MacOS/sage\" --nodotsage",
-  );
-});
-
-test("buildRunFileCommand quotes interpreter and file paths", () => {
-  assert.equal(
-    buildRunFileCommand(
+test("buildRunFileProcessPlan keeps executable and arguments structured", () => {
+  assert.deepEqual(
+    buildRunFileProcessPlan(
       {
         interpreterPath: "/Applications/Sage Math.app/Contents/MacOS/sage",
         interpreterArgs: ["--nodotsage"],
         platform: "darwin",
+        environment: {},
       },
       "/tmp/example file.sage",
     ),
-    "PYTHONPATH=/tmp${PYTHONPATH:+:$PYTHONPATH} \"/Applications/Sage Math.app/Contents/MacOS/sage\" --nodotsage \"/tmp/example file.sage\"",
+    {
+      command: "/Applications/Sage Math.app/Contents/MacOS/sage",
+      args: ["--nodotsage", "/tmp/example file.sage"],
+      cwd: "/tmp",
+      environment: { PYTHONPATH: "/tmp" },
+      cleanupPath: undefined,
+    },
   );
 });
 
-test("buildRunFileCommand aligns terminal imports with configured runtime paths", () => {
-  assert.equal(
-    buildRunFileCommand(
+test("buildRunFileProcessPlan aligns imports with configured and inherited paths", () => {
+  assert.deepEqual(
+    buildRunFileProcessPlan(
       {
         interpreterPath: "sage",
         interpreterArgs: [],
         runtimePythonPaths: ["/workspace/vendor"],
         platform: "darwin",
+        environment: { PYTHONPATH: "/existing" },
       },
       "/workspace/src/example.sage",
     ),
-    "PYTHONPATH=/workspace/src:/workspace/vendor${PYTHONPATH:+:$PYTHONPATH} sage /workspace/src/example.sage",
+    {
+      command: "sage",
+      args: ["/workspace/src/example.sage"],
+      cwd: "/workspace/src",
+      environment: { PYTHONPATH: "/workspace/src:/workspace/vendor:/existing" },
+      cleanupPath: undefined,
+    },
   );
 });
 
-test("buildRunFileCommand optionally removes generated .sage.py files on POSIX shells", () => {
-  assert.equal(
-    buildRunFileCommand(
-      {
-        interpreterPath: "/Applications/Sage Math.app/Contents/MacOS/sage",
-        interpreterArgs: ["--nodotsage"],
-        cleanupGeneratedPython: true,
-        platform: "darwin",
-      },
-      "/tmp/example file.sage",
-    ),
-    "__sage_status=0; PYTHONPATH=/tmp${PYTHONPATH:+:$PYTHONPATH} \"/Applications/Sage Math.app/Contents/MacOS/sage\" --nodotsage \"/tmp/example file.sage\" || __sage_status=$?; rm -f \"/tmp/example file.sage.py\"; exit $__sage_status",
+test("buildRunFileProcessPlan tracks generated files for cleanup", () => {
+  const plan = buildRunFileProcessPlan(
+    {
+      interpreterPath: "sage",
+      interpreterArgs: [],
+      cleanupGeneratedPython: true,
+      platform: "darwin",
+      environment: {},
+    },
+    "/tmp/example file.sage",
   );
+
+  assert.equal(plan.cleanupPath, "/tmp/example file.sage.py");
 });
 
-test("buildRunFileCommand leaves Windows runs untouched even when cleanup is enabled", () => {
-  assert.equal(
-    buildRunFileCommand(
+test("buildRunFileProcessPlan does not expose shell metacharacters for evaluation", () => {
+  const filePath = "/tmp/$(touch owned); example.sage";
+  const plan = buildRunFileProcessPlan(
+    {
+      interpreterPath: "sage",
+      interpreterArgs: ["--nodotsage; echo unsafe"],
+      platform: "darwin",
+      environment: {},
+    },
+    filePath,
+  );
+
+  assert.equal(plan.command, "sage");
+  assert.deepEqual(plan.args, ["--nodotsage; echo unsafe", filePath]);
+});
+
+test("buildRunFileProcessPlan uses Windows paths and separators", () => {
+  assert.deepEqual(
+    buildRunFileProcessPlan(
       {
-        interpreterPath: "C:/SageMath/sage.exe",
+        interpreterPath: "C:\\SageMath\\sage.exe",
         interpreterArgs: [],
         cleanupGeneratedPython: true,
+        runtimePythonPaths: ["C:\\workspace\\vendor"],
         platform: "win32",
+        environment: { PYTHONPATH: "C:\\existing" },
       },
-      "C:/tmp/example.sage",
+      "C:\\workspace\\src\\example.sage",
     ),
-    "C:/SageMath/sage.exe C:/tmp/example.sage",
+    {
+      command: "C:\\SageMath\\sage.exe",
+      args: ["C:\\workspace\\src\\example.sage"],
+      cwd: "C:\\workspace\\src",
+      environment: {
+        PYTHONPATH: "C:\\workspace\\src;C:\\workspace\\vendor;C:\\existing",
+      },
+      cleanupPath: "C:\\workspace\\src\\example.sage.py",
+    },
   );
 });
 
@@ -100,8 +129,8 @@ test("buildReplLoadCommand optionally removes generated .sage.py files", () => {
 
 test("buildReplLoadCommand leaves Windows loads untouched when cleanup is enabled", () => {
   assert.equal(
-    buildReplLoadCommand("/tmp/example.sage", [], true, "win32"),
-    "import sys as __sage_vscode_sys; __sage_vscode_paths = [\"/tmp\"]; [__sage_vscode_sys.path.insert(0, __sage_vscode_path) for __sage_vscode_path in reversed(__sage_vscode_paths) if __sage_vscode_path not in __sage_vscode_sys.path]; load(\"/tmp/example.sage\")",
+    buildReplLoadCommand("C:\\tmp\\example.sage", [], true, "win32"),
+    "import sys as __sage_vscode_sys; __sage_vscode_paths = [\"C:\\\\tmp\"]; [__sage_vscode_sys.path.insert(0, __sage_vscode_path) for __sage_vscode_path in reversed(__sage_vscode_paths) if __sage_vscode_path not in __sage_vscode_sys.path]; load(\"C:\\\\tmp\\\\example.sage\")",
   );
 });
 

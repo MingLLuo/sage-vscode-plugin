@@ -17,4 +17,4 @@ repository focused on code, tests, and the current product state.
 | --- | --- | --- | --- |
 | V2-109 | Hot Sage symbol paths | done | Exact Sage lookups use materialized export caches and hot symbol candidates before broad SQLite search. |
 | V2-110 | LSP startup | done | `sage-ls` uses a bounded Tokio runtime so initialization remains below the latency target. |
-| V2-111 | VS Code activation | done | Sage commands register after startup and Sage-named Python files wake the extension without forcing unrelated Python projects into Sage indexing. |
+| V2-111 | VS Code activation | done | Sage commands activate on demand, and Sage/Python files wake the extension without activating it in unrelated non-Python windows. |

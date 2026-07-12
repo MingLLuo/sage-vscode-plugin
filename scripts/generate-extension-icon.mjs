@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
-import zlib from "node:zlib";
+import pako from "pako";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -132,7 +132,7 @@ function encodePng(width, height, rgba) {
   return Buffer.concat([
     Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
     chunk("IHDR", ihdr(width, height)),
-    chunk("IDAT", zlib.deflateSync(raw, { level: 9 })),
+    chunk("IDAT", Buffer.from(pako.deflate(raw, { level: 9 }))),
     chunk("IEND", Buffer.alloc(0)),
   ]);
 }

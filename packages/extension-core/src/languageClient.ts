@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as vscode from "vscode";
-import type { DocumentFilter, DocumentSelector } from "vscode-languageserver-protocol";
 import {
   CloseAction,
   ErrorAction,
@@ -12,16 +11,17 @@ import {
 
 import { readSettings } from "./configuration";
 import { buildInitializationOptions } from "./settingsModel";
-import type { SageSettings } from "./settingsModel";
 import {
   buildDocumentationRequestPayload,
   normalizeDocumentationResponse,
   type DocumentationResponse,
   type DocumentationResult,
 } from "./documentationRequest";
+import { buildDocumentSelector } from "./documentSelector";
 import { buildLanguageServerLaunch } from "./serverLaunch";
-import { buildSageSourceUri, shouldUseSageSourceView } from "./sageSourceView";
+import { buildSageSourceUri } from "./sageSourceView";
 import { shouldAutoRestartOnLanguageServerClose } from "./serverRestart";
+import { workspaceAliasedSourcePath } from "./sourceRootPaths";
 import { buildWorkspaceInitializationData, resolveConfiguredPaths } from "./workspaceDiscovery";
 import { logToChannel } from "./extensionLogger";
 
@@ -33,19 +33,16 @@ export const RUST_LSP_COMMANDS = {
   queryAtPosition: "sage.__rust.queryAtPosition",
 } as const;
 
+export const SAGE_LANGUAGE_FILE_GLOB = "**/*.{sage,py,pyx,pxd,pxi,spyx}";
+
+export { buildDocumentSelector };
+
 export function rustIndexCacheDir(context: vscode.ExtensionContext): string {
   return path.join(context.globalStorageUri.fsPath, "rust-index-v2");
 }
 
-export function buildDocumentSelector(settings: Pick<SageSettings, "pythonFilesEnabled">): DocumentSelector {
-  const selector: DocumentFilter[] = [{ language: "sagemath" }, { language: "sagemath-cython" }];
-  if (settings.pythonFilesEnabled) {
-    selector.push({ language: "python", scheme: "file" });
-  }
-  return selector;
-}
-
 export interface LanguageClientLifecycle {
+  fileSystemWatcher: vscode.FileSystemWatcher;
   shouldAutoRestartOnClose?: () => boolean;
   onClose?: (event: { managedShutdown: boolean; shouldRestart: boolean }) => void;
   runtimeDiscoveredSourceRoots?: readonly string[];
@@ -54,7 +51,7 @@ export interface LanguageClientLifecycle {
 export function createLanguageClient(
   context: vscode.ExtensionContext,
   outputChannel: vscode.OutputChannel,
-  lifecycle: LanguageClientLifecycle = {},
+  lifecycle: LanguageClientLifecycle,
 ): LanguageClient {
   const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
@@ -119,13 +116,7 @@ export function createLanguageClient(
       cacheDir: rustIndexCacheDir(context),
     }),
     synchronize: {
-      fileEvents: [
-        vscode.workspace.createFileSystemWatcher("**/*.sage"),
-        vscode.workspace.createFileSystemWatcher("**/*.py"),
-        vscode.workspace.createFileSystemWatcher("**/*.pyx"),
-        vscode.workspace.createFileSystemWatcher("**/*.pxd"),
-        vscode.workspace.createFileSystemWatcher("**/*.pxi"),
-      ],
+      fileEvents: lifecycle.fileSystemWatcher,
     },
     middleware: {
       provideDeclaration: async (document, position, token, next) => {
@@ -143,6 +134,10 @@ export function createLanguageClient(
       provideTypeDefinition: async (document, position, token, next) => {
         const typeDefinition = await next(document, position, token);
         return rewriteExternalDefinitionUris(typeDefinition);
+      },
+      provideReferences: async (document, position, context, token, next) => {
+        const references = await next(document, position, context, token);
+        return rewriteExternalDefinitionUris(references);
       },
     },
     errorHandler: {
@@ -217,8 +212,12 @@ function rewriteExternalDefinitionUri(
   uri: vscode.Uri,
   workspaceFolders: readonly string[],
 ): vscode.Uri {
-  if (uri.scheme !== "file" || !shouldUseSageSourceView(uri.fsPath, workspaceFolders)) {
+  if (uri.scheme !== "file") {
     return uri;
+  }
+  const workspacePath = workspaceAliasedSourcePath(uri.fsPath, workspaceFolders);
+  if (workspacePath) {
+    return vscode.Uri.file(workspacePath);
   }
   return buildSageSourceUri(uri.fsPath);
 }

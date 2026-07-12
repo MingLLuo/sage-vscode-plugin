@@ -77,6 +77,12 @@ async function runExtensionHostSuite(options: {
       SAGE_TEST_HOST_MODE: options.mode,
       SAGE_TEST_LSP_PYTHON: process.env.SAGE_TEST_LSP_PYTHON ?? "python",
       SAGE_TEST_WORKSPACE: options.workspacePath,
+      ...(options.mode === "smoke"
+        ? {
+          SAGE_LS_TEST_BACKGROUND_DELAY_MS:
+            process.env.SAGE_LS_TEST_BACKGROUND_DELAY_MS ?? "3000",
+        }
+        : {}),
       ...(options.nativeSage?.sourceRoot ? { SAGE_TEST_NATIVE_SOURCE_ROOT: options.nativeSage.sourceRoot } : {}),
       ...(options.nativeSage?.executable ? { SAGE_TEST_NATIVE_SAGE_EXECUTABLE: options.nativeSage.executable } : {}),
       ...(options.externalSageSourceRoot ? { SAGE_TEST_EXTERNAL_SOURCE_ROOT: options.externalSageSourceRoot } : {}),
@@ -128,6 +134,13 @@ async function cloneSmokeWorkspace(repositoryRoot: string, tempRoot: string): Pr
   const sourceWorkspace = path.join(repositoryRoot, "examples", "manual-smoke-workspace");
   const targetWorkspace = path.join(tempRoot, "workspace");
   await fs.cp(sourceWorkspace, targetWorkspace, { recursive: true });
+  await fs.writeFile(
+    path.join(targetWorkspace, "src", "__external_navigation_bridge.sage"),
+    [
+      "external_navigation_value = ExternalSmokeCombinations([1, 2, 3], 2)",
+      "",
+    ].join("\n"),
+  );
   return targetWorkspace;
 }
 
@@ -160,8 +173,9 @@ async function createExternalSageSourceRoot(tempRoot: string): Promise<string> {
       "\"\"\"Minimal Sage public export surface used by the extension-host smoke.\"\"\"",
       "",
       "from sage.combinat.combination import Combinations",
+      "from sage.combinat.combination import ExternalSmokeCombinations",
       "",
-      "__all__ = [\"Combinations\"]",
+      "__all__ = [\"Combinations\", \"ExternalSmokeCombinations\"]",
       "",
     ].join("\n"),
   );
@@ -172,6 +186,10 @@ async function createExternalSageSourceRoot(tempRoot: string): Promise<string> {
       "",
       "def Combinations(n, k=None):",
       "    \"\"\"Return combinations of ``n`` objects, optionally of length ``k``.\"\"\"",
+      "    return []",
+      "",
+      "def ExternalSmokeCombinations(n, k=None):",
+      "    \"\"\"Unique external symbol used to verify read-only navigation bridges.\"\"\"",
       "    return []",
       "",
     ].join("\n"),

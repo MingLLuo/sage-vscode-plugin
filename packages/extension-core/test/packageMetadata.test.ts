@@ -78,6 +78,7 @@ interface ExtensionManifest {
 }
 
 interface RootPackage {
+  packageManager?: string;
   scripts?: Record<string, string>;
 }
 
@@ -91,6 +92,10 @@ function readRootPackage(): RootPackage {
 
 function readCiWorkflow(): string {
   return fs.readFileSync(path.join(repositoryRoot, ".github", "workflows", "ci.yml"), "utf-8");
+}
+
+function readRepositoryFile(relativePath: string): string {
+  return fs.readFileSync(path.join(repositoryRoot, relativePath), "utf-8");
 }
 
 function readPngDimensions(filePath: string): { width: number; height: number } {
@@ -184,10 +189,17 @@ test("release scripts cover packaged Rust binaries and real Sage smoke gates", (
   assert.match(rootPackage.scripts?.["test:generated-assets"] ?? "", /generate-extension-icon\.mjs --check/);
 
   const packageRustBinary = rootPackage.scripts?.["package:rust-binary"] ?? "";
-  assert.match(packageRustBinary, /cargo build --release -p sage-ls/);
-  assert.match(packageRustBinary, /scripts\/package-rust-binary\.mjs/);
+  assert.match(packageRustBinary, /npm run check:package-toolchain/);
+  assert.match(packageRustBinary, /scripts\/build-packaged-rust-binary\.mjs/);
+
+  const packagedRustBuilder = readRepositoryFile("scripts/build-packaged-rust-binary.mjs");
+  assert.match(packagedRustBuilder, /"build", "--locked", "--release", "-p", "sage-ls"/);
+  assert.match(packagedRustBuilder, /--remap-path-prefix/);
+  assert.match(packagedRustBuilder, /CARGO_ENCODED_RUSTFLAGS/);
+  assert.match(packagedRustBuilder, /path\.join\(__dirname, "package-rust-binary\.mjs"\)/);
 
   const packageVsix = rootPackage.scripts?.["package:vsix"] ?? "";
+  assert.match(packageVsix, /npm run check:package-toolchain/);
   assert.match(packageVsix, /npm run build/);
   assert.match(packageVsix, /npm run test:generated-assets/);
   assert.match(packageVsix, /npm run package:rust-binary/);
@@ -196,7 +208,8 @@ test("release scripts cover packaged Rust binaries and real Sage smoke gates", (
 
   const releaseGate = rootPackage.scripts?.["test:release"] ?? "";
   for (const expected of [
-    "cargo clippy --all-targets --all-features -- -D warnings",
+    "cargo clippy --locked --all-targets --all-features -- -D warnings",
+    "npm run test:lsp-shutdown",
     "npm run test:generated-assets",
     "npm run package:rust-binary",
     "npm run test:vsix-contents",
@@ -218,15 +231,44 @@ test("release scripts cover packaged Rust binaries and real Sage smoke gates", (
   assert.match(fullGate, /npm run test:extension-host/);
 });
 
+test("VSIX packaging enforces a reproducible toolchain, modes, and private-path checks", () => {
+  const rootPackage = readRootPackage();
+  assert.equal(rootPackage.scripts?.["check:package-toolchain"], "node scripts/check-package-toolchain.mjs");
+
+  const toolchainCheck = readRepositoryFile("scripts/package-toolchain.mjs");
+  assert.match(toolchainCheck, /process\.versions\.node/);
+  assert.match(toolchainCheck, /actual !== expected/);
+
+  const packager = readRepositoryFile("scripts/package-vsix.mjs");
+  assert.match(packager, /assertPinnedNodeVersion\(repositoryRoot\)/);
+  assert.match(packager, /assertNoBuildMachinePaths/);
+  assert.match(packager, /0o100755/);
+  assert.match(packager, /0o100644/);
+
+  const packageSmoke = readRepositoryFile("scripts/vsix-package-smoke.mjs");
+  assert.match(packageSmoke, /buildExtension\(0o022\)/);
+  assert.match(packageSmoke, /buildExtension\(0o077\)/);
+  assert.match(packageSmoke, /findBuildMachinePaths/);
+  assert.match(packageSmoke, /excludes build-machine home and repository paths/);
+
+  const iconGenerator = readRepositoryFile("scripts/generate-extension-icon.mjs");
+  assert.match(iconGenerator, /import pako from "pako"/);
+  assert.doesNotMatch(iconGenerator, /node:zlib/);
+});
+
 test("macOS CI gate is public-repository safe", () => {
   const rootPackage = readRootPackage();
+  assert.equal(rootPackage.packageManager, "npm@11.17.0");
+  assert.equal(readRepositoryFile(".node-version").trim(), "22.23.1");
+  assert.match(readRepositoryFile("rust-toolchain.toml"), /channel\s*=\s*"1\.92\.0"/);
   const ciGate = rootPackage.scripts?.["test:ci"] ?? "";
   for (const expected of [
-    "cargo test",
-    "cargo clippy --all-targets --all-features -- -D warnings",
+    "cargo test --locked",
+    "cargo clippy --locked --all-targets --all-features -- -D warnings",
     "npm run lint",
     "npm run build",
     "npm run test",
+    "npm run test:lsp-shutdown",
     "npm run test:generated-assets",
     "npm run package:rust-binary",
     "npm run test:vsix-contents",
@@ -245,9 +287,13 @@ test("macOS CI gate is public-repository safe", () => {
 
   const workflow = readCiWorkflow();
   assert.match(workflow, /runs-on:\s*macos-latest/);
-  assert.match(workflow, /npm install/);
-  assert.doesNotMatch(workflow, /package-lock\.json/);
+  assert.match(workflow, /npm ci/);
+  assert.match(workflow, /npm install --global npm@11\.17\.0/);
+  assert.match(workflow, /node-version-file:\s*"\.node-version"/);
+  assert.match(workflow, /cache:\s*["']?npm["']?/);
+  assert.match(workflow, /cache-dependency-path:\s*package-lock\.json/);
   assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
+  assert.match(workflow, /toolchain:\s*"1\.92\.0"/);
   assert.match(workflow, /Swatinem\/rust-cache@v2/);
   assert.match(workflow, /cache-on-failure:\s*true/);
   assert.match(workflow, /cargo fetch --locked/);
@@ -355,28 +401,104 @@ test("user commands are grouped, iconed, and exposed through contextual menus", 
   );
 });
 
-test("extension relies on the LSP definition provider without duplicate VS Code targets", () => {
+test("extension scopes direct navigation bridges to read-only external Sage sources", () => {
   const extensionSource = fs.readFileSync(path.join(packageRoot, "src", "extension.ts"), "utf8");
+  const navigationSource = fs.readFileSync(path.join(packageRoot, "src", "externalSourceNavigation.ts"), "utf8");
   const clientSource = fs.readFileSync(path.join(packageRoot, "src", "languageClient.ts"), "utf8");
 
+  assert.match(
+    navigationSource,
+    /registerDefinitionProvider\(selector/,
+    "read-only sage-source documents need a file-URI bridge for follow-up definitions",
+  );
   assert.doesNotMatch(
-    extensionSource,
-    /registerDefinitionProvider/,
-    "a second extension definition provider duplicates the Rust LSP definition result in VS Code",
+    navigationSource,
+    /registerDefinitionProvider\([^)]*scheme: "file"/s,
+    "normal file definitions should stay owned by the Rust LSP client",
   );
   assert.match(clientSource, /provideDefinition/);
   assert.match(clientSource, /provideImplementation/);
   assert.match(clientSource, /provideTypeDefinition/);
+  assert.match(clientSource, /provideReferences/);
   assert.match(clientSource, /rewriteExternalDefinitionUris/);
   assert.match(clientSource, /buildSageSourceUri/);
   assert.match(
-    extensionSource,
+    clientSource,
+    /\*\.\{sage,py,pyx,pxd,pxi,spyx\}/,
+    "the LSP watcher should cover every Sage and Sage-Cython file with one glob",
+  );
+  assert.match(
+    navigationSource,
     /registerReferenceProvider/,
     "external Sage source files need a VS Code reference bridge after definition jumps",
   );
-  assert.match(extensionSource, /isExternalSageSourceDocument/);
+  assert.doesNotMatch(
+    navigationSource,
+    /scheme: "file", language: "python"/,
+    "the external bridge must not duplicate the LanguageClient Python reference provider",
+  );
+  assert.match(navigationSource, /isExternalSageSourceDocument/);
+  assert.match(
+    navigationSource,
+    /openTextDocument\(sourceUri\)/,
+    "the bridge should preload the backing file before requesting follow-up navigation",
+  );
+  assert.match(
+    navigationSource,
+    /textDocument: \{ uri: sourceUri\.toString\(\) \}/,
+    "the LSP request must use the backing file URI rather than the read-only view URI",
+  );
+  assert.match(navigationSource, /rewriteExternalDefinitionUris/);
   assert.match(extensionSource, /effectiveSourceRootPaths/);
   assert.match(extensionSource, /source_root_fingerprints/);
+  assert.match(
+    clientSource,
+    /fileEvents: lifecycle\.fileSystemWatcher/,
+    "language-client restarts should reuse the extension-lifetime file watcher",
+  );
+  assert.doesNotMatch(
+    clientSource,
+    /createFileSystemWatcher/,
+    "individual language clients must not allocate undisposed file watchers",
+  );
+  assert.match(
+    extensionSource,
+    /continuing automatic refresh/,
+    "cold indexes should keep refreshing status until the server reports idle",
+  );
+  assert.doesNotMatch(extensionSource, /pausing automatic refresh/);
+  assert.match(
+    extensionSource,
+    /extensionMode !== vscode\.ExtensionMode\.Production/,
+    "internal test commands must not be registered in production",
+  );
+});
+
+test("extension activation stays a compact orchestrator with focused feature modules", () => {
+  const extensionSource = fs.readFileSync(path.join(packageRoot, "src", "extension.ts"), "utf8");
+  assert.ok(
+    extensionSource.split(/\r?\n/).length <= 1300,
+    "extension.ts should delegate feature implementations instead of growing another monolith",
+  );
+  assert.match(
+    extensionSource,
+    /shouldAutoRestartOnClose: \(\) => !languageClientManagedShutdown && !extensionDeactivating/,
+    "language clients must not auto-restart while extension deactivation is in progress",
+  );
+  for (const moduleName of [
+    "executionCommands.ts",
+    "externalSourceNavigation.ts",
+    "navigationCommands.ts",
+    "sourceRootPaths.ts",
+    "statusCommands.ts",
+    "statusRefreshController.ts",
+  ]) {
+    assert.equal(
+      fs.existsSync(path.join(packageRoot, "src", moduleName)),
+      true,
+      `missing focused extension module ${moduleName}`,
+    );
+  }
 });
 
 test("extension contributions are activation-covered and backed by generated assets", () => {
@@ -387,8 +509,8 @@ test("extension contributions are activation-covered and backed by generated ass
   const snippets = new Set((manifest.contributes?.snippets ?? []).map((snippet) => snippet.language));
 
   assert.ok(
-    activationEvents.has("onStartupFinished"),
-    "commands and status entries should be registered after startup even before a Sage document activates",
+    !activationEvents.has("onStartupFinished"),
+    "the extension should not activate every VS Code window at startup",
   );
   assert.ok(
     activationEvents.has("workspaceContains:**/*.sage.py"),
@@ -397,6 +519,10 @@ test("extension contributions are activation-covered and backed by generated ass
   assert.ok(
     activationEvents.has("workspaceContains:**/*sage*.py"),
     "missing activation event for Sage-named Python research files",
+  );
+  assert.ok(
+    activationEvents.has("workspaceContains:**/*.spyx"),
+    "missing activation event for Sage Cython .spyx workspaces",
   );
   assert.ok(
     activationEvents.has("onLanguage:python"),

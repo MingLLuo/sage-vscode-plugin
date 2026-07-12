@@ -3,6 +3,8 @@ import path from "node:path";
 
 import * as vscode from "vscode";
 
+import { workspaceAliasedSourcePath } from "./sourceRootPaths";
+
 export const SAGE_SOURCE_SCHEME = "sage-source";
 
 export function buildSageSourceUri(sourcePath: string): vscode.Uri {
@@ -16,8 +18,7 @@ export function shouldUseSageSourceView(
   sourcePath: string,
   workspaceFolders: readonly string[],
 ): boolean {
-  const resolved = path.resolve(sourcePath);
-  return !workspaceFolders.some((folder) => isPathInsideOrEqual(resolved, path.resolve(folder)));
+  return workspaceAliasedSourcePath(sourcePath, workspaceFolders) === undefined;
 }
 
 export class SageSourceTextDocumentProvider implements vscode.TextDocumentContentProvider {
@@ -28,9 +29,4 @@ export class SageSourceTextDocumentProvider implements vscode.TextDocumentConten
     }
     return fs.readFile(sourcePath, "utf8");
   }
-}
-
-function isPathInsideOrEqual(targetPath: string, folder: string): boolean {
-  const relative = path.relative(folder, targetPath);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }

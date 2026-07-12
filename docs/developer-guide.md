@@ -62,17 +62,47 @@ current static-analysis baseline should be extended safely.
 
 ## Key Extension Modules
 
+- `src/extension.ts`
+  Composition root for activation, deactivation, shared state, and module wiring. Keep feature implementations in the
+  focused modules below so lifecycle races can be tested without exercising the whole extension host.
 - `src/configuration.ts`
   Reads VS Code settings into the stable `SageSettings` model.
+- `src/documentSelector.ts`
+  Builds the language-client selector and keeps the read-only `sage-source:` scheme outside the normal client route so
+  it has exactly one navigation provider.
 - `src/workspaceDiscovery.ts`
   Determines which workspace roots should be indexed and augments them with Sage roots derived from the selected
   runtime when `sage.analysis.sourceRoots` is left empty.
+- `src/sourceRootPaths.ts`
+  Normalizes configured, indexed, and workspace paths, resolves physical aliases, tests source-root containment, and
+  maps canonical results back to the workspace URI identity that VS Code opened.
 - `src/languageClient.ts`
   Starts the Rust `sage-ls` process, watches Sage/Cython document types, and sends command-backed documentation/status
   requests while suppressing client-library auto-restarts during extension-managed shutdown and restart cycles.
+- `src/externalSourceNavigation.ts`
+  Bridges definition, declaration, implementation, type-definition, and reference requests from a read-only
+  `sage-source:` editor to its backing `file:` document, then rewrites results back to the appropriate visible URI.
+- `src/executionCommands.ts`
+  Registers file, selection, and cell execution commands. Terminal/process construction remains in `executionPlan.ts`
+  and `terminalManager.ts` so command handlers only validate editor and workspace state.
 - `src/executionPlan.ts`
   Builds shell-safe run commands and REPL load commands from extension settings, including optional cleanup of
   generated `.sage.py` files after standalone terminal runs or managed-REPL file loads.
+- `src/navigationCommands.ts`
+  Registers user-facing documentation and reference commands and routes them through the active backing document.
+  Pure payload and label helpers remain in `sageNavigation.ts` and `referenceQuickPick.ts`.
+- `src/indexRebuild.ts`
+  Waits for an installed rebuild generation, detects a rebuild superseded by another index operation, and reschedules
+  within a bounded timeout instead of reporting an unrelated refresh as success.
+- `src/statusRefreshController.ts`
+  Owns generation-safe status polling until background index work becomes idle; stale in-flight ticks cannot cancel a
+  newer polling schedule.
+- `src/statusCommands.ts`
+  Registers environment, index, documentation, support-bundle, rebuild, and restart commands. Formatting remains in
+  `environmentPresentation.ts` and `statusReports.ts`, and status-bar actions remain in `statusMenu.ts`.
+- `src/workspaceSettingsJson.ts`
+  Applies narrowly scoped JSONC setting edits while preserving comments, indentation, line endings, and a byte-order
+  mark, and refuses ambiguous duplicate keys or malformed input.
 - `src/serverRestart.ts`
   Limits language-server restarts to configuration changes that actually affect analysis behavior and keeps close/restart
   policy explicit during managed shutdown.
@@ -86,18 +116,6 @@ current static-analysis baseline should be extended safely.
   Normalizes documentation payloads into a render-friendly shape.
 - `src/docsPanel.ts`
   Owns the documentation webview lifecycle.
-- `src/statusReports.ts`
-  Formats index and documentation status payloads into readable output-channel reports. Keep command handlers thin and
-  put status presentation changes here.
-- `src/statusMenu.ts`
-  Defines the status-bar quick-pick actions. Keep troubleshooting entrypoints there so status-bar behavior stays
-  discoverable and testable.
-- `src/sageNavigation.ts`
-  Holds pure navigation helpers for definition targets, LSP location payload validation, and reference quick-pick labels.
-  Keep request handling in `extension.ts`, but keep reference display formatting here.
-- `src/referenceQuickPick.ts`
-  Contains VS Code-specific reference fallback UI. It converts LSP locations into editor locations, adds source-line
-  previews, and opens the selected result.
 - `src/documentationFallback.ts`
   Keeps the no-documentation action labels and command mapping in one place. Use it when adding diagnostics or recovery
   actions for documentation misses.
@@ -107,17 +125,69 @@ current static-analysis baseline should be extended safely.
 Rust V2:
 
 - `crates/sage-ls/src/main.rs`
-  Wires `tower-lsp` capabilities, open-document overlays, semantic tokens, hover, definition, completion, workspace
-  symbols, document symbols, and internal `sage.__rust.*` execute commands consumed by the extension's user-facing
-  status, rebuild, documentation, and UX self-check commands.
+  Composition root for `tower-lsp` capabilities, request dispatch, shared server state, and internal `sage.__rust.*`
+  execute commands. Keep navigation, text conversion, editor features, and background work in their modules below.
+- `crates/sage-ls/src/open_documents.rs`
+  Owns open-document identity and source lookup. It canonicalizes physical aliases only for matching, prefers the newest
+  live buffer over indexed disk text, and preserves the client-facing URI used to open that buffer.
+- `crates/sage-ls/src/text_positions.rs`
+  Defines the LSP coordinate boundary: `sage-index` ranges use UTF-8 byte columns, while every incoming and outgoing LSP
+  position uses UTF-16 code units. Incremental text edits and all feature ranges must pass through these helpers.
+- `crates/sage-ls/src/call_hierarchy.rs`
+  Resolves local/indexed call-hierarchy items and derives incoming and outgoing call ranges from the selected live source.
+- `crates/sage-ls/src/source_symbols.rs`
+  Builds nested document symbols and ranked workspace symbols from live source plus index records.
+- `crates/sage-ls/src/linked_document_prewarm.rs`
+  Debounces `load`, `attach`, include, and import prewarming by live-document revision. Parsing runs on detached named
+  worker threads behind a shared gate, away from Tokio's LSP request workers.
+- `crates/sage-ls/src/index_jobs.rs`
+  Coordinates rebuild, cache reconciliation, and refresh installation with work gates and monotonic generations. Blocking
+  scans, parsing, and SQLite work run on detached OS threads; stale results are discarded before they can replace a newer
+  index.
+- `crates/sage-ls/src/editor_features.rs`
+  Implements pure selection-range, folding-range, and inlay-hint derivation.
+- `crates/sage-ls/src/document_links.rs`
+  Extracts and resolves Sage `load`/`attach` and Cython include links without mixing link parsing into request dispatch.
+- `crates/sage-ls/src/signature_help.rs`
+  Builds signature and parameter metadata, including UTF-16 parameter label offsets required by LSP.
 - `crates/sage-ls/src/runtime_docs.rs`
   Owns the opportunistic persistent Sage runtime documentation worker. It starts only when runtime introspection is
   enabled and a usable Sage/Python runtime is configured; otherwise docs status reports a degraded or disabled state
   while static docs keep working.
+- `crates/sage-ls/src/tests.rs`
+  Holds protocol and cross-feature regression tests; focused module tests stay next to the implementation they exercise.
+
+Navigation correctness depends on both boundaries above: identify a file by its canonical physical path, answer from the
+latest matching live buffer, return its original client URI, and convert byte columns to UTF-16 only at the LSP edge. Do
+not bypass `open_documents.rs` or `text_positions.rs` with direct disk reads or raw `SourceRange` construction.
+
+Rust index:
+
 - `crates/sage-index/src/lib.rs`
-  Scans configured roots, extracts static symbols and docstrings, preprocesses `.sage` source, persists SQLite/FTS
-  cache data, falls back to a temp cache if the configured cache path is unusable, and exposes status/query APIs used by
-  `sage-ls`.
+  Thin crate entrypoint: declares modules, re-exports the public model/query surface, and selects a writable persistent or
+  temporary cache directory. Domain behavior belongs in the modules below.
+- `crates/sage-index/src/model.rs`
+  Defines index options/status, workspace state, symbols, source ranges, diagnostics, documentation, and query contracts.
+- `crates/sage-index/src/workspace_lifecycle.rs`
+  Owns rebuild, hydration, incremental reconciliation, refresh, persistence fallback, generations, and operation timings.
+- `crates/sage-index/src/workspace_queries.rs`
+  Implements source queries, documentation, completion, workspace symbols, and feature-selective query execution.
+- `crates/sage-index/src/symbol_resolution.rs` and `crates/sage-index/src/lookup_state.rs`
+  Separate Sage-aware import/member/type resolution from root-filtered file, symbol, reference, and in-memory/SQLite
+  lookup state.
+- `crates/sage-index/src/cache_metadata.rs`, `cache_persistence.rs`, `cache_queries.rs`, and `materialized_cache.rs`
+  Split schema metadata and fingerprints, writes, reads, and materialized Sage export/method caches. Keep cache count and
+  root validation here so a missing or truncated cache cannot be mistaken for a valid warm index.
+- `crates/sage-index/src/source_analysis.rs` and `crates/sage-index/src/source_analysis/`
+  Route file discovery, `.sage` preprocessing, declarations, imports/exports, diagnostics, semantic tokens, references,
+  and source-import analysis through small parsing submodules.
+- `crates/sage-index/src/query_support.rs` and `crates/sage-index/src/query_support/`
+  Route pure call, completion, Sage-type, symbol, and syntax query helpers without expanding the workspace API modules.
+- `crates/sage-index/src/sage_specs.rs`, `source_paths.rs`, `symbol_support.rs`, and `syntax_support.rs`
+  Hold static Sage mappings and shared path, ranking/deduplication, and syntax primitives.
+- `crates/sage-index/src/tests.rs` and `crates/sage-index/src/tests/`
+  Keep shared fixtures/helpers in the test root and group cache, reconciliation, parsing, diagnostics, import resolution,
+  completion, editor-query, and Sage-navigation regressions by domain.
 - `crates/sage-index/src/bin/sage-index-bench.rs`
   Measures cold release indexing against a local Sage source checkout. Use release mode for performance validation.
 
@@ -155,7 +225,7 @@ Legacy Python LSP:
 ## Bootstrap Commands
 
 ```bash
-npm install
+npm ci
 npm run sync:syntax
 npm run test:generated-assets
 npm run build:rust
@@ -191,6 +261,7 @@ npm run test:native-smoke
 npm run test:product-readiness
 npm run test:reference-export
 npm run test:performance
+npm run test:lsp-shutdown
 npm run test:lsp-latency
 npm run test:extension-host
 npm run test:release
@@ -320,9 +391,11 @@ form deletes matching old SQLite cache files.
 - Cross-cutting changes should keep the full `npm run test` path green before commit.
 - Browser-debug-facing changes should keep `npm run test:debug-web` green.
 - Packaging-facing changes should keep `npm run package:vsix`, `npm run test:vsix-package`, and
-  `npm run test:vsix-install` green; `package:vsix` stages the current-platform release `sage-ls` before archive checks.
+  `npm run test:vsix-install` green; use the exact `.node-version` runtime. `package:vsix` stages a locked, path-remapped
+  current-platform release `sage-ls` before archive checks, and the package smoke verifies normalized modes under
+  different umasks.
 - Release-candidate changes that do not need the desktop extension host should keep `npm run test:release` green. This
-  runs Rust tests, clippy with `-D warnings`, TypeScript lint, the full non-desktop test suite, VSIX content/package
+  runs locked Rust tests, clippy with `-D warnings`, TypeScript lint, the full non-desktop test suite, VSIX content/package
   install smoke, release index performance, persistent LSP latency, the real-file Sage-heavy smoke, and
   `git diff --check`.
 - Native Sage library work should also keep `npm run test:native-smoke` green when a local Sage checkout is present.

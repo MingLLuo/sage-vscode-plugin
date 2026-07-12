@@ -183,16 +183,17 @@ function checkDiagnosticsAndDebuggability() {
     && readText("packages/extension-core/src/docsPanel.ts").includes("enableScripts: false"), "packages/extension-core/src/docsPanel.ts");
   pushCheck("debuggability", "index and docs status commands use readable reports", readText("packages/extension-core/src/statusReports.ts").includes("formatIndexStatusReport")
     && readText("packages/extension-core/src/statusReports.ts").includes("Summary")
-    && readText("packages/extension-core/src/extension.ts").includes("formatIndexStatusReport(status)")
-    && readText("packages/extension-core/src/extension.ts").includes("formatDocsStatusReport(status)"), "packages/extension-core/src/statusReports.ts");
+    && readText("packages/extension-core/src/statusCommands.ts").includes("formatIndexStatusReport(status)")
+    && readText("packages/extension-core/src/statusCommands.ts").includes("formatDocsStatusReport(status)"), "packages/extension-core/src/statusReports.ts / statusCommands.ts");
   pushCheck("debuggability", "reference fallback uses validated payloads and readable quick-pick labels", readText("packages/extension-core/src/sageNavigation.ts").includes("isLspLocationPayload")
     && readText("packages/extension-core/src/sageNavigation.ts").includes("referenceQuickPickLabel")
     && readText("packages/extension-core/src/referenceQuickPick.ts").includes("referenceLinePreview")
-    && readText("packages/extension-core/src/extension.ts").includes(".filter(isLspLocationPayload)"), "packages/extension-core/src/referenceQuickPick.ts");
+    && readText("packages/extension-core/src/externalSourceNavigation.ts").includes(".filter(isLspLocationPayload)")
+    && readText("packages/extension-core/src/navigationCommands.ts").includes("showReferencesQuickPick"), "packages/extension-core/src/referenceQuickPick.ts / externalSourceNavigation.ts / navigationCommands.ts");
   pushCheck("debuggability", "documentation misses offer status and self-check recovery actions", readText("packages/extension-core/src/documentationFallback.ts").includes("Show Docs Status")
     && readText("packages/extension-core/src/documentationFallback.ts").includes("Show Index Status")
     && readText("packages/extension-core/src/documentationFallback.ts").includes("Run UX Self Check")
-    && readText("packages/extension-core/src/extension.ts").includes("documentationFallbackActions()"), "packages/extension-core/src/documentationFallback.ts");
+    && readText("packages/extension-core/src/navigationCommands.ts").includes("documentationFallbackActions()"), "packages/extension-core/src/documentationFallback.ts / navigationCommands.ts");
   pushCheck("debuggability", "status bar opens a consolidated troubleshooting menu", readText("packages/extension-core/src/statusMenu.ts").includes("sage.showEnvironmentDetails")
     && readText("packages/extension-core/src/statusMenu.ts").includes("sage.showIndexStatus")
     && readText("packages/extension-core/src/statusMenu.ts").includes("sage.copySupportBundle")

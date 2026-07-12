@@ -1,21 +1,65 @@
 #![allow(deprecated)]
 
+mod call_hierarchy;
+mod document_links;
+mod editor_features;
+mod index_jobs;
+mod linked_document_prewarm;
+mod open_documents;
 mod runtime_docs;
+mod signature_help;
+mod source_symbols;
+mod text_positions;
 
+use call_hierarchy::{
+    call_hierarchy_item_for_live_index_symbol, call_hierarchy_item_for_local_definition,
+    call_hierarchy_item_for_local_symbol_at_position, call_hierarchy_item_for_symbol_with_folds,
+    call_hierarchy_item_from_definition, call_hierarchy_item_from_symbol_record,
+    call_ranges_in_range, enclosing_call_hierarchy_item,
+    enclosing_call_hierarchy_item_from_context, is_identifier_start, push_incoming_call,
+    push_outgoing_call, CallHierarchySourceContext,
+};
+use document_links::sage_document_links;
+#[cfg(test)]
+use editor_features::sage_selection_range;
+use editor_features::{
+    code_before_comment, sage_folding_ranges, sage_inlay_hints, sage_selection_ranges,
+};
+#[cfg(test)]
+use index_jobs::index_job_result_is_current;
+#[cfg(test)]
+use linked_document_prewarm::import_modules_for_prewarm;
+use linked_document_prewarm::LinkedDocumentPrewarmer;
+#[cfg(test)]
+use open_documents::source_text_fingerprint;
+use open_documents::{
+    canonical_path_for_comparison, live_document_for_path, live_document_for_uri_or_path,
+    physical_paths as open_document_physical_paths, unique_live_documents, uri_to_path,
+    OpenDocument, OpenDocumentMap,
+};
 use runtime_docs::{RuntimeDocsConfig, RuntimeDocsWorker};
 use sage_index::{
-    default_cache_dir, function_call_at_position, parse_file_for_roots, parse_source,
-    semantic_spans, DocumentationRecord, IndexOptions, QueryCompletion, QueryDefinition,
-    QueryFeatures, QueryPosition, QueryResult, SymbolKind as SageSymbolKind, SymbolRecord,
-    WorkspaceIndex,
+    default_cache_dir, function_call_at_position, parse_source, semantic_spans,
+    DocumentationRecord, IndexOptions, QueryCompletion, QueryDefinition, QueryFeatures,
+    QueryPosition, QueryResult, SymbolKind as SageSymbolKind, SymbolRecord, WorkspaceIndex,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use signature_help::signature_information;
+#[cfg(test)]
+use signature_help::signature_parameter_offsets;
+use source_symbols::{document_symbols_for_source, is_call_hierarchy_symbol, module_name_for_path};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
+use text_positions::{
+    apply_text_document_change, byte_offset_to_utf16_character, is_word_byte, line_byte_bounds,
+    lsp_position_for_byte_column, lsp_range_for_path, lsp_range_for_path_cached,
+    lsp_range_for_text, query_position_from_lsp, utf16_character_to_byte_offset, word_at_position,
+};
+use tokio::sync::{Mutex, RwLock};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::request::{
     GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
@@ -183,7 +227,7 @@ struct PyrightOptions {
 struct Backend {
     client: Client,
     index: Arc<RwLock<WorkspaceIndex>>,
-    open_documents: Arc<RwLock<HashMap<Url, OpenDocument>>>,
+    open_documents: Arc<RwLock<OpenDocumentMap>>,
     navigation_cache: Arc<RwLock<NavigationQueryCache>>,
     editable_roots: Arc<RwLock<Vec<PathBuf>>>,
     diagnostics_enabled: Arc<RwLock<bool>>,
@@ -191,21 +235,21 @@ struct Backend {
     docs_preferred_source: Arc<RwLock<DocumentationPreferredSource>>,
     pending_jobs: Arc<RwLock<usize>>,
     pending_index_task: Arc<RwLock<Option<String>>>,
+    index_job_generation: Arc<AtomicU64>,
+    index_work_gate: Arc<Mutex<()>>,
+    shutting_down: Arc<AtomicBool>,
+    linked_document_prewarmer: LinkedDocumentPrewarmer,
     runtime_docs: RuntimeDocsWorker,
-}
-
-#[derive(Clone, Debug)]
-struct OpenDocument {
-    text: String,
-    version: i32,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct NavigationQueryCacheKey {
     uri: String,
     version: i32,
+    content_fingerprint: Option<u64>,
     line: u32,
     character: u32,
+    index_generation: u64,
 }
 
 #[derive(Debug, Default)]
@@ -244,11 +288,20 @@ impl NavigationQueryCache {
     }
 }
 
-#[derive(Clone, Debug)]
-struct CallHierarchySourceContext {
-    text: String,
-    symbols: Vec<SymbolRecord>,
-    folds: Vec<FoldingRange>,
+fn navigation_query_cache_key(
+    uri: &Url,
+    document: &OpenDocument,
+    position: Position,
+    index_generation: u64,
+) -> NavigationQueryCacheKey {
+    NavigationQueryCacheKey {
+        uri: uri.to_string(),
+        version: document.version,
+        content_fingerprint: document.content_fingerprint,
+        line: position.line,
+        character: position.character,
+        index_generation,
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -280,7 +333,7 @@ async fn main() {
     let (service, socket) = LspService::new(|client| Backend {
         client,
         index: Arc::new(RwLock::new(WorkspaceIndex::default())),
-        open_documents: Arc::new(RwLock::new(HashMap::new())),
+        open_documents: Arc::new(RwLock::new(OpenDocumentMap::new())),
         navigation_cache: Arc::new(RwLock::new(NavigationQueryCache::default())),
         editable_roots: Arc::new(RwLock::new(Vec::new())),
         diagnostics_enabled: Arc::new(RwLock::new(true)),
@@ -288,6 +341,10 @@ async fn main() {
         docs_preferred_source: Arc::new(RwLock::new(DocumentationPreferredSource::Auto)),
         pending_jobs: Arc::new(RwLock::new(0)),
         pending_index_task: Arc::new(RwLock::new(None)),
+        index_job_generation: Arc::new(AtomicU64::new(0)),
+        index_work_gate: Arc::new(Mutex::new(())),
+        shutting_down: Arc::new(AtomicBool::new(false)),
+        linked_document_prewarmer: LinkedDocumentPrewarmer::default(),
         runtime_docs: RuntimeDocsWorker::default(),
     });
     Server::new(stdin, stdout, socket).serve(service).await;
@@ -433,6 +490,8 @@ impl LanguageServer for Backend {
     }
 
     async fn shutdown(&self) -> Result<()> {
+        self.shutting_down.store(true, Ordering::Release);
+        self.linked_document_prewarmer.cancel_all();
         Ok(())
     }
 
@@ -440,16 +499,17 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri.clone();
         let text = params.text_document.text.clone();
         self.open_documents.write().await.insert(
-            params.text_document.uri,
-            OpenDocument {
-                text: params.text_document.text,
-                version: params.text_document.version,
-            },
+            params.text_document.uri.clone(),
+            OpenDocument::live(
+                &params.text_document.uri,
+                params.text_document.text,
+                params.text_document.version,
+            ),
         );
         self.navigation_cache.write().await.invalidate_uri(&uri);
         self.publish_diagnostics_for_text(uri.clone(), text.clone())
             .await;
-        self.schedule_linked_document_prewarm(uri, text);
+        self.schedule_linked_document_prewarm(uri, text, params.text_document.version);
     }
 
     async fn did_change(&self, params: DidChangeTextDocumentParams) {
@@ -457,13 +517,11 @@ impl LanguageServer for Backend {
         let mut errors = Vec::new();
         let text = {
             let mut documents = self.open_documents.write().await;
-            let document = documents
-                .entry(uri.clone())
-                .or_insert_with(|| OpenDocument {
-                    text: String::new(),
-                    version: params.text_document.version,
-                });
+            let document = documents.entry(uri.clone()).or_insert_with(|| {
+                OpenDocument::live(&uri, String::new(), params.text_document.version)
+            });
             document.version = params.text_document.version;
+            document.content_fingerprint = None;
             for change in params.content_changes {
                 if let Err(error) = apply_text_document_change(&mut document.text, &change) {
                     errors.push(error);
@@ -472,7 +530,11 @@ impl LanguageServer for Backend {
             document.text.clone()
         };
         self.navigation_cache.write().await.invalidate_uri(&uri);
-        self.schedule_linked_document_prewarm(uri.clone(), text.clone());
+        self.schedule_linked_document_prewarm(
+            uri.clone(),
+            text.clone(),
+            params.text_document.version,
+        );
         for error in errors {
             self.client
                 .log_message(
@@ -485,6 +547,8 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        self.linked_document_prewarmer
+            .cancel(&params.text_document.uri);
         self.open_documents
             .write()
             .await
@@ -513,7 +577,17 @@ impl LanguageServer for Backend {
             .await
             .invalidate_uri(&params.text_document.uri);
         if let Some(text) = saved_text.as_ref() {
-            self.schedule_linked_document_prewarm(params.text_document.uri.clone(), text.clone());
+            let version = self
+                .open_documents
+                .read()
+                .await
+                .get(&params.text_document.uri)
+                .map_or(i32::MIN, |document| document.version);
+            self.schedule_linked_document_prewarm(
+                params.text_document.uri.clone(),
+                text.clone(),
+                version,
+            );
         }
         if let Some(path) = uri_to_path(&params.text_document.uri) {
             self.refresh_paths(vec![path], Vec::new()).await;
@@ -573,31 +647,29 @@ impl LanguageServer for Backend {
             return Ok(None);
         };
         let position = params.text_document_position_params.position;
-        let key = NavigationQueryCacheKey {
-            uri: uri.to_string(),
-            version: document.version,
-            line: position.line,
-            character: position.character,
+        let Some(query_position) = query_position_from_lsp(&document.text, position) else {
+            return Ok(None);
         };
-        let cached_query = { self.navigation_cache.read().await.get(&key) };
+        let index = self.index.read().await;
+        let index_generation = index.status().generation;
+        let key = navigation_query_cache_key(uri, &document, position, index_generation);
+        let cached_query = self.navigation_cache.read().await.get(&key);
         let query = if let Some(query) = cached_query {
+            drop(index);
             query
         } else {
-            let index = self.index.read().await;
             let query = index.query_source_at_with_features(
                 &path,
                 &document.text,
-                QueryPosition {
-                    line: position.line,
-                    character: position.character,
-                },
+                query_position,
                 None,
                 QueryFeatures::hover(),
             );
-            self.navigation_cache
-                .write()
-                .await
-                .insert(key, query.clone());
+            drop(index);
+            self.navigation_cache.write().await.insert(
+                navigation_query_cache_key(uri, &document, position, index_generation),
+                query.clone(),
+            );
             query
         };
         let show_docs_on_hover = *self.docs_on_hover_enabled.read().await;
@@ -617,7 +689,7 @@ impl LanguageServer for Backend {
                         kind: MarkupKind::Markdown,
                         value: hover_markdown_for_documentation(&record),
                     }),
-                    range: Some(lsp_range(&range)),
+                    range: Some(lsp_range_for_text(&document.text, &range)),
                 }));
             }
         }
@@ -638,7 +710,7 @@ impl LanguageServer for Backend {
                 kind: MarkupKind::Markdown,
                 value: hover_markdown_for_hover_setting(&hover.markdown, show_docs_on_hover),
             }),
-            range: Some(lsp_range(&hover.range)),
+            range: Some(lsp_range_for_text(&document.text, &hover.range)),
         }))
     }
 
@@ -664,11 +736,10 @@ impl LanguageServer for Backend {
         let Some(definition) = query.definition else {
             return Ok(None);
         };
-        Ok(Some(GotoDefinitionResponse::Scalar(Location {
-            uri: Url::from_file_path(&definition.path)
-                .unwrap_or(params.text_document_position_params.text_document.uri),
-            range: lsp_range(&definition.range),
-        })))
+        let Some(location) = self.location_for_query_definition(&definition).await else {
+            return Ok(None);
+        };
+        Ok(Some(GotoDefinitionResponse::Scalar(location)))
     }
 
     async fn goto_declaration(
@@ -696,22 +767,23 @@ impl LanguageServer for Backend {
         let Some(path) = uri_to_path(uri) else {
             return Ok(None);
         };
-        let index = self.index.read().await;
-        let Some(definition) = index.type_definition_at_source(
-            &path,
+        let Some(query_position) = query_position_from_lsp(
             &document.text,
-            QueryPosition {
-                line: params.text_document_position_params.position.line,
-                character: params.text_document_position_params.position.character,
-            },
+            params.text_document_position_params.position,
         ) else {
             return Ok(None);
         };
-        Ok(Some(GotoTypeDefinitionResponse::Scalar(Location {
-            uri: Url::from_file_path(&definition.path)
-                .unwrap_or(params.text_document_position_params.text_document.uri),
-            range: lsp_range(&definition.range),
-        })))
+        let index = self.index.read().await;
+        let Some(definition) =
+            index.type_definition_at_source(&path, &document.text, query_position)
+        else {
+            return Ok(None);
+        };
+        drop(index);
+        let Some(location) = self.location_for_query_definition(&definition).await else {
+            return Ok(None);
+        };
+        Ok(Some(GotoTypeDefinitionResponse::Scalar(location)))
     }
 
     async fn goto_implementation(
@@ -744,27 +816,24 @@ impl LanguageServer for Backend {
         ) {
             return Ok(None);
         }
-        Ok(Some(GotoImplementationResponse::Scalar(Location {
-            uri: Url::from_file_path(&definition.path)
-                .unwrap_or(params.text_document_position_params.text_document.uri),
-            range: lsp_range(&definition.range),
-        })))
+        let Some(location) = self.location_for_query_definition(&definition).await else {
+            return Ok(None);
+        };
+        Ok(Some(GotoImplementationResponse::Scalar(location)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
         let uri = &params.text_document_position.text_document.uri;
         if let (Some(document), Some(_path)) = (self.document_for_uri(uri).await, uri_to_path(uri))
         {
+            let Some(query_position) =
+                query_position_from_lsp(&document.text, params.text_document_position.position)
+            else {
+                return Ok(Some(CompletionResponse::Array(Vec::new())));
+            };
             let index = self.index.read().await;
             let items = index
-                .completion_items_at_source(
-                    &document.text,
-                    QueryPosition {
-                        line: params.text_document_position.position.line,
-                        character: params.text_document_position.position.character,
-                    },
-                    100,
-                )
+                .completion_items_at_source(&document.text, query_position, 100)
                 .into_iter()
                 .map(query_completion_item)
                 .collect();
@@ -927,11 +996,13 @@ impl LanguageServer for Backend {
         let Some(path) = uri_to_path(uri) else {
             return Ok(None);
         };
-        let fallback = function_call_at_position(
+        let fallback = query_position_from_lsp(
             &document.text,
-            params.text_document_position_params.position.line,
-            params.text_document_position_params.position.character,
-        );
+            params.text_document_position_params.position,
+        )
+        .and_then(|position| {
+            function_call_at_position(&document.text, position.line, position.character)
+        });
         let query = self
             .navigation_query_for_document(
                 uri,
@@ -996,7 +1067,9 @@ impl LanguageServer for Backend {
             .navigation_query_for_document(uri, &document, &path, position)
             .await;
         if let Some(definition) = query.definition {
-            if definition.path == path {
+            if canonical_path_for_comparison(&definition.path)
+                == canonical_path_for_comparison(&path)
+            {
                 if let Some(item) = call_hierarchy_item_for_local_definition(
                     uri,
                     &path,
@@ -1006,9 +1079,13 @@ impl LanguageServer for Backend {
                     return Ok(Some(vec![item]));
                 }
             }
+            let Some(location) = self.location_for_query_definition(&definition).await else {
+                return Ok(Some(Vec::new()));
+            };
             return Ok(Some(vec![call_hierarchy_item_from_definition(
                 &definition,
-                uri,
+                location.uri,
+                location.range,
             )]));
         }
         Ok(Some(
@@ -1024,10 +1101,7 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
         let mut calls = Vec::new();
         let mut contexts: HashMap<Url, CallHierarchySourceContext> = HashMap::new();
-        for location in self
-            .open_context_reference_locations(&params.item.name, &params.item.uri)
-            .await
-        {
+        for location in self.reference_locations(&params.item.name, None).await {
             if location.uri == params.item.uri && location.range == params.item.selection_range {
                 continue;
             }
@@ -1080,13 +1154,12 @@ impl LanguageServer for Backend {
         let parsed = parse_source(module_name_for_path(&path), &path, &text);
         let folds = sage_folding_ranges(&text);
         let call_ranges = call_ranges_in_range(&text, params.item.range);
-        let index = self.index.read().await;
         let mut calls = Vec::new();
         for (name, from_range) in call_ranges {
             if name == params.item.name {
                 continue;
             }
-            let to = parsed
+            let local = parsed
                 .symbols
                 .iter()
                 .find(|symbol| symbol.name == name && is_call_hierarchy_symbol(symbol))
@@ -1097,12 +1170,16 @@ impl LanguageServer for Backend {
                         &folds,
                         symbol,
                     )
-                })
-                .or_else(|| {
-                    index
-                        .resolve_symbol(&name, None)
-                        .and_then(|symbol| call_hierarchy_item_from_symbol_record(&symbol))
                 });
+            let to = if local.is_some() {
+                local
+            } else {
+                let indexed = self.index.read().await.resolve_symbol(&name, None);
+                match indexed {
+                    Some(symbol) => self.call_hierarchy_item_for_index_symbol(&symbol).await,
+                    None => None,
+                }
+            };
             let Some(to) = to else {
                 continue;
             };
@@ -1181,25 +1258,9 @@ impl LanguageServer for Backend {
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
-        let index = self.index.read().await;
-        let symbols = index
-            .workspace_symbols(&params.query, 200)
-            .into_iter()
-            .filter_map(|symbol| {
-                Some(SymbolInformation {
-                    name: symbol.name.clone(),
-                    kind: symbol_kind(&symbol.kind),
-                    tags: None,
-                    deprecated: None,
-                    location: Location {
-                        uri: Url::from_file_path(&symbol.path).ok()?,
-                        range: lsp_range(&symbol.range),
-                    },
-                    container_name: Some(symbol.module),
-                })
-            })
-            .collect();
-        Ok(Some(symbols))
+        Ok(Some(
+            self.workspace_symbol_information(&params.query, 200).await,
+        ))
     }
 
     async fn semantic_tokens_full(
@@ -1313,181 +1374,6 @@ fn query_feature_bool(payload: &Value, key: &str) -> Option<bool> {
 }
 
 impl Backend {
-    fn spawn_rebuild(&self) {
-        let index = self.index.clone();
-        let pending_jobs = self.pending_jobs.clone();
-        let pending_index_task = self.pending_index_task.clone();
-        let client = self.client.clone();
-        tokio::spawn(async move {
-            {
-                let mut pending = pending_jobs.write().await;
-                *pending = pending.saturating_add(1);
-                *pending_index_task.write().await = Some("rebuild".to_string());
-            }
-            let options = { index.read().await.options().clone() };
-            let mut rebuilt = WorkspaceIndex::new(options);
-            let result = rebuilt.rebuild().map(|_| {
-                let status = rebuilt.status();
-                (rebuilt, status)
-            });
-            let result = match result {
-                Ok((rebuilt, status)) => {
-                    *index.write().await = rebuilt;
-                    Ok(status)
-                }
-                Err(error) => Err(error),
-            };
-            {
-                let mut pending = pending_jobs.write().await;
-                *pending = pending.saturating_sub(1);
-                if *pending == 0 {
-                    *pending_index_task.write().await = None;
-                }
-            }
-            match result {
-                Ok(status) => {
-                    client
-                        .log_message(
-                            MessageType::INFO,
-                            format!(
-                                "sage-ls indexed {} files and {} symbols in {}ms",
-                                status.indexed_file_count,
-                                status.symbol_count,
-                                status.last_index_ms
-                            ),
-                        )
-                        .await;
-                    refresh_editor_feature_caches(&client).await;
-                }
-                Err(error) => {
-                    client
-                        .log_message(
-                            MessageType::WARNING,
-                            format!("sage-ls index rebuild failed: {error:#}"),
-                        )
-                        .await;
-                }
-            }
-        });
-    }
-
-    fn spawn_cache_reconcile(&self) {
-        let index = self.index.clone();
-        let pending_jobs = self.pending_jobs.clone();
-        let pending_index_task = self.pending_index_task.clone();
-        let client = self.client.clone();
-        tokio::spawn(async move {
-            {
-                let mut pending = pending_jobs.write().await;
-                *pending = pending.saturating_add(1);
-                *pending_index_task.write().await = Some("cache-check".to_string());
-            }
-            let (initial_generation, mut reconciled) = {
-                let index = index.read().await;
-                (index.status().generation, index.clone_for_background_work())
-            };
-            let result = reconciled.reconcile_with_cache().map(|_| {
-                let status = reconciled.status();
-                (reconciled, status)
-            });
-            let result = match result {
-                Ok((reconciled, status)) => {
-                    let mut current = index.write().await;
-                    if current.status().generation == initial_generation {
-                        *current = reconciled;
-                        Ok((status, true))
-                    } else {
-                        Ok((current.status(), false))
-                    }
-                }
-                Err(error) => Err(error),
-            };
-            {
-                let mut pending = pending_jobs.write().await;
-                *pending = pending.saturating_sub(1);
-                if *pending == 0 {
-                    *pending_index_task.write().await = None;
-                }
-            }
-            match result {
-                Ok((status, installed)) => {
-                    client
-                        .log_message(
-                            MessageType::INFO,
-                            format!(
-                                "sage-ls reconciled {} files and {} symbols from persistent cache in {}ms ({} hit/{} miss, installed={})",
-                                status.indexed_file_count,
-                                status.symbol_count,
-                                status.last_index_ms,
-                                status.cache_hit_count,
-                                status.cache_miss_count,
-                                installed,
-                            ),
-                        )
-                        .await;
-                    if installed {
-                        refresh_editor_feature_caches(&client).await;
-                    }
-                }
-                Err(error) => {
-                    client
-                        .log_message(
-                            MessageType::WARNING,
-                            format!("sage-ls cache reconcile failed: {error:#}"),
-                        )
-                        .await;
-                }
-            }
-        });
-    }
-
-    async fn refresh_paths(&self, changed: Vec<PathBuf>, deleted: Vec<PathBuf>) {
-        let status = {
-            let mut index = self.index.write().await;
-            index.refresh_paths(&changed, &deleted)
-        };
-        match status {
-            Ok(status) => {
-                self.client
-                    .log_message(
-                        MessageType::INFO,
-                        format!(
-                            "sage-ls refreshed {} changed and {} deleted files in {}ms",
-                            changed.len(),
-                            deleted.len(),
-                            status.last_index_ms
-                        ),
-                    )
-                    .await;
-                refresh_editor_feature_caches(&self.client).await;
-            }
-            Err(error) => {
-                self.client
-                    .log_message(
-                        MessageType::WARNING,
-                        format!("sage-ls incremental refresh failed: {error:#}"),
-                    )
-                    .await;
-            }
-        }
-    }
-
-    async fn index_status_payload(&self) -> Value {
-        let mut payload =
-            serde_json::to_value(self.index.read().await.status()).unwrap_or_else(|_| json!({}));
-        if let Some(object) = payload.as_object_mut() {
-            object.insert(
-                "pending_jobs".to_string(),
-                json!(*self.pending_jobs.read().await),
-            );
-            object.insert(
-                "pending_task".to_string(),
-                json!(self.pending_index_task.read().await.clone()),
-            );
-        }
-        payload
-    }
-
     async fn publish_diagnostics_for_text(&self, uri: Url, text: String) {
         let Some(path) = uri_to_path(&uri) else {
             return;
@@ -1499,7 +1385,7 @@ impl Backend {
                 .diagnostics_for_source(&path, &text)
                 .into_iter()
                 .map(|diagnostic| Diagnostic {
-                    range: lsp_range(&diagnostic.range),
+                    range: lsp_range_for_text(&text, &diagnostic.range),
                     severity: Some(diagnostic_severity(&diagnostic.severity)),
                     code: Some(NumberOrString::String(diagnostic.code)),
                     source: Some("sage-ls".to_string()),
@@ -1516,14 +1402,66 @@ impl Backend {
     }
 
     async fn document_for_uri(&self, uri: &Url) -> Option<OpenDocument> {
-        self.open_documents.read().await.get(uri).cloned()
+        let documents = self.open_documents.read().await;
+        if let Some(live) = live_document_for_uri_or_path(&documents, uri) {
+            return Some(live.document);
+        }
+        drop(documents);
+        let path = uri_to_path(uri)?;
+        let text = std::fs::read_to_string(path).ok()?;
+        Some(OpenDocument::on_disk(uri, text))
     }
 
-    fn schedule_linked_document_prewarm(&self, uri: Url, text: String) {
-        let index = Arc::clone(&self.index);
-        tokio::spawn(async move {
-            prewarm_linked_documents(index, uri, &text).await;
-        });
+    async fn location_for_query_definition(
+        &self,
+        definition: &QueryDefinition,
+    ) -> Option<Location> {
+        if let Some((uri, document)) = self.open_document_for_path(&definition.path).await {
+            let range = live_definition_range(definition, &document.text)?;
+            return Some(Location {
+                uri,
+                range: lsp_range_for_text(&document.text, &range),
+            });
+        }
+        let uri = Url::from_file_path(&definition.path).ok()?;
+        Some(Location {
+            uri,
+            range: lsp_range_for_path(&definition.path, &definition.range),
+        })
+    }
+
+    async fn open_document_for_path(&self, path: &Path) -> Option<(Url, OpenDocument)> {
+        let documents = self.open_documents.read().await;
+        let live = live_document_for_path(&documents, path)?;
+        Some((live.uri, live.document))
+    }
+
+    async fn call_hierarchy_item_for_index_symbol(
+        &self,
+        symbol: &SymbolRecord,
+    ) -> Option<CallHierarchyItem> {
+        let documents = self.open_documents.read().await;
+        if let Some(live) = live_document_for_path(&documents, &symbol.path) {
+            return call_hierarchy_item_for_live_index_symbol(
+                &live.uri,
+                &live.path,
+                &live.document.text,
+                symbol,
+            );
+        }
+        call_hierarchy_item_from_symbol_record(symbol)
+    }
+
+    fn schedule_linked_document_prewarm(&self, uri: Url, text: String, version: i32) {
+        self.linked_document_prewarmer.schedule(
+            Arc::clone(&self.index),
+            Arc::clone(&self.index_work_gate),
+            Arc::clone(&self.navigation_cache),
+            Arc::clone(&self.shutting_down),
+            uri,
+            text,
+            version,
+        );
     }
 
     async fn navigation_query_for_document(
@@ -1533,37 +1471,34 @@ impl Backend {
         path: &Path,
         position: Position,
     ) -> QueryResult {
-        let key = NavigationQueryCacheKey {
-            uri: uri.to_string(),
-            version: document.version,
-            line: position.line,
-            character: position.character,
+        let Some(query_position) = query_position_from_lsp(&document.text, position) else {
+            return QueryResult {
+                fallback_reason: Some("invalid-lsp-position".to_string()),
+                ..QueryResult::default()
+            };
         };
+        let index = self.index.read().await;
+        let index_generation = index.status().generation;
+        let key = navigation_query_cache_key(uri, document, position, index_generation);
         if let Some(query) = self.navigation_cache.read().await.get(&key) {
+            drop(index);
             return query;
         }
-        let query = {
-            let index = self.index.read().await;
-            index.query_source_at_navigation(
-                path,
-                &document.text,
-                QueryPosition {
-                    line: position.line,
-                    character: position.character,
-                },
-            )
-        };
-        self.navigation_cache
-            .write()
-            .await
-            .insert(key, query.clone());
+        let query = index.query_source_at_navigation(path, &document.text, query_position);
+        drop(index);
+        self.navigation_cache.write().await.insert(
+            navigation_query_cache_key(uri, document, position, index_generation),
+            query.clone(),
+        );
         query
     }
 
     async fn text_for_uri_or_file(&self, uri: &Url) -> Option<String> {
-        if let Some(document) = self.document_for_uri(uri).await {
-            return Some(document.text);
+        let documents = self.open_documents.read().await;
+        if let Some(live) = live_document_for_uri_or_path(&documents, uri) {
+            return Some(live.document.text);
         }
+        drop(documents);
         let path = uri_to_path(uri)?;
         std::fs::read_to_string(path).ok()
     }
@@ -1612,14 +1547,14 @@ impl Backend {
             .navigation_query_for_document(uri, &document, &path, position)
             .await;
         let definition = query.definition.as_ref()?;
-        let index = self.index.read().await;
-        if !index.is_editable_path(&definition.path) {
+        let is_editable = self.index.read().await.is_editable_path(&definition.path);
+        if !is_editable {
             return None;
         }
         Some(RenameTarget {
             word,
             range,
-            declaration: location_for_query_definition(definition),
+            declaration: Some(self.location_for_query_definition(definition).await?),
         })
     }
 
@@ -1639,11 +1574,11 @@ impl Backend {
             .navigation_query_for_document(uri, &document, &path, position)
             .await;
         let definition = query.definition.as_ref()?;
-        let index = self.index.read().await;
-        if !index.is_editable_path(&definition.path) {
+        let is_editable = self.index.read().await.is_editable_path(&definition.path);
+        if !is_editable {
             return None;
         }
-        location_for_query_definition(definition)
+        self.location_for_query_definition(definition).await
     }
 
     async fn definition_location_at(&self, uri: &Url, position: Position) -> Option<Location> {
@@ -1653,18 +1588,12 @@ impl Backend {
                 .await
         } else {
             let text = std::fs::read_to_string(&path).ok()?;
+            let query_position = query_position_from_lsp(&text, position)?;
             let index = self.index.read().await;
-            index.query_source_at_navigation(
-                &path,
-                &text,
-                QueryPosition {
-                    line: position.line,
-                    character: position.character,
-                },
-            )
+            index.query_source_at_navigation(&path, &text, query_position)
         };
         let definition = query.definition.as_ref()?;
-        location_for_query_definition(definition)
+        self.location_for_query_definition(definition).await
     }
 
     async fn reference_locations(
@@ -1674,77 +1603,46 @@ impl Backend {
     ) -> Vec<Location> {
         let mut seen = BTreeSet::new();
         let mut locations = Vec::new();
+        let mut source_text_by_path = HashMap::new();
+        let open_documents = self.open_documents.read().await.clone();
+        let open_paths: BTreeSet<PathBuf> = open_document_physical_paths(&open_documents)
+            .into_iter()
+            .collect();
         if let Some(location) = declaration {
             push_reference_location(&mut locations, &mut seen, location);
         }
         let index = self.index.read().await;
         for reference in index.editable_references(word) {
+            if open_paths.contains(&canonical_path_for_comparison(&reference.path)) {
+                continue;
+            }
             if let Ok(uri) = Url::from_file_path(&reference.path) {
                 push_reference_location(
                     &mut locations,
                     &mut seen,
                     Location {
                         uri,
-                        range: lsp_range(&reference.range),
+                        range: lsp_range_for_path_cached(
+                            &mut source_text_by_path,
+                            &reference.path,
+                            &reference.range,
+                        ),
                     },
                 );
             }
         }
         drop(index);
-        for (uri, document) in self.open_documents.read().await.iter() {
-            let Some(path) = uri_to_path(uri) else {
-                continue;
-            };
-            for reference in sage_index::references_in_source(&path, &document.text, word) {
+        for live in unique_live_documents(&open_documents) {
+            for reference in sage_index::references_in_source(&live.path, &live.document.text, word)
+            {
                 push_reference_location(
                     &mut locations,
                     &mut seen,
                     Location {
-                        uri: uri.clone(),
-                        range: lsp_range(&reference.range),
+                        uri: live.uri.clone(),
+                        range: lsp_range_for_text(&live.document.text, &reference.range),
                     },
                 );
-            }
-        }
-        locations
-    }
-
-    async fn open_context_reference_locations(
-        &self,
-        word: &str,
-        fallback_uri: &Url,
-    ) -> Vec<Location> {
-        let mut seen = BTreeSet::new();
-        let mut locations = Vec::new();
-        let documents = self.open_documents.read().await.clone();
-        for (uri, document) in documents {
-            let Some(path) = uri_to_path(&uri) else {
-                continue;
-            };
-            for reference in sage_index::references_in_source(&path, &document.text, word) {
-                let key = reference_key(&uri, &reference.range);
-                if seen.insert(key) {
-                    locations.push(Location {
-                        uri: uri.clone(),
-                        range: lsp_range(&reference.range),
-                    });
-                }
-            }
-        }
-        if locations.is_empty() {
-            if let (Some(path), Some(text)) = (
-                uri_to_path(fallback_uri),
-                self.text_for_uri_or_file(fallback_uri).await,
-            ) {
-                for reference in sage_index::references_in_source(&path, &text, word) {
-                    let key = reference_key(fallback_uri, &reference.range);
-                    if seen.insert(key) {
-                        locations.push(Location {
-                            uri: fallback_uri.clone(),
-                            range: lsp_range(&reference.range),
-                        });
-                    }
-                }
             }
         }
         locations
@@ -1762,7 +1660,11 @@ impl Backend {
             position_context.as_ref().and_then(|context| {
                 word_at_position(
                     &context.text,
-                    Position::new(context.position.line, context.position.character),
+                    lsp_position_for_byte_column(
+                        &context.text,
+                        context.position.line,
+                        context.position.character,
+                    ),
                 )
                 .map(|(word, _)| word)
             })
@@ -1811,10 +1713,11 @@ impl Backend {
         let uri = Url::parse(uri).ok()?;
         let path = uri_to_path(&uri)?;
         let text = self.text_for_uri_or_file(&uri).await?;
+        let position = query_position_from_lsp(&text, Position::new(line, character))?;
         Some(DocumentationPositionContext {
             path,
             text,
-            position: QueryPosition { line, character },
+            position,
         })
     }
 
@@ -1847,10 +1750,11 @@ impl Backend {
         } else {
             let line = payload.get("position")?.get("line")?.as_u64()? as u32;
             let character = payload.get("position")?.get("character")?.as_u64()? as u32;
+            let position = query_position_from_lsp(&document.text, Position::new(line, character))?;
             self.index.read().await.query_source_at_with_features(
                 &path,
                 &document.text,
-                QueryPosition { line, character },
+                position,
                 rename_to,
                 features,
             )
@@ -1959,7 +1863,10 @@ fn documentation_record_for_source_position(
     {
         return Some(documentation);
     }
-    let (word, _) = word_at_position(text, Position::new(position.line, position.character))?;
+    let (word, _) = word_at_position(
+        text,
+        lsp_position_for_byte_column(text, position.line, position.character),
+    )?;
     let symbols = parse_source(module_name_for_path(path), path, text).symbols;
     symbols
         .iter()
@@ -1982,10 +1889,7 @@ fn declaration_location_for_source_position(
     word: &str,
     position: Position,
 ) -> Option<Location> {
-    let query_position = QueryPosition {
-        line: position.line,
-        character: position.character,
-    };
+    let query_position = query_position_from_lsp(text, position)?;
     parse_source(module_name_for_path(path), path, text)
         .symbols
         .into_iter()
@@ -1994,7 +1898,7 @@ fn declaration_location_for_source_position(
         .find(|symbol| source_range_contains_position(&symbol.range, query_position))
         .map(|symbol| Location {
             uri: uri.clone(),
-            range: lsp_range(&symbol.range),
+            range: lsp_range_for_text(text, &symbol.range),
         })
 }
 
@@ -2218,804 +2122,6 @@ fn code_actions_for_diagnostics(uri: Url, diagnostics: &[Diagnostic]) -> CodeAct
     actions
 }
 
-fn signature_information(
-    label: String,
-    documentation: Option<String>,
-    active_parameter: u32,
-) -> SignatureInformation {
-    let parameters = signature_parameter_information(&label);
-    SignatureInformation {
-        label,
-        documentation: documentation.map(Documentation::String),
-        parameters: (!parameters.is_empty()).then_some(parameters),
-        active_parameter: Some(active_parameter),
-    }
-}
-
-fn signature_parameter_information(label: &str) -> Vec<ParameterInformation> {
-    signature_parameter_offsets(label)
-        .into_iter()
-        .map(|offsets| ParameterInformation {
-            label: ParameterLabel::LabelOffsets(offsets),
-            documentation: None,
-        })
-        .collect()
-}
-
-fn signature_parameter_offsets(label: &str) -> Vec<[u32; 2]> {
-    let Some(open) = label.find('(') else {
-        return Vec::new();
-    };
-    let Some(close) = matching_signature_close(label, open) else {
-        return Vec::new();
-    };
-    let mut offsets = Vec::new();
-    let mut start = open + 1;
-    let mut depth = 0usize;
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-
-    for (relative, ch) in label[open + 1..close].char_indices() {
-        let index = open + 1 + relative;
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-        match quote {
-            Some(active) if ch == active => quote = None,
-            Some(_) => continue,
-            None if ch == '\'' || ch == '"' => {
-                quote = Some(ch);
-                continue;
-            }
-            None => {}
-        }
-        match ch {
-            '(' | '[' | '{' => depth = depth.saturating_add(1),
-            ')' | ']' | '}' => depth = depth.saturating_sub(1),
-            ',' if depth == 0 => {
-                push_signature_parameter_offset(label, start, index, &mut offsets);
-                start = index + 1;
-            }
-            _ => {}
-        }
-    }
-    push_signature_parameter_offset(label, start, close, &mut offsets);
-    offsets
-}
-
-fn matching_signature_close(label: &str, open: usize) -> Option<usize> {
-    let mut depth = 0usize;
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    for (relative, ch) in label[open..].char_indices() {
-        let index = open + relative;
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-        match quote {
-            Some(active) if ch == active => quote = None,
-            Some(_) => continue,
-            None if ch == '\'' || ch == '"' => {
-                quote = Some(ch);
-                continue;
-            }
-            None => {}
-        }
-        match ch {
-            '(' => depth = depth.saturating_add(1),
-            ')' => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    return Some(index);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
-}
-
-fn push_signature_parameter_offset(
-    label: &str,
-    start: usize,
-    end: usize,
-    offsets: &mut Vec<[u32; 2]>,
-) {
-    let mut trimmed_start = start;
-    let mut trimmed_end = end;
-    while trimmed_start < trimmed_end && label.as_bytes()[trimmed_start].is_ascii_whitespace() {
-        trimmed_start += 1;
-    }
-    while trimmed_end > trimmed_start && label.as_bytes()[trimmed_end - 1].is_ascii_whitespace() {
-        trimmed_end -= 1;
-    }
-    if trimmed_start < trimmed_end {
-        offsets.push([trimmed_start as u32, trimmed_end as u32]);
-    }
-}
-
-fn sage_document_links(text: &str, document_path: &Path) -> Vec<DocumentLink> {
-    let base_dir = document_path.parent().unwrap_or_else(|| Path::new("."));
-    let mut links = Vec::new();
-    for (line_number, line) in text.lines().enumerate() {
-        links.extend(sage_load_attach_links_in_line(
-            line,
-            line_number as u32,
-            base_dir,
-        ));
-        if let Some(link) = cython_include_link_in_line(line, line_number as u32, base_dir) {
-            links.push(link);
-        }
-    }
-    links
-}
-
-fn sage_load_attach_links_in_line(
-    line: &str,
-    line_number: u32,
-    base_dir: &Path,
-) -> Vec<DocumentLink> {
-    let bytes = line.as_bytes();
-    let mut links = Vec::new();
-    let mut quote: Option<u8> = None;
-    let mut escaped = false;
-    let mut index = 0;
-    while index < bytes.len() {
-        let byte = bytes[index];
-        if escaped {
-            escaped = false;
-            index += 1;
-            continue;
-        }
-        if byte == b'\\' {
-            escaped = true;
-            index += 1;
-            continue;
-        }
-        if let Some(active) = quote {
-            if byte == active {
-                quote = None;
-            }
-            index += 1;
-            continue;
-        }
-        if byte == b'#' {
-            break;
-        }
-        if byte == b'\'' || byte == b'"' {
-            quote = Some(byte);
-            index += 1;
-            continue;
-        }
-        if is_identifier_start(byte) && (index == 0 || !is_word_byte(bytes[index - 1])) {
-            let start = index;
-            let mut end = index + 1;
-            while end < bytes.len() && is_word_byte(bytes[end]) {
-                end += 1;
-            }
-            let name = &line[start..end];
-            let mut cursor = end;
-            while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
-                cursor += 1;
-            }
-            if matches!(name, "load" | "attach") && cursor < bytes.len() && bytes[cursor] == b'(' {
-                if let Some((target, inner_start, inner_end)) =
-                    quoted_path_literal_after(line, cursor + 1)
-                {
-                    if let Some(link) = document_link_for_path_literal(
-                        line_number,
-                        inner_start,
-                        inner_end,
-                        base_dir,
-                        &target,
-                    ) {
-                        links.push(link);
-                    }
-                }
-            }
-            index = end;
-            continue;
-        }
-        index += 1;
-    }
-    links
-}
-
-fn cython_include_link_in_line(
-    line: &str,
-    line_number: u32,
-    base_dir: &Path,
-) -> Option<DocumentLink> {
-    let code = code_before_comment(line);
-    let leading = code.len().saturating_sub(code.trim_start().len());
-    let trimmed = code.trim_start();
-    let rest = trimmed.strip_prefix("include")?;
-    if !rest
-        .as_bytes()
-        .first()
-        .is_some_and(|byte| byte.is_ascii_whitespace())
-    {
-        return None;
-    }
-    let offset = leading + "include".len();
-    let (target, inner_start, inner_end) = quoted_path_literal_after(line, offset)?;
-    document_link_for_path_literal(line_number, inner_start, inner_end, base_dir, &target)
-}
-
-fn quoted_path_literal_after(line: &str, offset: usize) -> Option<(String, usize, usize)> {
-    let bytes = line.as_bytes();
-    let mut cursor = offset;
-    while cursor < bytes.len() && bytes[cursor].is_ascii_whitespace() {
-        cursor += 1;
-    }
-    let quote = *bytes.get(cursor)?;
-    if quote != b'\'' && quote != b'"' {
-        return None;
-    }
-    let inner_start = cursor + 1;
-    cursor = inner_start;
-    let mut escaped = false;
-    let mut value = String::new();
-    while cursor < bytes.len() {
-        let byte = bytes[cursor];
-        if escaped {
-            value.push(byte as char);
-            escaped = false;
-            cursor += 1;
-            continue;
-        }
-        if byte == b'\\' {
-            escaped = true;
-            cursor += 1;
-            continue;
-        }
-        if byte == quote {
-            return Some((value, inner_start, cursor));
-        }
-        value.push(byte as char);
-        cursor += 1;
-    }
-    None
-}
-
-fn document_link_for_path_literal(
-    line_number: u32,
-    start: usize,
-    end: usize,
-    base_dir: &Path,
-    target: &str,
-) -> Option<DocumentLink> {
-    if target.trim().is_empty() {
-        return None;
-    }
-    let target_path = PathBuf::from(target);
-    let resolved = if target_path.is_absolute() {
-        target_path
-    } else {
-        base_dir.join(target_path)
-    };
-    let resolved = normalize_path_lexically(resolved);
-    Some(DocumentLink {
-        range: Range::new(
-            Position::new(line_number, start as u32),
-            Position::new(line_number, end as u32),
-        ),
-        target: Url::from_file_path(resolved).ok(),
-        tooltip: Some("Open referenced Sage/Cython file".to_string()),
-        data: None,
-    })
-}
-
-fn normalize_path_lexically(path: PathBuf) -> PathBuf {
-    let mut normalized = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                normalized.pop();
-            }
-            std::path::Component::Normal(part) => normalized.push(part),
-            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
-                normalized.push(component.as_os_str());
-            }
-        }
-    }
-    normalized
-}
-
-fn call_hierarchy_item_for_local_definition(
-    uri: &Url,
-    path: &Path,
-    text: &str,
-    definition: &QueryDefinition,
-) -> Option<CallHierarchyItem> {
-    let parsed = parse_source(module_name_for_path(path), path, text);
-    parsed
-        .symbols
-        .iter()
-        .find(|symbol| {
-            symbol.name == definition.name
-                && symbol.range.start_line == definition.range.start_line
-                && is_call_hierarchy_symbol(symbol)
-        })
-        .map(|symbol| call_hierarchy_item_for_symbol(uri, text, symbol))
-}
-
-fn call_hierarchy_item_from_definition(
-    definition: &QueryDefinition,
-    fallback_uri: &Url,
-) -> CallHierarchyItem {
-    let uri = Url::from_file_path(&definition.path).unwrap_or_else(|_| fallback_uri.clone());
-    let range = lsp_range(&definition.range);
-    CallHierarchyItem {
-        name: definition.name.clone(),
-        kind: SymbolKind::FUNCTION,
-        tags: None,
-        detail: Some(definition.detail.clone()),
-        uri,
-        range,
-        selection_range: range,
-        data: None,
-    }
-}
-
-fn call_hierarchy_item_from_symbol_record(symbol: &SymbolRecord) -> Option<CallHierarchyItem> {
-    let uri = Url::from_file_path(&symbol.path).ok()?;
-    let range = lsp_range(&symbol.range);
-    Some(CallHierarchyItem {
-        name: symbol.name.clone(),
-        kind: symbol_kind(&symbol.kind),
-        tags: None,
-        detail: symbol
-            .signature
-            .clone()
-            .or_else(|| (!symbol.detail.is_empty()).then(|| symbol.detail.clone())),
-        uri,
-        range,
-        selection_range: range,
-        data: None,
-    })
-}
-
-fn enclosing_call_hierarchy_item(
-    uri: &Url,
-    path: &Path,
-    text: &str,
-    position: Position,
-) -> Option<CallHierarchyItem> {
-    let parsed = parse_source(module_name_for_path(path), path, text);
-    let context = CallHierarchySourceContext {
-        text: text.to_string(),
-        symbols: parsed.symbols,
-        folds: sage_folding_ranges(text),
-    };
-    enclosing_call_hierarchy_item_from_context(uri, &context, position)
-}
-
-fn call_hierarchy_item_for_local_symbol_at_position(
-    uri: &Url,
-    path: &Path,
-    text: &str,
-    position: Position,
-) -> Option<CallHierarchyItem> {
-    let (word, range) = word_at_position(text, position)?;
-    if !is_code_reference_range(path, text, &word, range) {
-        return None;
-    }
-    let parsed = parse_source(module_name_for_path(path), path, text);
-    let folds = sage_folding_ranges(text);
-    parsed
-        .symbols
-        .iter()
-        .filter(|symbol| {
-            symbol.name == word && symbol.path == path && is_call_hierarchy_symbol(symbol)
-        })
-        .min_by_key(|symbol| {
-            (
-                if lsp_range(&symbol.range) == range {
-                    0
-                } else {
-                    1
-                },
-                symbol.range.start_line,
-                symbol.range.start_character,
-            )
-        })
-        .map(|symbol| call_hierarchy_item_for_symbol_with_folds(uri, text, &folds, symbol))
-}
-
-fn enclosing_call_hierarchy_item_from_context(
-    uri: &Url,
-    context: &CallHierarchySourceContext,
-    position: Position,
-) -> Option<CallHierarchyItem> {
-    context
-        .symbols
-        .iter()
-        .filter(|symbol| is_call_hierarchy_symbol(symbol))
-        .filter_map(|symbol| {
-            let item = call_hierarchy_item_for_symbol_with_folds(
-                uri,
-                &context.text,
-                &context.folds,
-                symbol,
-            );
-            contains_position(&item.range, position).then_some(item)
-        })
-        .min_by_key(|item| {
-            (
-                item.range.end.line.saturating_sub(item.range.start.line),
-                item.range
-                    .end
-                    .character
-                    .saturating_sub(item.range.start.character),
-            )
-        })
-}
-
-fn call_hierarchy_item_for_symbol(
-    uri: &Url,
-    text: &str,
-    symbol: &SymbolRecord,
-) -> CallHierarchyItem {
-    let folds = sage_folding_ranges(text);
-    call_hierarchy_item_for_symbol_with_folds(uri, text, &folds, symbol)
-}
-
-fn call_hierarchy_item_for_symbol_with_folds(
-    uri: &Url,
-    text: &str,
-    folds: &[FoldingRange],
-    symbol: &SymbolRecord,
-) -> CallHierarchyItem {
-    let selection_range = lsp_range(&symbol.range);
-    let range = call_hierarchy_body_range(text, folds, symbol).unwrap_or(selection_range);
-    CallHierarchyItem {
-        name: symbol.name.clone(),
-        kind: symbol_kind(&symbol.kind),
-        tags: None,
-        detail: symbol
-            .signature
-            .clone()
-            .or_else(|| (!symbol.detail.is_empty()).then(|| symbol.detail.clone())),
-        uri: uri.clone(),
-        range,
-        selection_range,
-        data: None,
-    }
-}
-
-fn call_hierarchy_body_range(
-    text: &str,
-    folds: &[FoldingRange],
-    symbol: &SymbolRecord,
-) -> Option<Range> {
-    folds
-        .iter()
-        .find(|range| range.start_line == symbol.range.start_line)
-        .map(|range| {
-            Range::new(
-                Position::new(range.start_line, 0),
-                Position::new(range.end_line, line_length(text, range.end_line) as u32),
-            )
-        })
-        .or_else(|| {
-            line_selection_range(text, symbol.range.start_line, symbol.range.start_character)
-        })
-}
-
-fn document_symbols_for_source(text: &str, symbols: &[SymbolRecord]) -> Vec<DocumentSymbol> {
-    let folds = sage_folding_ranges(text);
-    let mut items: Vec<_> = symbols
-        .iter()
-        .filter(|symbol| is_outline_document_symbol(&symbol.kind))
-        .map(|symbol| document_symbol_for_record(text, &folds, symbol))
-        .collect();
-    items.sort_by_key(|symbol| {
-        (
-            symbol.range.start.line,
-            symbol.range.start.character,
-            symbol.selection_range.start.line,
-            symbol.selection_range.start.character,
-            symbol
-                .range
-                .end
-                .line
-                .saturating_sub(symbol.range.start.line),
-        )
-    });
-
-    let mut roots = Vec::new();
-    for item in items {
-        insert_document_symbol(&mut roots, item);
-    }
-    roots
-}
-
-fn is_outline_document_symbol(kind: &SageSymbolKind) -> bool {
-    !matches!(kind, SageSymbolKind::Module | SageSymbolKind::Import)
-}
-
-fn document_symbol_for_record(
-    text: &str,
-    folds: &[FoldingRange],
-    symbol: &SymbolRecord,
-) -> DocumentSymbol {
-    let selection_range = lsp_range(&symbol.range);
-    let range = if is_document_symbol_container_kind(&symbol.kind) {
-        call_hierarchy_body_range(text, folds, symbol).unwrap_or(selection_range)
-    } else {
-        line_selection_range(text, symbol.range.start_line, symbol.range.start_character)
-            .unwrap_or(selection_range)
-    };
-    DocumentSymbol {
-        name: symbol.name.clone(),
-        detail: symbol
-            .signature
-            .clone()
-            .or_else(|| (!symbol.detail.is_empty()).then(|| symbol.detail.clone())),
-        kind: symbol_kind(&symbol.kind),
-        tags: None,
-        deprecated: None,
-        range,
-        selection_range,
-        children: None,
-    }
-}
-
-fn insert_document_symbol(items: &mut Vec<DocumentSymbol>, symbol: DocumentSymbol) {
-    if let Some(index) = (0..items.len())
-        .rev()
-        .find(|index| can_contain_document_symbol(&items[*index], &symbol))
-    {
-        let children = items[index].children.get_or_insert_with(Vec::new);
-        insert_document_symbol(children, symbol);
-        return;
-    }
-    items.push(symbol);
-}
-
-fn can_contain_document_symbol(parent: &DocumentSymbol, child: &DocumentSymbol) -> bool {
-    is_document_symbol_container_kind_lsp(parent.kind)
-        && parent.selection_range != child.selection_range
-        && parent.range != child.range
-        && contains_range(&parent.range, &child.selection_range)
-}
-
-fn is_document_symbol_container_kind(kind: &SageSymbolKind) -> bool {
-    matches!(
-        kind,
-        SageSymbolKind::Function | SageSymbolKind::Class | SageSymbolKind::CythonDeclaration
-    )
-}
-
-fn is_document_symbol_container_kind_lsp(kind: SymbolKindLsp) -> bool {
-    matches!(
-        kind,
-        SymbolKindLsp::CLASS
-            | SymbolKindLsp::FUNCTION
-            | SymbolKindLsp::METHOD
-            | SymbolKindLsp::CONSTRUCTOR
-    )
-}
-
-fn is_call_hierarchy_symbol(symbol: &SymbolRecord) -> bool {
-    matches!(
-        symbol.kind,
-        SageSymbolKind::Function | SageSymbolKind::Class | SageSymbolKind::CythonDeclaration
-    )
-}
-
-fn push_incoming_call(
-    calls: &mut Vec<CallHierarchyIncomingCall>,
-    from: CallHierarchyItem,
-    from_range: Range,
-) {
-    if let Some(existing) = calls
-        .iter_mut()
-        .find(|call| same_call_hierarchy_item(&call.from, &from))
-    {
-        existing.from_ranges.push(from_range);
-        return;
-    }
-    calls.push(CallHierarchyIncomingCall {
-        from,
-        from_ranges: vec![from_range],
-    });
-}
-
-fn push_outgoing_call(
-    calls: &mut Vec<CallHierarchyOutgoingCall>,
-    to: CallHierarchyItem,
-    from_range: Range,
-) {
-    if let Some(existing) = calls
-        .iter_mut()
-        .find(|call| same_call_hierarchy_item(&call.to, &to))
-    {
-        existing.from_ranges.push(from_range);
-        return;
-    }
-    calls.push(CallHierarchyOutgoingCall {
-        to,
-        from_ranges: vec![from_range],
-    });
-}
-
-fn same_call_hierarchy_item(left: &CallHierarchyItem, right: &CallHierarchyItem) -> bool {
-    left.name == right.name
-        && left.uri == right.uri
-        && left.selection_range == right.selection_range
-}
-
-fn call_ranges_in_range(text: &str, range: Range) -> Vec<(String, Range)> {
-    let lines: Vec<_> = text.lines().collect();
-    if lines.is_empty() {
-        return Vec::new();
-    }
-    let mut calls = Vec::new();
-    let start_line = range.start.line.min(lines.len().saturating_sub(1) as u32) as usize;
-    let end_line = range.end.line.min(lines.len().saturating_sub(1) as u32) as usize;
-    for line_number in start_line..=end_line {
-        let Some(line) = lines.get(line_number) else {
-            continue;
-        };
-        let scan_start = if line_number == start_line {
-            range.start.character as usize
-        } else {
-            0
-        }
-        .min(line.len());
-        let scan_end = if line_number == end_line {
-            range.end.character as usize
-        } else {
-            line.len()
-        }
-        .min(line.len());
-        calls.extend(call_ranges_in_line(
-            line,
-            line_number as u32,
-            scan_start,
-            scan_end,
-        ));
-    }
-    calls
-}
-
-fn call_ranges_in_line(
-    line: &str,
-    line_number: u32,
-    scan_start: usize,
-    scan_end: usize,
-) -> Vec<(String, Range)> {
-    let bytes = line.as_bytes();
-    let mut calls = Vec::new();
-    let mut quote: Option<u8> = None;
-    let mut escaped = false;
-    let mut index = 0;
-    while index < scan_end {
-        let byte = bytes[index];
-        if escaped {
-            escaped = false;
-            index += 1;
-            continue;
-        }
-        if byte == b'\\' {
-            escaped = true;
-            index += 1;
-            continue;
-        }
-        if let Some(active) = quote {
-            if byte == active {
-                quote = None;
-            }
-            index += 1;
-            continue;
-        }
-        if byte == b'#' {
-            break;
-        }
-        if byte == b'\'' || byte == b'"' {
-            quote = Some(byte);
-            index += 1;
-            continue;
-        }
-        if index >= scan_start
-            && is_identifier_start(byte)
-            && (index == 0 || !is_word_byte(bytes[index - 1]))
-        {
-            let start = index;
-            let mut end = index + 1;
-            while end < scan_end && is_word_byte(bytes[end]) {
-                end += 1;
-            }
-            let mut cursor = end;
-            while cursor < scan_end && bytes[cursor].is_ascii_whitespace() {
-                cursor += 1;
-            }
-            let name = &line[start..end];
-            if cursor < scan_end
-                && bytes[cursor] == b'('
-                && !is_call_hierarchy_keyword(name)
-                && !is_declaration_identifier(line, start)
-                && previous_non_whitespace_byte(line, start) != Some(b'.')
-            {
-                calls.push((
-                    name.to_string(),
-                    Range::new(
-                        Position::new(line_number, start as u32),
-                        Position::new(line_number, end as u32),
-                    ),
-                ));
-            }
-            index = end;
-            continue;
-        }
-        index += 1;
-    }
-    calls
-}
-
-fn is_identifier_start(byte: u8) -> bool {
-    byte == b'_' || byte.is_ascii_alphabetic()
-}
-
-fn previous_non_whitespace_byte(line: &str, start: usize) -> Option<u8> {
-    line.as_bytes()
-        .get(..start)?
-        .iter()
-        .rev()
-        .find(|byte| !byte.is_ascii_whitespace())
-        .copied()
-}
-
-fn is_declaration_identifier(line: &str, start: usize) -> bool {
-    line.get(..start)
-        .unwrap_or_default()
-        .split_whitespace()
-        .last()
-        .is_some_and(|token| matches!(token, "def" | "class" | "cdef" | "cpdef"))
-}
-
-fn is_call_hierarchy_keyword(name: &str) -> bool {
-    matches!(
-        name,
-        "if" | "elif"
-            | "for"
-            | "while"
-            | "with"
-            | "except"
-            | "return"
-            | "yield"
-            | "assert"
-            | "lambda"
-            | "def"
-            | "class"
-            | "cdef"
-            | "cpdef"
-    )
-}
-
-fn contains_position(range: &Range, position: Position) -> bool {
-    position_leq(range.start, position) && position_leq(position, range.end)
-}
-
-fn module_name_for_path(path: &Path) -> &str {
-    path.file_stem()
-        .and_then(|name| name.to_str())
-        .unwrap_or("document")
-}
-
 fn document_highlights_for_source(
     path: &Path,
     text: &str,
@@ -3025,21 +2131,22 @@ fn document_highlights_for_source(
     let references = sage_index::references_in_source(path, text, word);
     if !references
         .iter()
-        .any(|reference| lsp_range(&reference.range) == target_range)
+        .any(|reference| lsp_range_for_text(text, &reference.range) == target_range)
     {
         return Vec::new();
     }
     references
         .into_iter()
         .map(|reference| DocumentHighlight {
-            range: lsp_range(&reference.range),
+            range: lsp_range_for_text(text, &reference.range),
             kind: Some(DocumentHighlightKind::TEXT),
         })
         .collect()
 }
 
 fn is_code_reference_range(_path: &Path, text: &str, word: &str, target_range: Range) -> bool {
-    sage_index::is_code_reference_at_range(text, word, &source_range_from_lsp(target_range))
+    source_range_from_lsp(text, target_range)
+        .is_some_and(|range| sage_index::is_code_reference_at_range(text, word, &range))
 }
 
 fn local_rename_target_for_source(
@@ -3068,13 +2175,15 @@ fn local_rename_target_for_source(
         })
 }
 
-fn source_range_from_lsp(range: Range) -> sage_index::SourceRange {
-    sage_index::SourceRange {
-        start_line: range.start.line,
-        start_character: range.start.character,
-        end_line: range.end.line,
-        end_character: range.end.character,
-    }
+fn source_range_from_lsp(text: &str, range: Range) -> Option<sage_index::SourceRange> {
+    let start = query_position_from_lsp(text, range.start)?;
+    let end = query_position_from_lsp(text, range.end)?;
+    Some(sage_index::SourceRange {
+        start_line: start.line,
+        start_character: start.character,
+        end_line: end.line,
+        end_character: end.character,
+    })
 }
 
 fn is_incomplete_sage_exponent_diagnostic(diagnostic: &Diagnostic) -> bool {
@@ -3248,201 +2357,36 @@ fn query_completion_kind(kind: &str) -> CompletionItemKind {
     }
 }
 
-fn symbol_kind(kind: &SageSymbolKind) -> SymbolKindLsp {
-    match kind {
-        SageSymbolKind::Class => SymbolKindLsp::CLASS,
-        SageSymbolKind::Function | SageSymbolKind::CythonDeclaration => SymbolKindLsp::FUNCTION,
-        SageSymbolKind::Module => SymbolKindLsp::MODULE,
-        SageSymbolKind::Variable | SageSymbolKind::PreparserGenerator => SymbolKindLsp::VARIABLE,
-        SageSymbolKind::Import => SymbolKindLsp::NAMESPACE,
-    }
-}
-
-type SymbolKindLsp = tower_lsp::lsp_types::SymbolKind;
-
-async fn prewarm_linked_documents(index: Arc<RwLock<WorkspaceIndex>>, uri: Url, text: &str) {
-    let Some(path) = uri_to_path(&uri) else {
-        return;
-    };
-    let mut targets: Vec<PathBuf> = sage_document_links(text, &path)
-        .into_iter()
-        .filter_map(|link| link.target)
-        .filter_map(|target| uri_to_path(&target))
-        .filter(|target| target != &path)
-        .take(16)
-        .collect();
-    let import_modules = import_modules_for_prewarm(&path, text);
-    if targets.is_empty() && import_modules.is_empty() {
-        return;
-    }
-    let roots = {
-        let index = index.read().await;
-        for module in import_modules.into_iter().take(16) {
-            if let Some(target) = index.source_path_for_module(&module) {
-                targets.push(target);
-            }
-        }
-        index.options().roots.clone()
-    };
-    let parsed_files: Vec<_> = targets
-        .iter()
-        .filter_map(|target| parse_file_for_roots(target, &roots).ok())
-        .collect();
-    if parsed_files.is_empty() {
-        return;
-    }
-    for _ in 0..12 {
-        if let Ok(mut index) = index.try_write() {
-            index.preload_indexed_files(parsed_files.clone());
-            return;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
-    }
-}
-
-fn import_modules_for_prewarm(path: &Path, text: &str) -> Vec<String> {
-    let mut modules = BTreeSet::new();
-    let parsed = parse_source(module_name_for_path(path), path, text);
-    for symbol in parsed.symbols {
-        let Some(import_from) = symbol.import_from.as_deref() else {
-            continue;
-        };
-        let module = import_from
-            .split_once("::")
-            .map_or(import_from, |(module, _)| module);
-        if !module.is_empty() {
-            modules.insert(module.to_string());
-        }
-    }
-    modules.into_iter().collect()
-}
-
-fn lsp_range(range: &sage_index::SourceRange) -> Range {
-    Range {
-        start: Position {
-            line: range.start_line,
-            character: range.start_character,
-        },
-        end: Position {
-            line: range.end_line,
-            character: range.end_character,
-        },
-    }
-}
-
-fn apply_text_document_change(
-    text: &mut String,
-    change: &TextDocumentContentChangeEvent,
-) -> std::result::Result<(), String> {
-    let Some(range) = change.range else {
-        *text = change.text.clone();
-        return Ok(());
-    };
-    let start = position_to_byte_index(text, range.start)
-        .ok_or_else(|| format!("invalid start position {:?}", range.start))?;
-    let end = position_to_byte_index(text, range.end)
-        .ok_or_else(|| format!("invalid end position {:?}", range.end))?;
-    if start > end {
-        return Err(format!("range start {start} is after end {end}"));
-    }
-    text.replace_range(start..end, &change.text);
-    Ok(())
-}
-
-fn position_to_byte_index(text: &str, position: Position) -> Option<usize> {
-    let (line_start, line_end) = line_byte_bounds(text, position.line)?;
-    let line = &text[line_start..line_end];
-    utf16_character_to_byte_offset(line, position.character).map(|offset| line_start + offset)
-}
-
-fn line_byte_bounds(text: &str, target_line: u32) -> Option<(usize, usize)> {
-    if text.is_empty() {
-        return (target_line == 0).then_some((0, 0));
-    }
-
-    let mut line = 0u32;
-    let mut start = 0usize;
-    for segment in text.split_inclusive('\n') {
-        let mut end = start + segment.len();
-        if segment.ends_with('\n') {
-            end = end.saturating_sub(1);
-            if end > start && text.as_bytes().get(end - 1) == Some(&b'\r') {
-                end -= 1;
-            }
-        }
-        if line == target_line {
-            return Some((start, end));
-        }
-        start += segment.len();
-        line = line.saturating_add(1);
-    }
-
-    (text.ends_with('\n') && line == target_line).then_some((text.len(), text.len()))
-}
-
-fn utf16_character_to_byte_offset(line: &str, character: u32) -> Option<usize> {
-    let mut utf16_offset = 0u32;
-    for (byte_offset, ch) in line.char_indices() {
-        if utf16_offset == character {
-            return Some(byte_offset);
-        }
-        let next = utf16_offset.saturating_add(ch.len_utf16() as u32);
-        if character < next {
-            return None;
-        }
-        utf16_offset = next;
-    }
-    if character >= utf16_offset {
-        Some(line.len())
-    } else {
-        None
-    }
-}
-
-fn word_at_position(text: &str, position: Position) -> Option<(String, Range)> {
-    let line = text.lines().nth(position.line as usize)?;
-    let mut character = position.character.min(line.len() as u32) as usize;
-    if character == line.len() && character > 0 {
-        character -= 1;
-    }
-    let bytes = line.as_bytes();
-    if character >= bytes.len() {
-        return None;
-    }
-    if !is_word_byte(bytes[character]) && character > 0 && is_word_byte(bytes[character - 1]) {
-        character -= 1;
-    }
-    if !is_word_byte(bytes[character]) {
-        return None;
-    }
-    let mut start = character;
-    let mut end = character + 1;
-    while start > 0 && is_word_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    while end < bytes.len() && is_word_byte(bytes[end]) {
-        end += 1;
-    }
-    Some((
-        line[start..end].to_string(),
-        Range {
-            start: Position {
-                line: position.line,
-                character: start as u32,
-            },
-            end: Position {
-                line: position.line,
-                character: end as u32,
-            },
-        },
-    ))
+fn live_definition_range(
+    definition: &QueryDefinition,
+    text: &str,
+) -> Option<sage_index::SourceRange> {
+    parse_source(
+        module_name_for_path(&definition.path),
+        &definition.path,
+        text,
+    )
+    .symbols
+    .into_iter()
+    .filter(|symbol| symbol.name == definition.name)
+    .filter(|symbol| !matches!(symbol.kind, SageSymbolKind::Module | SageSymbolKind::Import))
+    .filter(|symbol| definition.detail.is_empty() || symbol.detail == definition.detail)
+    .min_by_key(|symbol| {
+        symbol
+            .range
+            .start_line
+            .abs_diff(definition.range.start_line)
+    })
+    .map(|symbol| symbol.range)
 }
 
 fn source_range_is_declaration(text: &str, word: &str, range: &Range) -> bool {
     let Some(line) = text.lines().nth(range.start.line as usize) else {
         return false;
     };
-    let start = (range.start.character as usize).min(line.len());
+    let Some(start) = utf16_character_to_byte_offset(line, range.start.character) else {
+        return false;
+    };
     let prefix = line[..start].trim_start();
     if prefix.starts_with("def ")
         || prefix.starts_with("class ")
@@ -3545,17 +2489,13 @@ fn line_looks_like_import_continuation(line: &str) -> bool {
 
 fn current_prefix(text: &str, position: Position) -> Option<String> {
     let line = text.lines().nth(position.line as usize)?;
-    let character = position.character.min(line.len() as u32) as usize;
+    let character = utf16_character_to_byte_offset(line, position.character)?;
     let bytes = line.as_bytes();
     let mut start = character;
     while start > 0 && is_word_byte(bytes[start - 1]) {
         start -= 1;
     }
     Some(line[start..character].to_string())
-}
-
-fn is_word_byte(byte: u8) -> bool {
-    byte == b'_' || byte.is_ascii_alphanumeric()
 }
 
 fn is_valid_identifier(value: &str) -> bool {
@@ -3565,437 +2505,6 @@ fn is_valid_identifier(value: &str) -> bool {
     };
     (first == '_' || first.is_ascii_alphabetic())
         && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-}
-
-fn sage_selection_ranges(text: &str, positions: &[Position]) -> Vec<SelectionRange> {
-    positions
-        .iter()
-        .copied()
-        .map(|position| sage_selection_range(text, position))
-        .collect()
-}
-
-fn sage_selection_range(text: &str, position: Position) -> SelectionRange {
-    let mut ranges = Vec::new();
-    let has_word = if let Some((_, word_range)) = word_at_position(text, position) {
-        push_selection_range(&mut ranges, word_range);
-        true
-    } else {
-        push_selection_range(&mut ranges, Range::new(position, position));
-        false
-    };
-    if let Some(line_range) = line_selection_range(text, position.line, position.character) {
-        push_selection_range(&mut ranges, line_range);
-    }
-    for block_range in block_selection_ranges(text, position) {
-        push_selection_range(&mut ranges, block_range);
-    }
-    push_selection_range(&mut ranges, document_selection_range(text));
-    if ranges.is_empty()
-        || (!has_word && !contains_range(&ranges[0], &Range::new(position, position)))
-    {
-        push_selection_range(&mut ranges, Range::new(position, position));
-    }
-    selection_range_chain(ranges)
-}
-
-fn line_selection_range(text: &str, line_number: u32, character: u32) -> Option<Range> {
-    let line = text.lines().nth(line_number as usize)?;
-    let mut start = line.len().saturating_sub(line.trim_start().len());
-    let mut end = line.trim_end().len();
-    if (character as usize) < start || (character as usize) > end {
-        start = 0;
-        end = line.len();
-    }
-    let (start, end) = if start <= end {
-        (start, end)
-    } else {
-        (0, line.len())
-    };
-    Some(Range::new(
-        Position::new(line_number, start as u32),
-        Position::new(line_number, end as u32),
-    ))
-}
-
-fn block_selection_ranges(text: &str, position: Position) -> Vec<Range> {
-    let mut ranges: Vec<_> = sage_folding_ranges(text)
-        .into_iter()
-        .filter(|fold| fold.start_line <= position.line && position.line <= fold.end_line)
-        .map(|fold| {
-            Range::new(
-                Position::new(fold.start_line, 0),
-                Position::new(fold.end_line, line_length(text, fold.end_line) as u32),
-            )
-        })
-        .filter(|range| range.start != range.end)
-        .collect();
-    ranges.sort_by_key(|range| {
-        (
-            range.end.line.saturating_sub(range.start.line),
-            range.end.character.saturating_sub(range.start.character),
-            range.start.line,
-            range.start.character,
-        )
-    });
-    ranges.dedup_by(|left, right| left == right);
-    ranges
-        .into_iter()
-        .filter(|range| {
-            (
-                range.end.line.saturating_sub(range.start.line),
-                range.end.character.saturating_sub(range.start.character),
-            ) != (0, 0)
-        })
-        .collect()
-}
-
-fn document_selection_range(text: &str) -> Range {
-    let line_count = text.lines().count();
-    if line_count == 0 {
-        return Range::new(Position::new(0, 0), Position::new(0, 0));
-    }
-    let end_line = line_count.saturating_sub(1) as u32;
-    Range::new(
-        Position::new(0, 0),
-        Position::new(end_line, line_length(text, end_line) as u32),
-    )
-}
-
-fn line_length(text: &str, line_number: u32) -> usize {
-    text.lines()
-        .nth(line_number as usize)
-        .map(str::len)
-        .unwrap_or_default()
-}
-
-fn push_selection_range(ranges: &mut Vec<Range>, range: Range) {
-    if ranges.last().is_some_and(|existing| *existing == range) {
-        return;
-    }
-    if ranges
-        .last()
-        .is_none_or(|existing| contains_range(&range, existing))
-    {
-        ranges.push(range);
-    }
-}
-
-fn contains_range(outer: &Range, inner: &Range) -> bool {
-    position_leq(outer.start, inner.start) && position_leq(inner.end, outer.end)
-}
-
-fn position_leq(left: Position, right: Position) -> bool {
-    left.line < right.line || (left.line == right.line && left.character <= right.character)
-}
-
-fn selection_range_chain(ranges: Vec<Range>) -> SelectionRange {
-    let mut parent = None;
-    for range in ranges.into_iter().rev() {
-        parent = Some(Box::new(SelectionRange { range, parent }));
-    }
-    *parent.expect("selection range chain should contain at least one range")
-}
-
-fn sage_folding_ranges(text: &str) -> Vec<FoldingRange> {
-    let lines: Vec<_> = text.lines().collect();
-    let mut ranges = Vec::new();
-    add_explicit_region_folds(&lines, &mut ranges);
-    add_comment_block_folds(&lines, &mut ranges);
-    add_indentation_folds(&lines, &mut ranges);
-    dedupe_folding_ranges(ranges)
-}
-
-fn add_explicit_region_folds(lines: &[&str], ranges: &mut Vec<FoldingRange>) {
-    let mut stack = Vec::new();
-    for (line_number, line) in lines.iter().enumerate() {
-        let normalized = line.trim_start().to_ascii_lowercase();
-        if normalized.starts_with("# region") {
-            stack.push(line_number);
-        } else if normalized.starts_with("# endregion") {
-            let Some(start_line) = stack.pop() else {
-                continue;
-            };
-            if line_number > start_line {
-                ranges.push(folding_range(
-                    start_line,
-                    line_number,
-                    Some(FoldingRangeKind::Region),
-                ));
-            }
-        }
-    }
-}
-
-fn add_comment_block_folds(lines: &[&str], ranges: &mut Vec<FoldingRange>) {
-    let mut start_line = None;
-    for (line_number, line) in lines.iter().enumerate() {
-        let normalized = line.trim_start().to_ascii_lowercase();
-        let is_comment = normalized.starts_with('#')
-            && !normalized.starts_with("# region")
-            && !normalized.starts_with("# endregion");
-        if is_comment {
-            start_line.get_or_insert(line_number);
-            continue;
-        }
-        if let Some(start) = start_line.take() {
-            if line_number.saturating_sub(start) > 1 {
-                ranges.push(folding_range(
-                    start,
-                    line_number - 1,
-                    Some(FoldingRangeKind::Comment),
-                ));
-            }
-        }
-    }
-    if let Some(start) = start_line {
-        if lines.len().saturating_sub(start) > 1 {
-            ranges.push(folding_range(
-                start,
-                lines.len() - 1,
-                Some(FoldingRangeKind::Comment),
-            ));
-        }
-    }
-}
-
-fn add_indentation_folds(lines: &[&str], ranges: &mut Vec<FoldingRange>) {
-    for (line_number, line) in lines.iter().enumerate() {
-        let code = code_before_comment(line).trim_end();
-        if !is_foldable_block_header(code.trim_start()) {
-            continue;
-        }
-        let start_indent = leading_indent_width(line);
-        let mut last_inside_line = None;
-        for (next_line_number, next_line) in lines.iter().enumerate().skip(line_number + 1) {
-            let trimmed = next_line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let indent = leading_indent_width(next_line);
-            if indent <= start_indent {
-                break;
-            }
-            last_inside_line = Some(next_line_number);
-        }
-        let Some(end_line) = last_inside_line else {
-            continue;
-        };
-        if end_line > line_number {
-            ranges.push(folding_range(line_number, end_line, None));
-        }
-    }
-}
-
-fn is_foldable_block_header(trimmed_code: &str) -> bool {
-    if !trimmed_code.ends_with(':') {
-        return false;
-    }
-    let headers = [
-        "def ",
-        "async def ",
-        "class ",
-        "cdef ",
-        "cpdef ",
-        "if ",
-        "elif ",
-        "else:",
-        "for ",
-        "async for ",
-        "while ",
-        "with ",
-        "async with ",
-        "try:",
-        "except",
-        "finally:",
-        "match ",
-        "case ",
-    ];
-    headers
-        .iter()
-        .any(|header| trimmed_code.starts_with(header))
-}
-
-fn leading_indent_width(line: &str) -> usize {
-    line.chars()
-        .take_while(|ch| *ch == ' ' || *ch == '\t')
-        .map(|ch| if ch == '\t' { 4 } else { 1 })
-        .sum()
-}
-
-fn folding_range(
-    start_line: usize,
-    end_line: usize,
-    kind: Option<FoldingRangeKind>,
-) -> FoldingRange {
-    FoldingRange {
-        start_line: start_line as u32,
-        start_character: None,
-        end_line: end_line as u32,
-        end_character: None,
-        kind,
-        collapsed_text: None,
-    }
-}
-
-fn dedupe_folding_ranges(ranges: Vec<FoldingRange>) -> Vec<FoldingRange> {
-    let mut seen = BTreeSet::new();
-    let mut deduped = Vec::new();
-    for range in ranges {
-        let kind = match &range.kind {
-            Some(FoldingRangeKind::Comment) => "comment",
-            Some(FoldingRangeKind::Imports) => "imports",
-            Some(FoldingRangeKind::Region) => "region",
-            None => "code",
-        };
-        let key = (range.start_line, range.end_line, kind);
-        if seen.insert(key) {
-            deduped.push(range);
-        }
-    }
-    deduped.sort_by_key(|range| (range.start_line, range.end_line));
-    deduped
-}
-
-fn sage_inlay_hints(text: &str, range: Range) -> Vec<InlayHint> {
-    text.lines()
-        .enumerate()
-        .filter(|(line_number, _)| {
-            let line = *line_number as u32;
-            line >= range.start.line && line <= range.end.line
-        })
-        .filter_map(|(line_number, line)| {
-            let code = code_before_comment(line).trim_end();
-            let assignment = sage_assignment_for_inlay(code)?;
-            let label = infer_sage_inlay_label(assignment.rhs)?;
-            Some(InlayHint {
-                position: Position {
-                    line: line_number as u32,
-                    character: assignment.name_end as u32,
-                },
-                label: InlayHintLabel::String(format!(": {label}")),
-                kind: Some(InlayHintKind::TYPE),
-                text_edits: None,
-                tooltip: Some(InlayHintTooltip::String(
-                    "Sage static type hint inferred from the assignment expression.".to_string(),
-                )),
-                padding_left: Some(true),
-                padding_right: Some(false),
-                data: None,
-            })
-        })
-        .collect()
-}
-
-#[derive(Clone, Copy, Debug)]
-struct SageInlayAssignment<'a> {
-    name_end: usize,
-    rhs: &'a str,
-}
-
-fn sage_assignment_for_inlay(line: &str) -> Option<SageInlayAssignment<'_>> {
-    static PREPARSER_ASSIGNMENT_RE: OnceLock<regex::Regex> = OnceLock::new();
-    static SIMPLE_ASSIGNMENT_RE: OnceLock<regex::Regex> = OnceLock::new();
-    let preparser = PREPARSER_ASSIGNMENT_RE.get_or_init(|| {
-        regex::Regex::new(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*\.<[^>]+>\s*=\s*(?P<rhs>.+)$")
-            .expect("valid preparser assignment regex")
-    });
-    let simple = SIMPLE_ASSIGNMENT_RE.get_or_init(|| {
-        regex::Regex::new(r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<rhs>.+)$")
-            .expect("valid assignment regex")
-    });
-    let captures = preparser.captures(line).or_else(|| simple.captures(line))?;
-    let name = captures.name("name")?;
-    let rhs = captures.name("rhs")?.as_str().trim_start();
-    if rhs.starts_with('=') {
-        return None;
-    }
-    Some(SageInlayAssignment {
-        name_end: name.end(),
-        rhs,
-    })
-}
-
-fn infer_sage_inlay_label(rhs: &str) -> Option<&'static str> {
-    let normalized = rhs.trim_start();
-    if starts_with_call(normalized, &["GF", "FiniteField"]) {
-        return Some("Field");
-    }
-    if starts_with_call(normalized, &["PolynomialRing", "BooleanPolynomialRing"]) {
-        return Some("PolynomialRing");
-    }
-    if starts_with_call(
-        normalized,
-        &[
-            "matrix",
-            "Matrix",
-            "zero_matrix",
-            "identity_matrix",
-            "random_matrix",
-        ],
-    ) {
-        return Some("Matrix");
-    }
-    if starts_with_call(normalized, &["vector", "zero_vector", "random_vector"]) {
-        return Some("Vector");
-    }
-    if starts_with_call(normalized, &["Graph", "DiGraph"]) {
-        return Some("Graph");
-    }
-    if starts_with_call(normalized, &["EllipticCurve"]) {
-        return Some("EllipticCurve");
-    }
-    if starts_with_call(
-        normalized,
-        &["NumberField", "CyclotomicField", "QuadraticField"],
-    ) {
-        return Some("NumberField");
-    }
-    if normalized.contains(".ideal(") || starts_with_call(normalized, &["ideal"]) {
-        return Some("Ideal");
-    }
-    if normalized.contains(".gen(") || normalized.contains(".gen()") {
-        return Some("PolynomialElement");
-    }
-    None
-}
-
-fn starts_with_call(value: &str, names: &[&str]) -> bool {
-    names.iter().any(|name| {
-        value
-            .strip_prefix(name)
-            .is_some_and(|rest| rest.trim_start().starts_with('('))
-    })
-}
-
-fn code_before_comment(line: &str) -> &str {
-    let mut quote: Option<char> = None;
-    let mut escaped = false;
-    for (offset, ch) in line.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if ch == '\\' {
-            escaped = true;
-            continue;
-        }
-        match quote {
-            Some(active) if ch == active => quote = None,
-            Some(_) => {}
-            None if ch == '\'' || ch == '"' => quote = Some(ch),
-            None if ch == '#' => return &line[..offset],
-            None => {}
-        }
-    }
-    line
-}
-
-fn reference_key(uri: &Url, range: &sage_index::SourceRange) -> String {
-    format!(
-        "{}:{}:{}:{}",
-        uri, range.start_line, range.start_character, range.end_character
-    )
 }
 
 fn location_reference_key(uri: &Url, range: &Range) -> String {
@@ -4016,28 +2525,20 @@ fn push_reference_location(
     }
 }
 
-fn location_for_query_definition(definition: &QueryDefinition) -> Option<Location> {
-    Url::from_file_path(&definition.path)
-        .ok()
-        .map(|uri| Location {
-            uri,
-            range: lsp_range(&definition.range),
-        })
-}
-
 fn encode_semantic_tokens(text: &str) -> Vec<SemanticToken> {
-    encode_semantic_spans(semantic_spans(text))
+    encode_semantic_spans(text, semantic_spans(text))
 }
 
 fn encode_semantic_tokens_for_range(text: &str, range: Range) -> Vec<SemanticToken> {
     encode_semantic_spans(
+        text,
         semantic_spans(text)
             .into_iter()
-            .filter(|span| semantic_span_intersects_range(span, &range)),
+            .filter(|span| semantic_span_intersects_range(text, span, &range)),
     )
 }
 
-fn encode_semantic_spans<I>(spans: I) -> Vec<SemanticToken>
+fn encode_semantic_spans<I>(text: &str, spans: I) -> Vec<SemanticToken>
 where
     I: IntoIterator<Item = sage_index::SemanticSpan>,
 {
@@ -4045,34 +2546,53 @@ where
     let mut previous_line = 0u32;
     let mut previous_start = 0u32;
     for span in spans {
+        let Some((start, length)) = semantic_span_lsp_columns(text, &span) else {
+            continue;
+        };
         let delta_line = span.line.saturating_sub(previous_line);
         let delta_start = if delta_line == 0 {
-            span.start.saturating_sub(previous_start)
+            start.saturating_sub(previous_start)
         } else {
-            span.start
+            start
         };
         data.push(SemanticToken {
             delta_line,
             delta_start,
-            length: span.length,
+            length,
             token_type: token_type_index(&span.token_type),
             token_modifiers_bitset: modifier_bitset(&span.modifiers),
         });
         previous_line = span.line;
-        previous_start = span.start;
+        previous_start = start;
     }
     data
 }
 
-fn semantic_span_intersects_range(span: &sage_index::SemanticSpan, range: &Range) -> bool {
+fn semantic_span_lsp_columns(text: &str, span: &sage_index::SemanticSpan) -> Option<(u32, u32)> {
+    let (line_start, line_end) = line_byte_bounds(text, span.line)?;
+    let line = &text[line_start..line_end];
+    let start = byte_offset_to_utf16_character(line, span.start as usize)?;
+    let end =
+        byte_offset_to_utf16_character(line, span.start.saturating_add(span.length) as usize)?;
+    Some((start, end.saturating_sub(start)))
+}
+
+fn semantic_span_intersects_range(
+    text: &str,
+    span: &sage_index::SemanticSpan,
+    range: &Range,
+) -> bool {
     if span.line < range.start.line || span.line > range.end.line {
         return false;
     }
-    let span_end = span.start.saturating_add(span.length);
+    let Some((start, length)) = semantic_span_lsp_columns(text, span) else {
+        return false;
+    };
+    let span_end = start.saturating_add(length);
     if span.line == range.start.line && span_end <= range.start.character {
         return false;
     }
-    if span.line == range.end.line && span.start >= range.end.character {
+    if span.line == range.end.line && start >= range.end.character {
         return false;
     }
     true
@@ -4106,948 +2626,5 @@ fn modifier_bitset(modifiers: &[String]) -> u32 {
     bits
 }
 
-fn uri_to_path(uri: &Url) -> Option<PathBuf> {
-    uri.to_file_path().ok()
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sage_inlay_hints_infer_common_constructor_assignments() {
-        let source = [
-            "F = GF(7)",
-            "R = PolynomialRing(F, 'x')",
-            "M = matrix(F, 2, 2)",
-            "v = vector(F, [1, 2])",
-            "G = Graph([(0, 1)])",
-            "E = EllipticCurve(F, [0, 1])",
-            "K = NumberField(x^2 + 1, 'a')",
-            "I = R.ideal(x^2 + 1)",
-            "g = R.gen()",
-        ]
-        .join("\n");
-        let hints = sage_inlay_hints(&source, full_range());
-        let labels: Vec<_> = hints.iter().filter_map(hint_label).collect();
-
-        assert_eq!(
-            labels,
-            vec![
-                ": Field",
-                ": PolynomialRing",
-                ": Matrix",
-                ": Vector",
-                ": Graph",
-                ": EllipticCurve",
-                ": NumberField",
-                ": Ideal",
-                ": PolynomialElement",
-            ]
-        );
-        assert_eq!(hints[0].position, Position::new(0, 1));
-        assert_eq!(hints[1].position, Position::new(1, 1));
-    }
-
-    #[test]
-    fn sage_inlay_hints_cover_preparser_assignments_and_skip_comments_strings() {
-        let source = [
-            "R.<x, y> = PolynomialRing(QQ, 2)",
-            "text = 'PolynomialRing(QQ)'",
-            "# M = matrix(QQ, 2)",
-            "comparison == matrix(QQ, 2)",
-            "A = zero_matrix(QQ, 2) # matrix comment",
-        ]
-        .join("\n");
-        let hints = sage_inlay_hints(&source, full_range());
-        let labels: Vec<_> = hints.iter().filter_map(hint_label).collect();
-
-        assert_eq!(labels, vec![": PolynomialRing", ": Matrix"]);
-        assert_eq!(hints[0].position, Position::new(0, 1));
-        assert_eq!(hints[1].position, Position::new(4, 1));
-    }
-
-    #[test]
-    fn sage_inlay_hints_respect_requested_line_range() {
-        let source = [
-            "F = GF(7)",
-            "R = PolynomialRing(F, 'x')",
-            "M = matrix(F, 2, 2)",
-        ]
-        .join("\n");
-        let hints = sage_inlay_hints(
-            &source,
-            Range::new(Position::new(1, 0), Position::new(1, 200)),
-        );
-        let labels: Vec<_> = hints.iter().filter_map(hint_label).collect();
-
-        assert_eq!(labels, vec![": PolynomialRing"]);
-        assert_eq!(hints[0].position, Position::new(1, 1));
-    }
-
-    #[test]
-    fn code_actions_offer_sage_exponent_quick_fixes() {
-        let uri = Url::parse("file:///demo.sage").unwrap();
-        let diagnostic = Diagnostic {
-            range: Range::new(Position::new(0, 9), Position::new(0, 10)),
-            severity: Some(DiagnosticSeverity::ERROR),
-            code: Some(NumberOrString::String("syntax-error".to_string())),
-            source: Some("sage-ls".to_string()),
-            message: "Syntax error: incomplete Sage exponentiation".to_string(),
-            ..Diagnostic::default()
-        };
-        let actions = code_actions_for_diagnostics(uri.clone(), std::slice::from_ref(&diagnostic));
-
-        assert_eq!(actions.len(), 2);
-        let titles: Vec<_> = actions
-            .iter()
-            .filter_map(|action| match action {
-                CodeActionOrCommand::CodeAction(action) => Some(action.title.as_str()),
-                CodeActionOrCommand::Command(_) => None,
-            })
-            .collect();
-        assert_eq!(
-            titles,
-            vec![
-                "Remove incomplete Sage exponent operator",
-                "Insert exponent placeholder",
-            ]
-        );
-
-        let first_edit = match &actions[0] {
-            CodeActionOrCommand::CodeAction(action) => action
-                .edit
-                .as_ref()
-                .and_then(|edit| edit.changes.as_ref())
-                .and_then(|changes| changes.get(&uri))
-                .and_then(|edits| edits.first())
-                .expect("first action should include a text edit"),
-            CodeActionOrCommand::Command(_) => panic!("expected code action"),
-        };
-        assert_eq!(first_edit.range, diagnostic.range);
-        assert_eq!(first_edit.new_text, "");
-
-        let unrelated = Diagnostic {
-            message: "Syntax error: source could not be parsed".to_string(),
-            ..diagnostic
-        };
-        assert!(code_actions_for_diagnostics(uri, &[unrelated]).is_empty());
-    }
-
-    #[test]
-    fn code_actions_replace_python_sage_caret_exponents() {
-        let uri = Url::parse("file:///demo.py").unwrap();
-        let diagnostic = Diagnostic {
-            range: Range::new(Position::new(2, 9), Position::new(2, 10)),
-            severity: Some(DiagnosticSeverity::WARNING),
-            code: Some(NumberOrString::String(
-                "sage-python-caret-exponent".to_string(),
-            )),
-            source: Some("sage-ls".to_string()),
-            message:
-                "Sage-style exponent operator `^` has Python XOR semantics in `.py`; use `**`."
-                    .to_string(),
-            ..Diagnostic::default()
-        };
-        let actions = code_actions_for_diagnostics(uri.clone(), std::slice::from_ref(&diagnostic));
-
-        assert_eq!(actions.len(), 1);
-        let action = match &actions[0] {
-            CodeActionOrCommand::CodeAction(action) => action,
-            CodeActionOrCommand::Command(_) => panic!("expected code action"),
-        };
-        assert_eq!(action.title, "Replace Sage-style ^ with Python exponent **");
-        let edit = action
-            .edit
-            .as_ref()
-            .and_then(|edit| edit.changes.as_ref())
-            .and_then(|changes| changes.get(&uri))
-            .and_then(|edits| edits.first())
-            .expect("action should include a text edit");
-        assert_eq!(edit.range, diagnostic.range);
-        assert_eq!(edit.new_text, "**");
-    }
-
-    #[test]
-    fn initialization_options_parse_diagnostics_switch() {
-        let disabled = parse_initialization_options(Some(json!({
-            "analysis": {
-                "enableDiagnostics": false,
-                "enableRuntimeIntrospection": false,
-                "enablePyxParsing": false
-            }
-        })));
-        assert!(!disabled.analysis.enable_diagnostics);
-        assert!(!disabled.analysis.enable_runtime_introspection);
-        assert!(!disabled.analysis.enable_pyx_parsing);
-
-        let defaults = parse_initialization_options(None);
-        assert!(defaults.analysis.enable_diagnostics);
-        assert!(defaults.analysis.enable_runtime_introspection);
-        assert!(defaults.analysis.enable_pyx_parsing);
-    }
-
-    #[test]
-    fn initialization_options_parse_documentation_hover_switch() {
-        let disabled = parse_initialization_options(Some(json!({
-            "documentation": {
-                "preferredSource": "runtime",
-                "showOnHover": false
-            }
-        })));
-
-        assert_eq!(disabled.documentation.preferred_source, "runtime");
-        assert!(!disabled.documentation.show_on_hover);
-
-        let defaults = parse_initialization_options(None);
-        assert_eq!(defaults.documentation.preferred_source, "auto");
-        assert!(defaults.documentation.show_on_hover);
-    }
-
-    #[test]
-    fn documentation_preferred_source_parses_known_values() {
-        assert_eq!(
-            DocumentationPreferredSource::from_config("auto"),
-            DocumentationPreferredSource::Auto
-        );
-        assert_eq!(
-            DocumentationPreferredSource::from_config("workspace"),
-            DocumentationPreferredSource::Workspace
-        );
-        assert_eq!(
-            DocumentationPreferredSource::from_config("runtime"),
-            DocumentationPreferredSource::Runtime
-        );
-        assert_eq!(
-            DocumentationPreferredSource::from_config("reference"),
-            DocumentationPreferredSource::Reference
-        );
-        assert_eq!(
-            DocumentationPreferredSource::from_config("unexpected"),
-            DocumentationPreferredSource::Auto
-        );
-    }
-
-    #[test]
-    fn documentation_source_position_covers_external_definition_files() {
-        let path = PathBuf::from("/workspace/sage/combinat/combination.py");
-        let source = [
-            "def Combinations(mset, k=None, *, as_tuples=False):",
-            "    \"\"\"",
-            "    Return the combinatorial class of combinations of the multiset.",
-            "",
-            "    EXAMPLES::",
-            "",
-            "        sage: C = Combinations(range(4)); C",
-            "    \"\"\"",
-            "    return []",
-        ]
-        .join("\n");
-        let index = WorkspaceIndex::new(IndexOptions {
-            roots: vec![PathBuf::from("/workspace")],
-            editable_roots: Vec::new(),
-            exclude_globs: Vec::new(),
-            cache_dir: PathBuf::from("/tmp/sage-ls-doc-position-test"),
-            enable_pyx: true,
-        });
-
-        let record = documentation_record_for_source_position(
-            &index,
-            &path,
-            &source,
-            QueryPosition {
-                line: 0,
-                character: 8,
-            },
-        )
-        .expect("definition source position should produce docs");
-
-        assert_eq!(record.name, "Combinations");
-        assert_eq!(
-            record.summary,
-            "Return the combinatorial class of combinations of the multiset."
-        );
-        assert!(record
-            .docstring
-            .as_deref()
-            .is_some_and(|doc| doc.contains("EXAMPLES::")));
-    }
-
-    #[test]
-    fn declaration_source_position_covers_external_definition_files() {
-        let path = PathBuf::from("/workspace/sage/combinat/combination.py");
-        let uri = Url::from_file_path(&path).unwrap();
-        let source = [
-            "from sage.misc.lazy_import import lazy_import",
-            "",
-            "def Combinations(mset, k=None, *, as_tuples=False):",
-            "    return []",
-        ]
-        .join("\n");
-
-        let location = declaration_location_for_source_position(
-            &uri,
-            &path,
-            &source,
-            "Combinations",
-            Position::new(2, 8),
-        )
-        .expect("definition source position should be returned as declaration");
-
-        assert_eq!(location.uri, uri);
-        assert_eq!(
-            location.range,
-            Range::new(Position::new(2, 4), Position::new(2, 16))
-        );
-        assert!(
-            declaration_location_for_source_position(
-                &location.uri,
-                &path,
-                &source,
-                "lazy_import",
-                Position::new(0, 34),
-            )
-            .is_none(),
-            "imported names should not become declarations"
-        );
-    }
-
-    #[test]
-    fn runtime_docs_query_policy_respects_preferred_source() {
-        let placeholder = DocumentationRecord {
-            name: "PolynomialRing".to_string(),
-            docstring: Some(
-                "Known Sage symbol. Runtime documentation worker can provide details.".to_string(),
-            ),
-            ..DocumentationRecord::default()
-        };
-        let strong_static = DocumentationRecord {
-            name: "PolynomialRing".to_string(),
-            docstring: Some("Construct a polynomial ring.".to_string()),
-            ..DocumentationRecord::default()
-        };
-        let query = QueryResult {
-            target: Some(sage_index::QueryTarget {
-                symbol: "PolynomialRing".to_string(),
-                dotted_symbol: Some("sage.all.PolynomialRing".to_string()),
-                range: sage_index::SourceRange::default(),
-            }),
-            documentation: Some(placeholder),
-            ..QueryResult::default()
-        };
-        assert_eq!(
-            runtime_docs_symbol_for_query(&query, DocumentationPreferredSource::Auto),
-            Some("sage.all.PolynomialRing")
-        );
-        assert_eq!(
-            runtime_docs_symbol_for_query(&query, DocumentationPreferredSource::Runtime),
-            Some("sage.all.PolynomialRing")
-        );
-        assert_eq!(
-            runtime_docs_symbol_for_query(&query, DocumentationPreferredSource::Workspace),
-            None
-        );
-        assert_eq!(
-            runtime_docs_symbol_for_query(&query, DocumentationPreferredSource::Reference),
-            None
-        );
-
-        let strong_query = QueryResult {
-            documentation: Some(strong_static),
-            ..query
-        };
-        assert_eq!(
-            runtime_docs_symbol_for_query(&strong_query, DocumentationPreferredSource::Auto),
-            None
-        );
-        assert_eq!(
-            runtime_docs_symbol_for_query(&strong_query, DocumentationPreferredSource::Runtime),
-            Some("sage.all.PolynomialRing")
-        );
-    }
-
-    #[test]
-    fn hover_markdown_respects_documentation_preview_setting() {
-        let markdown = [
-            "```sage",
-            "PolynomialRing(base_ring, names)",
-            "```",
-            "",
-            "Module: `sage.rings.polynomial.polynomial_ring_constructor`",
-            "",
-            "Return a polynomial ring over the given base ring.",
-        ]
-        .join("\n");
-
-        assert_eq!(hover_markdown_for_hover_setting(&markdown, true), markdown);
-
-        let compact = hover_markdown_for_hover_setting(&markdown, false);
-        assert!(compact.contains("PolynomialRing(base_ring, names)"));
-        assert!(compact.contains("Module: `sage.rings.polynomial.polynomial_ring_constructor`"));
-        assert!(!compact.contains("Return a polynomial ring"));
-    }
-
-    #[test]
-    fn sage_folding_ranges_cover_python_sage_cython_and_comments() {
-        let source = [
-            "def kernel_columns(A):",
-            "    if A.ncols() == 0:",
-            "        return A",
-            "    return A",
-            "",
-            "# region setup",
-            "R = PolynomialRing(QQ, 'x')",
-            "# endregion",
-            "",
-            "# first note",
-            "# second note",
-            "cdef class NativeThing:",
-            "    cpdef rank(self):",
-            "        return 1",
-            "text = 'def fake():'",
-        ]
-        .join("\n");
-
-        let ranges = sage_folding_ranges(&source);
-        assert!(ranges
-            .iter()
-            .any(|range| range.start_line == 0 && range.end_line == 3 && range.kind.is_none()));
-        assert!(ranges
-            .iter()
-            .any(|range| range.start_line == 1 && range.end_line == 2 && range.kind.is_none()));
-        assert!(ranges.iter().any(|range| {
-            range.start_line == 5
-                && range.end_line == 7
-                && range.kind == Some(FoldingRangeKind::Region)
-        }));
-        assert!(ranges.iter().any(|range| {
-            range.start_line == 9
-                && range.end_line == 10
-                && range.kind == Some(FoldingRangeKind::Comment)
-        }));
-        assert!(ranges
-            .iter()
-            .any(|range| range.start_line == 11 && range.end_line == 13 && range.kind.is_none()));
-        assert!(ranges
-            .iter()
-            .all(|range| range.start_line != 14 && range.end_line != 14));
-    }
-
-    #[test]
-    fn sage_selection_ranges_expand_symbol_line_blocks_and_document() {
-        let source = [
-            "def kernel_columns(A):",
-            "    if A.ncols() == 0:",
-            "        return A",
-            "    return A",
-            "",
-            "value = kernel_columns(M)",
-        ]
-        .join("\n");
-
-        let chain = selection_chain_ranges(sage_selection_range(&source, Position::new(2, 15)));
-        assert!(chain.len() >= 5, "{chain:?}");
-        assert_eq!(
-            chain[0],
-            Range::new(Position::new(2, 15), Position::new(2, 16))
-        );
-        assert_eq!(
-            chain[1],
-            Range::new(Position::new(2, 8), Position::new(2, 16))
-        );
-        assert_eq!(
-            chain[2],
-            Range::new(Position::new(1, 0), Position::new(2, 16))
-        );
-        assert_eq!(
-            chain[3],
-            Range::new(Position::new(0, 0), Position::new(3, 12))
-        );
-        assert_eq!(
-            chain.last().copied(),
-            Some(Range::new(Position::new(0, 0), Position::new(5, 25)))
-        );
-
-        let leading_space_chain =
-            selection_chain_ranges(sage_selection_range(&source, Position::new(1, 2)));
-        assert_eq!(
-            leading_space_chain[0],
-            Range::new(Position::new(1, 2), Position::new(1, 2))
-        );
-        assert_eq!(
-            leading_space_chain[1],
-            Range::new(Position::new(1, 0), Position::new(1, 22))
-        );
-    }
-
-    #[test]
-    fn document_symbols_nest_classes_functions_and_locals() {
-        let path = PathBuf::from("/workspace/demo.sage");
-        let source = [
-            "class Solver:",
-            "    def build(self):",
-            "        R = PolynomialRing(QQ, 'x')",
-            "        return helper(R)",
-            "",
-            "def helper(R):",
-            "    return R",
-            "",
-            "R.<x, y> = PolynomialRing(QQ, 2)",
-        ]
-        .join("\n");
-        let parsed = parse_source(module_name_for_path(&path), &path, &source);
-        let symbols = document_symbols_for_source(&source, &parsed.symbols);
-        let names = symbols
-            .iter()
-            .map(|symbol| symbol.name.as_str())
-            .collect::<Vec<_>>();
-
-        assert!(names.contains(&"Solver"), "{names:?}");
-        assert!(names.contains(&"helper"), "{names:?}");
-
-        let solver = symbols
-            .iter()
-            .find(|symbol| symbol.name == "Solver")
-            .expect("class should be a top-level outline entry");
-        let children = solver
-            .children
-            .as_ref()
-            .expect("class should contain nested method symbols");
-        assert!(children.iter().any(|symbol| symbol.name == "build"));
-        assert_eq!(
-            solver.range,
-            Range::new(Position::new(0, 0), Position::new(3, 24))
-        );
-        assert_eq!(
-            solver.selection_range,
-            Range::new(Position::new(0, 6), Position::new(0, 12))
-        );
-    }
-
-    #[test]
-    fn document_symbols_hide_module_and_import_metadata() {
-        let path = PathBuf::from("/workspace/demo.py");
-        let source = [
-            "\"\"\"Module-level documentation.\"\"\"",
-            "from sage.all import PolynomialRing",
-            "",
-            "def build_ring():",
-            "    return PolynomialRing(QQ, 'x')",
-        ]
-        .join("\n");
-        let parsed = parse_source(module_name_for_path(&path), &path, &source);
-        let symbols = document_symbols_for_source(&source, &parsed.symbols);
-        let names = symbols
-            .iter()
-            .map(|symbol| symbol.name.as_str())
-            .collect::<Vec<_>>();
-
-        assert_eq!(names, vec!["build_ring"]);
-    }
-
-    #[test]
-    fn python_sage_import_items_are_detected_for_duplicate_navigation_suppression() {
-        let path = PathBuf::from("/workspace/demo.py");
-        let source = [
-            "from sage.all import (",
-            "    GF,",
-            "    PolynomialRing,",
-            ")",
-            "",
-            "R = PolynomialRing(GF(7), 'x')",
-        ]
-        .join("\n");
-        let definition = QueryDefinition {
-            name: "PolynomialRing".to_string(),
-            path: PathBuf::from("/sage/sage/rings/polynomial/polynomial_ring_constructor.py"),
-            range: sage_index::SourceRange {
-                start_line: 60,
-                start_character: 4,
-                end_line: 60,
-                end_character: 18,
-            },
-            detail: "def PolynomialRing(...)".to_string(),
-            module: "sage.rings.polynomial.polynomial_ring_constructor".to_string(),
-        };
-
-        assert!(should_defer_python_import_definition_to_python_provider(
-            &path,
-            &source,
-            Position::new(2, 8),
-            &definition,
-        ));
-        assert!(!should_defer_python_import_definition_to_python_provider(
-            &path,
-            &source,
-            Position::new(5, 6),
-            &definition,
-        ));
-    }
-
-    #[test]
-    fn document_symbol_provider_has_visible_vscode_label() {
-        assert_eq!(
-            sage_document_symbol_options().label.as_deref(),
-            Some("Sage")
-        );
-    }
-
-    #[test]
-    fn semantic_token_range_filters_to_requested_lines() {
-        let source = [
-            "# class IgnoredComment:",
-            "class Solver:",
-            "    def build(self):",
-            "        R = PolynomialRing(QQ, 'x')",
-            "text = 'def hidden():'",
-        ]
-        .join("\n");
-
-        let class_tokens = encode_semantic_tokens_for_range(
-            &source,
-            Range::new(Position::new(1, 0), Position::new(2, 0)),
-        );
-        assert_eq!(class_tokens.len(), 1);
-        assert_eq!(class_tokens[0].delta_line, 1);
-        assert_eq!(class_tokens[0].delta_start, 6);
-        assert_eq!(class_tokens[0].length, 6);
-        assert_eq!(class_tokens[0].token_type, token_type_index("class"));
-
-        let comment_tokens = encode_semantic_tokens_for_range(
-            &source,
-            Range::new(Position::new(0, 0), Position::new(1, 0)),
-        );
-        assert!(comment_tokens.is_empty());
-    }
-
-    #[test]
-    fn incremental_text_change_applies_single_line_insert() {
-        let mut source = "value = kernel_col\n".to_string();
-        apply_text_document_change(
-            &mut source,
-            &TextDocumentContentChangeEvent {
-                range: Some(Range::new(Position::new(0, 18), Position::new(0, 18))),
-                range_length: None,
-                text: "umns".to_string(),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(source, "value = kernel_columns\n");
-    }
-
-    #[test]
-    fn incremental_text_change_replaces_multiline_range() {
-        let mut source = "def build():\n    pass\nvalue = 1\n".to_string();
-        apply_text_document_change(
-            &mut source,
-            &TextDocumentContentChangeEvent {
-                range: Some(Range::new(Position::new(1, 4), Position::new(2, 9))),
-                range_length: None,
-                text: "return 2".to_string(),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(source, "def build():\n    return 2\n");
-    }
-
-    #[test]
-    fn incremental_text_change_handles_utf16_positions() {
-        let mut source = "text = \"😀\"\nvalue = π\n".to_string();
-        apply_text_document_change(
-            &mut source,
-            &TextDocumentContentChangeEvent {
-                range: Some(Range::new(Position::new(0, 8), Position::new(0, 10))),
-                range_length: None,
-                text: "theta".to_string(),
-            },
-        )
-        .unwrap();
-        apply_text_document_change(
-            &mut source,
-            &TextDocumentContentChangeEvent {
-                range: Some(Range::new(Position::new(1, 8), Position::new(1, 9))),
-                range_length: None,
-                text: "pi".to_string(),
-            },
-        )
-        .unwrap();
-
-        assert_eq!(source, "text = \"theta\"\nvalue = pi\n");
-    }
-
-    #[test]
-    fn incremental_text_change_rejects_split_surrogate_positions() {
-        let mut source = "text = \"😀\"\n".to_string();
-        let result = apply_text_document_change(
-            &mut source,
-            &TextDocumentContentChangeEvent {
-                range: Some(Range::new(Position::new(0, 9), Position::new(0, 10))),
-                range_length: None,
-                text: "broken".to_string(),
-            },
-        );
-
-        assert!(result.is_err());
-        assert_eq!(source, "text = \"😀\"\n");
-    }
-
-    #[test]
-    fn call_hierarchy_scanner_skips_declarations_methods_strings_and_comments() {
-        let source = [
-            "def main(A):",
-            "    helper(A)",
-            "    A.rank()",
-            "    text = \"fake()\"",
-            "    '''hidden()'''",
-            "    # ignored()",
-            "    R = PolynomialRing(QQ, 'x')",
-            "    return zero_matrix(QQ, 1, 1)",
-        ]
-        .join("\n");
-        let calls = call_ranges_in_range(
-            &source,
-            Range::new(Position::new(0, 0), Position::new(7, 35)),
-        );
-        let names = calls
-            .iter()
-            .map(|(name, _)| name.as_str())
-            .collect::<Vec<_>>();
-        assert_eq!(names, vec!["helper", "PolynomialRing", "zero_matrix"]);
-    }
-
-    #[test]
-    fn call_hierarchy_enclosing_item_finds_nearest_function_block() {
-        let path = PathBuf::from("/workspace/demo.sage");
-        let uri = Url::from_file_path(&path).unwrap();
-        let source = [
-            "def helper(A):",
-            "    return A",
-            "",
-            "def main(A):",
-            "    if A:",
-            "        return helper(A)",
-        ]
-        .join("\n");
-
-        let item =
-            enclosing_call_hierarchy_item(&uri, &path, &source, Position::new(5, 18)).unwrap();
-        assert_eq!(item.name, "main");
-        assert_eq!(item.selection_range.start, Position::new(3, 4));
-        assert_eq!(
-            item.range,
-            Range::new(Position::new(3, 0), Position::new(5, 24))
-        );
-    }
-
-    #[test]
-    fn call_hierarchy_prepare_prefers_open_document_local_definitions() {
-        let path = PathBuf::from("/workspace/demo.py");
-        let uri = Url::from_file_path(&path).unwrap();
-        let source = [
-            "from sage.all import zero_matrix",
-            "",
-            "def kernel_columns(A):",
-            "    if A.ncols() == 0:",
-            "        return zero_matrix(A.base_ring(), 0, 0)",
-            "    return A",
-            "",
-            "def caller(M):",
-            "    return kernel_columns(M)",
-        ]
-        .join("\n");
-
-        let item = call_hierarchy_item_for_local_symbol_at_position(
-            &uri,
-            &path,
-            &source,
-            Position::new(8, 13),
-        )
-        .expect("local function reference should resolve before global index fallback");
-
-        assert_eq!(item.name, "kernel_columns");
-        assert_eq!(item.uri, uri);
-        assert_eq!(
-            item.selection_range,
-            Range::new(Position::new(2, 4), Position::new(2, 18))
-        );
-        assert_eq!(
-            item.range,
-            Range::new(Position::new(2, 0), Position::new(5, 12))
-        );
-    }
-
-    #[test]
-    fn local_rename_fast_path_allows_editable_symbols_but_not_imports() {
-        let path = PathBuf::from("/workspace/demo.py");
-        let source = [
-            "from sage.all import PolynomialRing",
-            "",
-            "def kernel_columns(A):",
-            "    return A",
-            "",
-            "value = kernel_columns(M)",
-        ]
-        .join("\n");
-
-        assert!(local_rename_target_for_source(
-            &path,
-            &source,
-            "kernel_columns",
-            Range::new(Position::new(5, 8), Position::new(5, 22)),
-        ));
-        assert!(!local_rename_target_for_source(
-            &path,
-            &source,
-            "PolynomialRing",
-            Range::new(Position::new(0, 21), Position::new(0, 35)),
-        ));
-    }
-
-    #[test]
-    fn sage_document_links_cover_load_attach_and_cython_include() {
-        let path = PathBuf::from("/workspace/project/src/demo.sage");
-        let source = [
-            "load(\"helpers/setup.sage\")",
-            "attach('../shared/tools.sage')",
-            "# load('ignored.sage')",
-            "text = \"load('ignored.sage')\"",
-            "include \"native_include.pxi\"",
-            "    include 'native_support.pxd'",
-        ]
-        .join("\n");
-
-        let links = sage_document_links(&source, &path);
-        let targets = links
-            .iter()
-            .filter_map(|link| link.target.as_ref())
-            .map(|uri| uri.to_file_path().unwrap())
-            .collect::<Vec<_>>();
-        assert_eq!(links.len(), 4);
-        assert!(targets.contains(&PathBuf::from("/workspace/project/src/helpers/setup.sage")));
-        assert!(targets.contains(&PathBuf::from("/workspace/project/shared/tools.sage")));
-        assert!(targets.contains(&PathBuf::from("/workspace/project/src/native_include.pxi")));
-        assert!(targets.contains(&PathBuf::from("/workspace/project/src/native_support.pxd")));
-        assert_eq!(
-            links[0].range,
-            Range::new(Position::new(0, 6), Position::new(0, 24))
-        );
-    }
-
-    #[test]
-    fn import_modules_for_prewarm_extracts_local_targets() {
-        let path = PathBuf::from("/workspace/project/src/demo.sage");
-        let source = [
-            "from local_docs import PolynomialNotebook",
-            "from package_demo import named_polynomial, AffineNote",
-            "from external_series import EXTERNAL_LABEL as label_value",
-        ]
-        .join("\n");
-
-        assert_eq!(
-            import_modules_for_prewarm(&path, &source),
-            vec![
-                "external_series".to_string(),
-                "local_docs".to_string(),
-                "package_demo".to_string(),
-            ]
-        );
-    }
-
-    #[test]
-    fn document_highlights_cover_code_references_only() {
-        let path = PathBuf::from("/workspace/demo.sage");
-        let source = [
-            "def kernel_columns(A):",
-            "    return A",
-            "N = kernel_columns(M)",
-            "text = 'kernel_columns(M)'",
-            "# kernel_columns(comment)",
-            "K = kernel_columns(N)",
-        ]
-        .join("\n");
-        let highlights = document_highlights_for_source(
-            &path,
-            &source,
-            "kernel_columns",
-            Range::new(Position::new(0, 4), Position::new(0, 18)),
-        );
-
-        assert_eq!(highlights.len(), 3);
-        assert_eq!(
-            highlights
-                .iter()
-                .map(|highlight| highlight.range.start.line)
-                .collect::<Vec<_>>(),
-            vec![0, 2, 5]
-        );
-        assert!(highlights
-            .iter()
-            .all(|highlight| highlight.kind == Some(DocumentHighlightKind::TEXT)));
-
-        let comment_range = Range::new(Position::new(4, 2), Position::new(4, 16));
-        assert!(
-            document_highlights_for_source(&path, &source, "kernel_columns", comment_range,)
-                .is_empty()
-        );
-    }
-
-    #[test]
-    fn signature_information_extracts_parameter_offsets() {
-        let label = "trace_window(poly, base_ring=QQ, *, width=5, normalize=True)".to_string();
-        let info = signature_information(label.clone(), Some("docs".to_string()), 1);
-        assert_eq!(info.active_parameter, Some(1));
-        assert_eq!(
-            info.documentation,
-            Some(Documentation::String("docs".to_string()))
-        );
-        let parameters = info.parameters.expect("parameters should be present");
-        let labels = parameters
-            .iter()
-            .map(|parameter| match parameter.label {
-                ParameterLabel::LabelOffsets([start, end]) => &label[start as usize..end as usize],
-                ParameterLabel::Simple(_) => panic!("expected offset labels"),
-            })
-            .collect::<Vec<_>>();
-        assert_eq!(
-            labels,
-            vec!["poly", "base_ring=QQ", "*", "width=5", "normalize=True"]
-        );
-    }
-
-    #[test]
-    fn signature_parameters_ignore_nested_commas_and_strings() {
-        let label = "foo(a, data=(1, 2), names='x,y', options={\"k\": [1, 2]})";
-        let labels = signature_parameter_offsets(label)
-            .into_iter()
-            .map(|[start, end]| &label[start as usize..end as usize])
-            .collect::<Vec<_>>();
-        assert_eq!(
-            labels,
-            vec!["a", "data=(1, 2)", "names='x,y'", "options={\"k\": [1, 2]}"]
-        );
-        assert!(signature_parameter_offsets("foo()").is_empty());
-    }
-
-    fn selection_chain_ranges(selection_range: SelectionRange) -> Vec<Range> {
-        let mut ranges = Vec::new();
-        let mut current = Some(selection_range);
-        while let Some(selection) = current {
-            ranges.push(selection.range);
-            current = selection.parent.map(|parent| *parent);
-        }
-        ranges
-    }
-
-    fn full_range() -> Range {
-        Range::new(Position::new(0, 0), Position::new(u32::MAX, u32::MAX))
-    }
-
-    fn hint_label(hint: &InlayHint) -> Option<&str> {
-        match &hint.label {
-            InlayHintLabel::String(label) => Some(label.as_str()),
-            InlayHintLabel::LabelParts(_) => None,
-        }
-    }
-}
+mod tests;

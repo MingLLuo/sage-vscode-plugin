@@ -12,14 +12,6 @@ import { readSettings } from "./configuration";
 import { SageCellCodeLensProvider } from "./cellCodeLens";
 import { DocumentationPanel } from "./docsPanel";
 import {
-  documentationFallbackActions,
-  documentationFallbackCommand,
-  documentationFallbackMessage,
-} from "./documentationFallback";
-import { renderDocumentationMarkdown } from "./documentationRequest";
-import {
-  formatEnvironmentDetails,
-  formatIndexStatusMessage,
   formatStatusBarText,
   formatStatusBarTooltip,
   buildIndexMaintenanceNotice,
@@ -28,8 +20,19 @@ import {
   type IndexStatusSummary,
 } from "./environmentPresentation";
 import { createOutputLogger } from "./extensionLogger";
-import { createLanguageClient, executeSageCommand, requestDocumentation, RUST_LSP_COMMANDS, rustIndexCacheDir } from "./languageClient";
-import { formatDocsStatusReport, formatIndexStatusReport } from "./statusReports";
+import { registerExecutionCommands } from "./executionCommands";
+import {
+  isExternalSageSourceDocument as isExternalSageSourceDocumentInRoots,
+  languageServerUriForDocument,
+  registerExternalSourceNavigationProviders,
+} from "./externalSourceNavigation";
+import {
+  createLanguageClient,
+  executeSageCommand,
+  RUST_LSP_COMMANDS,
+  SAGE_LANGUAGE_FILE_GLOB,
+  rustIndexCacheDir,
+} from "./languageClient";
 import { STATUS_MENU_COMMAND, statusMenuActions } from "./statusMenu";
 import {
   DEFAULT_INDEX_CACHE_KEEP_LATEST_DATABASES,
@@ -39,15 +42,6 @@ import {
   DEFAULT_INDEX_CACHE_SIZE_PRUNE_MIN_AGE_DAYS,
   maintainIndexCache,
 } from "./indexCacheMaintenance";
-import { currentSageCell } from "./sageCells";
-import {
-  isLspLocationPayload,
-  type LspLocationPayload,
-} from "./sageNavigation";
-import {
-  locationFromLspPayload,
-  showReferencesQuickPick,
-} from "./referenceQuickPick";
 import {
   SageSourceTextDocumentProvider,
   SAGE_SOURCE_SCHEME,
@@ -58,12 +52,17 @@ import {
 } from "./interpreterDiscovery";
 import { shouldRestartLanguageServer } from "./serverRestart";
 import { SageTerminalManager } from "./terminalManager";
+import { registerNavigationCommands } from "./navigationCommands";
 import {
   buildQueryRequestPayload,
+  diagnosticCodeLabel,
+  diagnosticRangeLabel,
   formatUxSelfCheckReport,
+  measureAsync,
+  shouldRunFullUxSelfCheckQuery,
   type QueryResponse,
 } from "./uxSelfCheck";
-import { buildSupportBundle } from "./supportBundle";
+import { registerStatusCommands } from "./statusCommands";
 import {
   formatWorkspaceRuntimeUnavailableMessage,
   isWorkspaceRuntimeAvailable,
@@ -73,7 +72,6 @@ import {
   buildWorkspaceInitializationData,
   discoverSourceRoots,
   discoverSourceRootsAsync,
-  resolveRuntimePythonPaths,
 } from "./workspaceDiscovery";
 import {
   buildWorkspaceConfigurationUpdates,
@@ -82,6 +80,12 @@ import {
   type WorkspaceConfigurationProfile,
   type WorkspaceConfigurationProfileId,
 } from "./workspaceConfigurator";
+import { updateWorkspaceSettingJson } from "./workspaceSettingsJson";
+import {
+  effectiveSourceRootPaths as resolveEffectiveSourceRootPaths,
+  sourceRootContainsDocument,
+} from "./sourceRootPaths";
+import { LanguageServerStatusRefreshController } from "./statusRefreshController";
 
 let client: LanguageClient | undefined;
 let languageClientOperation: Promise<void> | undefined;
@@ -94,25 +98,20 @@ let configurationProfileUpdateDepth = 0;
 let suppressedConfigurationRestartCount = 0;
 let lastIndexStatus: IndexStatusSummary | undefined;
 let lastDocsStatus: DocsStatusSummary | undefined;
-let languageServerStatusRefreshTimer: ReturnType<typeof setInterval> | undefined;
-let languageServerStatusRefreshAttempts = 0;
-let languageServerStatusRefreshInFlight = false;
+let languageServerStatusRefreshController: LanguageServerStatusRefreshController | undefined;
 let slowLanguageServerNoticeTimer: ReturnType<typeof setTimeout> | undefined;
 let slowLanguageServerNoticeShown = false;
 let runtimeDiscoveredSourceRoots: string[] = [];
 let runtimeSourceRootDiscoveryOperation: Promise<void> | undefined;
 let runtimeSourceRootDiscoveryGeneration = 0;
+let runtimeSourceRootDiscoveryOperationId = 0;
+let extensionDeactivating = false;
 const shownIndexMaintenanceNotices = new Set<string>();
 
 const LANGUAGE_SERVER_STATUS_REFRESH_INTERVAL_MS = 1500;
-const LANGUAGE_SERVER_STATUS_REFRESH_MAX_ATTEMPTS = 12;
+const LANGUAGE_SERVER_STATUS_REFRESH_LOG_EVERY = 12;
 const SLOW_LANGUAGE_SERVER_NOTICE_MS = 8000;
 const GETTING_STARTED_WALKTHROUGH_ID = "gettingStarted";
-
-interface RunCurrentCellTarget {
-  uri?: vscode.Uri;
-  line?: number;
-}
 
 interface TestConfigureWorkspaceProfileResult {
   profileId: WorkspaceConfigurationProfileId;
@@ -140,28 +139,22 @@ async function updateWorkspaceSettingsJson(
 ): Promise<void> {
   const vscodeDirectoryUri = vscode.Uri.joinPath(workspaceFolderUri, ".vscode");
   const settingsUri = vscode.Uri.joinPath(vscodeDirectoryUri, "settings.json");
-  let settings: Record<string, unknown> = {};
+  let source = "";
 
   try {
     const existing = await vscode.workspace.fs.readFile(settingsUri);
-    const text = Buffer.from(existing).toString("utf8").trim();
-    if (text.length > 0) {
-      const parsed = JSON.parse(text);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        settings = parsed as Record<string, unknown>;
-      }
-    }
+    source = Buffer.from(existing).toString("utf8");
   } catch (error) {
     if (!(error instanceof vscode.FileSystemError && error.code === "FileNotFound")) {
       throw error;
     }
   }
 
-  settings[setting] = value;
+  const updated = updateWorkspaceSettingJson(source, setting, value);
   await vscode.workspace.fs.createDirectory(vscodeDirectoryUri);
   await vscode.workspace.fs.writeFile(
     settingsUri,
-    Buffer.from(`${JSON.stringify(settings, null, 2)}\n`, "utf8"),
+    Buffer.from(updated, "utf8"),
   );
 }
 
@@ -181,6 +174,9 @@ function isSageDocument(document: vscode.TextDocument | undefined): boolean {
   if (isSageDocumentLanguage(document.languageId, settings.pythonFilesEnabled)) {
     return true;
   }
+  if (document.uri.scheme === SAGE_SOURCE_SCHEME) {
+    return isExternalSageSourceDocument(document);
+  }
   if (document.uri.scheme !== "file" || document.languageId !== "python") {
     return false;
   }
@@ -188,96 +184,31 @@ function isSageDocument(document: vscode.TextDocument | undefined): boolean {
 }
 
 function isExternalSageSourceDocument(document: vscode.TextDocument): boolean {
-  if (document.uri.scheme !== "file" || document.languageId !== "python") {
-    return false;
-  }
-  if (vscode.workspace.getWorkspaceFolder(document.uri)) {
-    return false;
-  }
   const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
-  return sourceRootContainsDocument(effectiveSourceRootPaths(settings), document.uri.fsPath);
+  return isExternalSageSourceDocumentInRoots(document, effectiveSourceRootPaths(settings));
 }
 
 function effectiveSourceRootPaths(settings: ReturnType<typeof readSettings>): string[] {
-  const workspaceFolders = workspaceFolderPaths();
-  const configuredRoots = effectiveInitializationSourceRoots(settings).flatMap((root) => {
-    if (path.isAbsolute(root)) {
-      return [root];
-    }
-    if (workspaceFolders.length === 0) {
-      return [root];
-    }
-    return workspaceFolders.map((folder) => path.resolve(folder, root));
-  });
   const indexedRoots = (lastIndexStatus?.source_root_fingerprints ?? [])
     .map((fingerprint) => fingerprint.root)
     .filter((root): root is string => Boolean(root));
-
-  const normalized = [...configuredRoots, ...indexedRoots]
-    .map(normalizeSourceRootPath)
-    .filter((root): root is string => Boolean(root));
-  return [...new Set(normalized)];
+  return resolveEffectiveSourceRootPaths({
+    configuredRoots: effectiveInitializationSourceRoots(settings),
+    indexedRoots,
+    workspaceFolders: workspaceFolderPaths(),
+  });
 }
 
 function effectiveInitializationSourceRoots(settings: ReturnType<typeof readSettings>): string[] {
   return dedupeStrings([...settings.sourceRoots, ...runtimeDiscoveredSourceRoots]);
 }
 
-function normalizeSourceRootPath(root: string): string | undefined {
-  let candidate = root;
-  if (candidate.startsWith("file://")) {
-    try {
-      candidate = vscode.Uri.parse(candidate).fsPath;
-    } catch {
-      return undefined;
-    }
-  }
-  const resolved = path.resolve(candidate);
-  const trimmed = resolved.replace(/[\\/]+$/, "");
-  return trimmed || resolved;
-}
-
 function dedupeStrings(values: readonly string[]): string[] {
   return [...new Set(values)];
 }
 
-function sourceRootContainsDocument(sourceRoots: readonly string[], documentPath: string): boolean {
-  const normalizedDocumentPath = normalizeSourceRootPath(documentPath);
-  if (!normalizedDocumentPath) {
-    return false;
-  }
-  return sourceRoots.some((root) => {
-    const normalizedRoot = normalizeSourceRootPath(root);
-    return Boolean(
-      normalizedRoot
-      && (normalizedDocumentPath === normalizedRoot
-        || normalizedDocumentPath.startsWith(`${normalizedRoot}${path.sep}`)),
-    );
-  });
-}
-
-function diagnosticCodeLabel(code: vscode.Diagnostic["code"]): string | number | undefined {
-  if (typeof code === "string" || typeof code === "number") {
-    return code;
-  }
-  if (code && typeof code === "object" && "value" in code) {
-    const value = code.value;
-    return typeof value === "string" || typeof value === "number" ? value : String(value);
-  }
-  return undefined;
-}
-
-function diagnosticRangeLabel(range: vscode.Range): string {
-  return `${range.start.line}:${range.start.character}-${range.end.line}:${range.end.character}`;
-}
-
 function clearLanguageServerStatusRefresh(): void {
-  if (languageServerStatusRefreshTimer) {
-    clearInterval(languageServerStatusRefreshTimer);
-    languageServerStatusRefreshTimer = undefined;
-  }
-  languageServerStatusRefreshAttempts = 0;
-  languageServerStatusRefreshInFlight = false;
+  languageServerStatusRefreshController?.clear();
 }
 
 function clearSlowLanguageServerNotice(): void {
@@ -305,23 +236,14 @@ function workspaceFolderPaths(): string[] {
   return vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
 }
 
-function shouldRunFullUxSelfCheckQuery(query: QueryResponse | null | undefined): boolean {
-  const definitionPath = query?.definition?.path;
-  if (!definitionPath) {
-    return false;
-  }
-  const normalizedDefinition = path.resolve(definitionPath);
-  return workspaceFolderPaths()
-    .map((folder) => path.resolve(folder))
-    .some((folder) => normalizedDefinition === folder || normalizedDefinition.startsWith(`${folder}${path.sep}`));
-}
-
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  extensionDeactivating = false;
   const outputChannel = vscode.window.createOutputChannel("Sage");
   const languageOutputChannel = vscode.window.createOutputChannel("Sage Language Server");
   const logger = createOutputLogger(outputChannel);
   const docsPanel = new DocumentationPanel();
   const terminalManager = new SageTerminalManager();
+  const languageServerFileWatcher = vscode.workspace.createFileSystemWatcher(SAGE_LANGUAGE_FILE_GLOB);
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   const cellCodeLensProvider = new SageCellCodeLensProvider({
     isEnabled: (document) => {
@@ -334,13 +256,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const showExecutionStatus = (message: string, fields: Record<string, unknown> = {}): void => {
     void vscode.window.setStatusBarMessage(message, 3000);
     logger.info("execution", message, fields);
-  };
-  const showStatusReport = (title: string, report: string, notification: string): void => {
-    outputChannel.appendLine(`## ${title}`);
-    outputChannel.appendLine(report);
-    outputChannel.appendLine("");
-    outputChannel.show(true);
-    void vscode.window.showInformationMessage(notification);
   };
   const buildEnvironmentPresentationInput = (languageServerStarting = false): EnvironmentPresentationInput => {
     const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
@@ -377,6 +292,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     outputChannel,
     languageOutputChannel,
+    docsPanel,
+    terminalManager,
+    languageServerFileWatcher,
     statusBarItem,
     cellCodeLensProvider,
     vscode.languages.registerCodeLensProvider(
@@ -437,21 +355,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.window.showWarningMessage(message);
     }
     return false;
-  };
-
-  const editorForCellExecution = async (target?: RunCurrentCellTarget): Promise<vscode.TextEditor | undefined> => {
-    if (!target?.uri) {
-      return vscode.window.activeTextEditor;
-    }
-
-    const targetUri = target.uri.toString();
-    const visibleEditor = vscode.window.visibleTextEditors.find((editor) => editor.document.uri.toString() === targetUri);
-    if (visibleEditor) {
-      return visibleEditor;
-    }
-
-    const document = await vscode.workspace.openTextDocument(target.uri);
-    return vscode.window.showTextDocument(document, { preview: false, preserveFocus: true });
   };
 
   const applyWorkspaceConfigurationProfile = async (
@@ -617,6 +520,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const startLanguageClient = async (): Promise<void> => {
+    if (extensionDeactivating) {
+      return;
+    }
     languageClientRestartQueued = true;
     if (languageClientOperation) {
       await languageClientOperation;
@@ -624,7 +530,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
 
     languageClientOperation = (async () => {
-      while (languageClientRestartQueued) {
+      while (languageClientRestartQueued && !extensionDeactivating) {
         languageClientRestartQueued = false;
         clearLanguageServerStatusRefresh();
 
@@ -638,6 +544,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           } finally {
             languageClientManagedShutdown = false;
           }
+        }
+        if (extensionDeactivating) {
+          break;
         }
 
         const workspaceRuntimeState = currentWorkspaceRuntimeState();
@@ -654,8 +563,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
         try {
           await runIndexCacheMaintenance("language-client-start");
+          if (extensionDeactivating) {
+            break;
+          }
           const nextClient = createLanguageClient(context, languageOutputChannel, {
-            shouldAutoRestartOnClose: () => !languageClientManagedShutdown,
+            fileSystemWatcher: languageServerFileWatcher,
+            shouldAutoRestartOnClose: () => !languageClientManagedShutdown && !extensionDeactivating,
             runtimeDiscoveredSourceRoots,
             onClose: ({ managedShutdown }) => {
               if (!managedShutdown) {
@@ -664,13 +577,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             },
           });
           languageClientLaunchCount += 1;
-          client = nextClient;
           await nextClient.start();
+          if (extensionDeactivating) {
+            languageClientManagedShutdown = true;
+            languageClientManagedCloseCount += 1;
+            try {
+              await nextClient.stop();
+            } finally {
+              languageClientManagedShutdown = false;
+            }
+            continue;
+          }
+          client = nextClient;
           await refreshLanguageServerStatus();
           scheduleLanguageServerStatusRefresh();
           logger.info("extension", "language client started", { launchCount: languageClientLaunchCount });
         } catch (error) {
           client = undefined;
+          if (extensionDeactivating) {
+            continue;
+          }
           const message = `Sage language server failed to start: ${String(error)}`;
           logger.error("extension", "language server failed to start", { error: String(error) });
           void vscode.window.showErrorMessage(
@@ -689,6 +615,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const startLanguageClientInBackground = (reason: string, force = false): void => {
+    if (extensionDeactivating) {
+      return;
+    }
     if (!force && !shouldAutoStartLanguageClient(activationPolicyInput())) {
       logger.info("extension", "language client auto-start skipped outside Sage context", { reason });
       updateStatusBar();
@@ -705,7 +634,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const scheduleRuntimeSourceRootDiscovery = (reason: string): void => {
-    if (runtimeSourceRootDiscoveryOperation || !isWorkspaceRuntimeAvailable(currentWorkspaceRuntimeState())) {
+    if (
+      extensionDeactivating
+      || runtimeSourceRootDiscoveryOperation
+      || !isWorkspaceRuntimeAvailable(currentWorkspaceRuntimeState())
+    ) {
       return;
     }
     if (!shouldAutoStartLanguageClient(activationPolicyInput())) {
@@ -729,7 +662,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
     ).map((root) => path.resolve(root));
 
-    runtimeSourceRootDiscoveryOperation = (async () => {
+    const operationId = ++runtimeSourceRootDiscoveryOperationId;
+    const operation = (async () => {
       const started = Date.now();
       try {
         const discoveredRoots = await discoverSourceRootsAsync(
@@ -740,7 +674,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             interpreterArgs: settings.interpreterArgs,
           },
         );
-        if (discoveryGeneration !== runtimeSourceRootDiscoveryGeneration) {
+        if (extensionDeactivating || discoveryGeneration !== runtimeSourceRootDiscoveryGeneration) {
           return;
         }
         const knownRoots = new Set(
@@ -772,11 +706,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           error: String(error),
         });
       } finally {
-        if (discoveryGeneration === runtimeSourceRootDiscoveryGeneration) {
+        if (runtimeSourceRootDiscoveryOperationId === operationId) {
           runtimeSourceRootDiscoveryOperation = undefined;
+          if (!extensionDeactivating && discoveryGeneration !== runtimeSourceRootDiscoveryGeneration) {
+            scheduleRuntimeSourceRootDiscovery("superseded-runtime-discovery");
+          }
         }
       }
     })();
+    runtimeSourceRootDiscoveryOperation = operation;
   };
 
   const ensureLanguageClientReady = async (action: string): Promise<LanguageClient | undefined> => {
@@ -808,72 +746,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   context.subscriptions.push(
-    vscode.languages.registerReferenceProvider(
-      [{ scheme: "file", language: "python" }],
-      {
-        async provideReferences(document, position, referenceContext, token) {
-          if (!isExternalSageSourceDocument(document)) {
-            return [];
-          }
-          const activeClient = await ensureLanguageClientReady("Finding Sage references");
-          if (!activeClient || token.isCancellationRequested) {
-            return [];
-          }
-          const payload = {
-            textDocument: { uri: document.uri.toString() },
-            position: {
-              line: position.line,
-              character: position.character,
-            },
-            context: { includeDeclaration: referenceContext.includeDeclaration },
-          };
-          try {
-            const references = await activeClient.sendRequest<LspLocationPayload[]>(
-              "textDocument/references",
-              payload,
-              token,
-            );
-            const locations = (references ?? [])
-              .filter(isLspLocationPayload)
-              .map(locationFromLspPayload)
-              .filter((location): location is vscode.Location => Boolean(location));
-            logger.info("navigation", "external Sage source references resolved", {
-              uri: document.uri.toString(),
-              line: position.line,
-              character: position.character,
-              includeDeclaration: referenceContext.includeDeclaration,
-              count: locations.length,
-            });
-            return locations;
-          } catch (error) {
-            logger.warn("navigation", "external Sage source references failed", {
-              uri: document.uri.toString(),
-              line: position.line,
-              character: position.character,
-              error: String(error),
-            });
-            return [];
-          }
-        },
-      },
-    ),
+    ...registerExternalSourceNavigationProviders({
+      ensureLanguageClientReady,
+      isExternalSourceDocument: isExternalSageSourceDocument,
+      logger,
+    }),
   );
 
   const refreshLanguageServerStatus = async (): Promise<void> => {
-    if (!client) {
+    const activeClient = client;
+    if (!activeClient) {
       lastIndexStatus = undefined;
       lastDocsStatus = undefined;
       updateStatusBar();
       return;
     }
     try {
-      lastIndexStatus = await executeSageCommand<IndexStatusSummary>(client, RUST_LSP_COMMANDS.indexStatus) ?? undefined;
-      lastDocsStatus = await executeSageCommand<DocsStatusSummary>(client, RUST_LSP_COMMANDS.docsStatus) ?? undefined;
+      const [indexStatus, docsStatus] = await Promise.all([
+        executeSageCommand<IndexStatusSummary>(activeClient, RUST_LSP_COMMANDS.indexStatus),
+        executeSageCommand<DocsStatusSummary>(activeClient, RUST_LSP_COMMANDS.docsStatus),
+      ]);
+      if (client !== activeClient || extensionDeactivating) {
+        return;
+      }
+      lastIndexStatus = indexStatus ?? undefined;
+      lastDocsStatus = docsStatus ?? undefined;
       maybePromptForIndexMaintenance(lastIndexStatus);
     } catch (error) {
       logger.warn("extension", "failed to refresh language server status", { error: String(error) });
     } finally {
-      updateStatusBar();
+      if (!extensionDeactivating && client === activeClient) {
+        updateStatusBar();
+      }
     }
   };
 
@@ -898,30 +802,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
   };
 
-  const scheduleLanguageServerStatusRefresh = (): void => {
-    clearLanguageServerStatusRefresh();
-    languageServerStatusRefreshTimer = setInterval(() => {
-      if (languageServerStatusRefreshInFlight) {
-        return;
-      }
-      languageServerStatusRefreshInFlight = true;
-      void refreshLanguageServerStatus().finally(() => {
-        languageServerStatusRefreshInFlight = false;
-        languageServerStatusRefreshAttempts += 1;
-        const pendingJobs = lastIndexStatus?.pending_jobs ?? 0;
-        if (pendingJobs === 0) {
-          clearLanguageServerStatusRefresh();
-          return;
-        }
-        if (languageServerStatusRefreshAttempts === LANGUAGE_SERVER_STATUS_REFRESH_MAX_ATTEMPTS) {
-          logger.info("extension", "language server status still pending; continuing refresh", {
-            pendingJobs,
-            pendingTask: lastIndexStatus?.pending_task,
-            attempts: languageServerStatusRefreshAttempts,
-          });
-        }
+  languageServerStatusRefreshController?.dispose();
+  languageServerStatusRefreshController = new LanguageServerStatusRefreshController({
+    intervalMs: LANGUAGE_SERVER_STATUS_REFRESH_INTERVAL_MS,
+    logEvery: LANGUAGE_SERVER_STATUS_REFRESH_LOG_EVERY,
+    refresh: refreshLanguageServerStatus,
+    snapshot: () => ({
+      pendingJobs: lastIndexStatus?.pending_jobs ?? 0,
+      pendingTask: lastIndexStatus?.pending_task ?? undefined,
+    }),
+    shouldContinue: () => !extensionDeactivating,
+    logPending: (attempts, snapshot) => {
+      logger.debug("extension", "language server status still pending; continuing automatic refresh", {
+        pendingJobs: snapshot.pendingJobs,
+        pendingTask: snapshot.pendingTask,
+        attempts,
       });
-    }, LANGUAGE_SERVER_STATUS_REFRESH_INTERVAL_MS);
+    },
+  });
+  context.subscriptions.push(languageServerStatusRefreshController);
+
+  const scheduleLanguageServerStatusRefresh = (): void => {
+    languageServerStatusRefreshController?.schedule();
   };
 
   context.subscriptions.push(
@@ -1054,241 +956,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       await applyWorkspaceConfigurationProfile(picked.profile as WorkspaceConfigurationProfile, "configure-workspace", true);
     }),
-    vscode.commands.registerCommand("sage.__test.getLifecycleSnapshot", () => languageClientLifecycleSnapshot()),
-    vscode.commands.registerCommand("sage.__test.getCurrentSageContext", () => {
-      const activeDocument = vscode.window.activeTextEditor?.document;
-      const settings = activeEditorSettings();
-      const policyInput = activationPolicyInput();
-      return {
-        languageId: activeDocument?.languageId,
-        pythonFilesEnabled: settings.pythonFilesEnabled,
-        sourceRootCount: settings.sourceRoots.length,
-        extraPathCount: settings.extraPaths.length,
-        isSageEditor: isSageDocument(activeDocument),
-        shouldAutoStartLanguageClient: shouldAutoStartLanguageClient(policyInput),
-        shouldExposeSageExperience: shouldExposeSageExperience(policyInput),
-      };
+    ...registerExecutionCommands({
+      terminalManager,
+      ensureWorkspaceRuntimeAvailable,
+      workspaceFolderPaths,
+      showExecutionStatus,
     }),
-    vscode.commands.registerCommand("sage.__test.awaitLanguageClientStable", async () => {
-      if (languageClientOperation) {
-        await languageClientOperation;
-      }
-      return languageClientLifecycleSnapshot();
-    }),
-    vscode.commands.registerCommand("sage.__test.restartLanguageServerAndWait", async () => {
-      await startLanguageClient();
-      return languageClientLifecycleSnapshot();
-    }),
-    vscode.commands.registerCommand("sage.__test.configureWorkspaceProfile", async (profileId: WorkspaceConfigurationProfileId = "research") => {
-      const profile = WORKSPACE_CONFIGURATION_PROFILES.find((entry) => entry.id === profileId);
-      if (!profile) {
-        throw new Error(`Unknown Sage workspace profile: ${profileId}`);
-      }
-      return applyWorkspaceConfigurationProfile(profile, "test-configure-workspace", false);
-    }),
-    vscode.commands.registerCommand("sage.runCurrentFile", async () => {
-      if (!(await ensureWorkspaceRuntimeAvailable("Running a Sage file"))) {
-        return;
-      }
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        void vscode.window.showWarningMessage("Open a Sage file before running it.");
-        return;
-      }
-      if (editor.document.uri.scheme !== "file") {
-        void vscode.window.showWarningMessage("Sage can only run local files from disk.");
-        return;
-      }
-      const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
-      const runtimePythonPaths = resolveRuntimePythonPaths(
-        workspaceFolderPaths(),
-        settings.sourceRoots,
-        settings.extraPaths,
-      );
-      const terminal = terminalManager.runFile({ ...settings, runtimePythonPaths }, editor.document.uri.fsPath);
-      terminal.show(true);
-      showExecutionStatus(
-        settings.runTarget === "repl"
-          ? "Sage: sent current file to REPL"
-          : "Sage: running current file",
-        {
-          target: settings.runTarget,
-          path: editor.document.uri.fsPath,
-          runtimePythonPaths: runtimePythonPaths.length,
-        },
-      );
-    }),
-    vscode.commands.registerCommand("sage.runSelection", async () => {
-      if (!(await ensureWorkspaceRuntimeAvailable("Running Sage code in the REPL"))) {
-        return;
-      }
-      const editor = vscode.window.activeTextEditor;
-      if (!editor) {
-        void vscode.window.showWarningMessage("Open a Sage file before sending code to REPL.");
-        return;
-      }
-      const selection = editor.document.getText(editor.selection) || editor.document.lineAt(editor.selection.active.line).text;
-      const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
-      const runtimePythonPaths = resolveRuntimePythonPaths(
-        workspaceFolderPaths(),
-        settings.sourceRoots,
-        settings.extraPaths,
-        editor.document.uri.fsPath,
-      );
-      const terminal = terminalManager.runSelection({ ...settings, runtimePythonPaths }, selection);
-      terminal.show(true);
-      showExecutionStatus("Sage: sent selection to REPL", {
-        selectionLength: selection.length,
-        runtimePythonPaths: runtimePythonPaths.length,
-      });
-    }),
-    vscode.commands.registerCommand("sage.runCurrentCell", async (target?: RunCurrentCellTarget) => {
-      if (!(await ensureWorkspaceRuntimeAvailable("Running the current Sage cell in the REPL"))) {
-        return;
-      }
-      const editor = await editorForCellExecution(target);
-      if (!editor) {
-        void vscode.window.showWarningMessage("Open a Sage file before sending a cell to REPL.");
-        return;
-      }
-      const activeLine = typeof target?.line === "number" ? target.line : editor.selection.active.line;
-      const cell = currentSageCell(editor.document.getText(), activeLine);
-      if (!cell) {
-        void vscode.window.showWarningMessage("No Sage cell content found near the cursor.");
-        return;
-      }
-      const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
-      const runtimePythonPaths = resolveRuntimePythonPaths(
-        workspaceFolderPaths(),
-        settings.sourceRoots,
-        settings.extraPaths,
-        editor.document.uri.scheme === "file" ? editor.document.uri.fsPath : undefined,
-      );
-      const terminal = terminalManager.runSelection({ ...settings, runtimePythonPaths }, cell.text);
-      terminal.show(true);
-      showExecutionStatus("Sage: sent current cell to REPL", {
-        startLine: cell.startLine,
-        endLine: cell.endLine,
-        selectionLength: cell.text.length,
-        runtimePythonPaths: runtimePythonPaths.length,
-      });
-    }),
-    vscode.commands.registerCommand("sage.startRepl", async () => {
-      if (!(await ensureWorkspaceRuntimeAvailable("Starting the Sage REPL"))) {
-        return;
-      }
-      const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
-      const terminal = terminalManager.startRepl(settings);
-      terminal.show(true);
-      showExecutionStatus("Sage: REPL ready or starting", {
-        interpreterPath: settings.interpreterPath,
-      });
-    }),
-    vscode.commands.registerCommand("sage.showDocumentation", async () => {
-      const activeClient = await ensureLanguageClientReady("Showing Sage documentation");
-      if (!activeClient) {
-        return;
-      }
-
-      const editor = activeOrVisibleSageEditor();
-      if (!editor) {
-        void vscode.window.showWarningMessage("Open a Sage file to request documentation.");
-        return;
-      }
-
-      const selectedText = editor.document.getText(editor.selection).trim() || undefined;
-      const result = await requestDocumentation(
-        activeClient,
-        editor.document.uri.toString(),
-        editor.selection.active.line,
-        editor.selection.active.character,
-        selectedText,
-      );
-
-      if (!result) {
-        const selectedAction = await vscode.window.showInformationMessage(
-          documentationFallbackMessage(selectedText),
-          ...documentationFallbackActions(),
-        );
-        if (selectedAction) {
-          await vscode.commands.executeCommand(documentationFallbackCommand(selectedAction));
-        }
-        return;
-      }
-
-      docsPanel.show(`Docs: ${result.symbol}`, renderDocumentationMarkdown(result));
-    }),
-    vscode.commands.registerCommand("sage.findReferences", async () => {
-      const activeClient = await ensureLanguageClientReady("Finding Sage references");
-      if (!activeClient) {
-        return;
-      }
-
-      const editor = activeOrVisibleSageEditor();
-      if (!editor) {
-        logger.warn("navigation", "Sage references skipped because no Sage editor is visible", {
-          activeLanguageId: vscode.window.activeTextEditor?.document.languageId ?? "none",
-          activeUri: vscode.window.activeTextEditor?.document.uri.toString() ?? "none",
-        });
-        void vscode.window.showWarningMessage("Open a Sage file before finding references.");
-        return;
-      }
-
-      const payload = {
-        textDocument: { uri: editor.document.uri.toString() },
-        position: {
-          line: editor.selection.active.line,
-          character: editor.selection.active.character,
-        },
-        context: { includeDeclaration: true },
-      };
-      let references: LspLocationPayload[];
-      try {
-        references = await activeClient.sendRequest<LspLocationPayload[]>("textDocument/references", payload);
-      } catch (error) {
-        logger.error("navigation", "Sage references request failed", {
-          uri: editor.document.uri.toString(),
-          line: editor.selection.active.line,
-          character: editor.selection.active.character,
-          error: String(error),
-        });
-        void vscode.window.showErrorMessage(`Sage references failed: ${String(error)}`);
-        return;
-      }
-      const locations = (references ?? [])
-        .filter(isLspLocationPayload)
-        .map(locationFromLspPayload)
-        .filter((location): location is vscode.Location => Boolean(location));
-
-      logger.info("navigation", "Sage references resolved", {
-        uri: editor.document.uri.toString(),
-        languageId: editor.document.languageId,
-        workspaceFolder: vscode.workspace.getWorkspaceFolder(editor.document.uri)?.uri.toString() ?? "external",
-        line: editor.selection.active.line,
-        character: editor.selection.active.character,
-        count: locations.length,
-      });
-      if (locations.length === 0) {
-        void vscode.window.showInformationMessage("No Sage references found for the current symbol.");
-        return;
-      }
-
-      try {
-        await vscode.commands.executeCommand(
-          "editor.action.peekLocations",
-          editor.document.uri,
-          editor.selection.active,
-          locations,
-          "peek",
-        );
-      } catch (error) {
-        logger.warn("navigation", "Peek references failed; falling back to quick pick", {
-          uri: editor.document.uri.toString(),
-          count: locations.length,
-          error: String(error),
-        });
-        await showReferencesQuickPick(locations);
-      }
+    ...registerNavigationCommands({
+      docsPanel,
+      logger,
+      ensureLanguageClientReady,
+      activeOrVisibleSageEditor,
     }),
     vscode.commands.registerCommand("sage.runUxSelfCheck", async () => {
       const activeClient = await ensureLanguageClientReady("Running the Sage UX self check");
@@ -1303,6 +981,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
 
       const selectedText = editor.document.getText(editor.selection).trim() || undefined;
+      const languageServerUri = languageServerUriForDocument(editor.document);
       const selfCheckStarted = Date.now();
       const queryStarted = Date.now();
       let query = await executeSageCommand<QueryResponse>(
@@ -1310,7 +989,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         RUST_LSP_COMMANDS.queryAtPosition,
         [
           buildQueryRequestPayload(
-            editor.document.uri.toString(),
+            languageServerUri.toString(),
             editor.selection.active.line,
             editor.selection.active.character,
             selectedText,
@@ -1320,14 +999,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       );
       const queryMs = Date.now() - queryStarted;
       let fullQueryMs: number | undefined;
-      if (shouldRunFullUxSelfCheckQuery(query)) {
+      if (shouldRunFullUxSelfCheckQuery(query, workspaceFolderPaths())) {
         const fullQueryStarted = Date.now();
         query = await executeSageCommand<QueryResponse>(
           activeClient,
           RUST_LSP_COMMANDS.queryAtPosition,
           [
             buildQueryRequestPayload(
-              editor.document.uri.toString(),
+              languageServerUri.toString(),
               editor.selection.active.line,
               editor.selection.active.character,
               selectedText,
@@ -1336,12 +1015,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         );
         fullQueryMs = Date.now() - fullQueryStarted;
       }
-      const indexStatusStarted = Date.now();
-      lastIndexStatus = await executeSageCommand<IndexStatusSummary>(activeClient, RUST_LSP_COMMANDS.indexStatus) ?? undefined;
-      const indexStatusMs = Date.now() - indexStatusStarted;
-      const docsStatusStarted = Date.now();
-      lastDocsStatus = await executeSageCommand<DocsStatusSummary>(activeClient, RUST_LSP_COMMANDS.docsStatus) ?? undefined;
-      const docsStatusMs = Date.now() - docsStatusStarted;
+      const [indexStatusResult, docsStatusResult] = await Promise.all([
+        measureAsync(() => executeSageCommand<IndexStatusSummary>(activeClient, RUST_LSP_COMMANDS.indexStatus)),
+        measureAsync(() => executeSageCommand<DocsStatusSummary>(activeClient, RUST_LSP_COMMANDS.docsStatus)),
+      ]);
+      lastIndexStatus = indexStatusResult.value ?? undefined;
+      lastDocsStatus = docsStatusResult.value ?? undefined;
       updateStatusBar();
       const result = formatUxSelfCheckReport({
         documentUri: editor.document.uri.toString(),
@@ -1352,8 +1031,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         timings: {
           queryMs,
           fullQueryMs,
-          indexStatusMs,
-          docsStatusMs,
+          indexStatusMs: indexStatusResult.elapsedMs,
+          docsStatusMs: docsStatusResult.elapsedMs,
           totalMs: Date.now() - selfCheckStarted,
         },
         editorDiagnostics: vscode.languages.getDiagnostics(editor.document.uri).map((diagnostic) => ({
@@ -1369,96 +1048,26 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       outputChannel.show(true);
       void vscode.window.showInformationMessage(`Sage UX Self Check: ${result.passed}/${result.total} checks passing`);
     }),
-    vscode.commands.registerCommand("sage.showEnvironmentDetails", async () => {
-      showStatusReport(
-        "Sage Environment Details",
-        formatEnvironmentDetails(buildEnvironmentPresentationInput()),
-        "Sage environment details written to the Sage output channel.",
-      );
-    }),
-    vscode.commands.registerCommand("sage.showIndexStatus", async () => {
-      const activeClient = await ensureLanguageClientReady("Showing the Sage index status");
-      if (!activeClient) {
-        return;
-      }
-      const status = await executeSageCommand<IndexStatusSummary>(activeClient, RUST_LSP_COMMANDS.indexStatus);
-      lastIndexStatus = status ?? undefined;
-      updateStatusBar();
-      showStatusReport(
-        "Sage Index Status",
-        formatIndexStatusReport(status),
-        "Sage index status written to the Sage output channel.",
-      );
-    }),
-    vscode.commands.registerCommand("sage.showDocsStatus", async () => {
-      const activeClient = await ensureLanguageClientReady("Showing the Sage docs status");
-      if (!activeClient) {
-        return;
-      }
-      const status = await executeSageCommand<DocsStatusSummary>(activeClient, RUST_LSP_COMMANDS.docsStatus);
-      lastDocsStatus = status ?? undefined;
-      updateStatusBar();
-      showStatusReport(
-        "Sage Documentation Status",
-        formatDocsStatusReport(status),
-        "Sage documentation status written to the Sage output channel.",
-      );
-    }),
-    vscode.commands.registerCommand("sage.copySupportBundle", async () => {
-      if (client) {
-        await refreshLanguageServerStatus();
-      }
-      const activeDocument = vscode.window.activeTextEditor?.document;
-      const settings = activeEditorSettings();
-      const workspaceRuntimeState = currentWorkspaceRuntimeState();
-      const bundle = buildSupportBundle({
-        generatedAt: new Date().toISOString(),
-        extension: {
-          id: context.extension.id,
-          version: String(context.extension.packageJSON?.version ?? "unknown"),
-        },
-        host: {
-          vscodeVersion: vscode.version,
-          platform: process.platform,
-          arch: process.arch,
-          nodeVersion: process.version,
-        },
-        workspace: {
-          folders: workspaceFolderPaths(),
-          trusted: workspaceRuntimeState.trusted,
-          hasVirtualWorkspace: workspaceRuntimeState.hasVirtualWorkspace,
-        },
-        activeDocument: activeDocument
-          ? {
-            uri: activeDocument.uri.toString(),
-            languageId: activeDocument.languageId,
-            scheme: activeDocument.uri.scheme,
-          }
-          : undefined,
-        settings,
-        environment: buildEnvironmentPresentationInput(Boolean(languageClientOperation && !client)),
-        lifecycle: languageClientLifecycleSnapshot(),
-        indexStatus: lastIndexStatus,
-        docsStatus: lastDocsStatus,
-      });
-      await vscode.env.clipboard.writeText(bundle);
-      outputChannel.clear();
-      outputChannel.appendLine(bundle);
-      outputChannel.show(true);
-      void vscode.window.showInformationMessage(
-        "Sage support bundle copied. It includes paths and settings, but no source contents, selected text, or environment variables.",
-      );
-    }),
-    vscode.commands.registerCommand("sage.rebuildIndex", async () => {
-      const activeClient = await ensureLanguageClientReady("Rebuilding the Sage index");
-      if (!activeClient) {
-        return;
-      }
-      const status = await executeSageCommand<IndexStatusSummary>(activeClient, RUST_LSP_COMMANDS.rebuildIndex);
-      lastIndexStatus = status ?? undefined;
-      await refreshLanguageServerStatus();
-      scheduleLanguageServerStatusRefresh();
-      void vscode.window.showInformationMessage(`Index rebuilt: ${formatIndexStatusMessage(status)}`);
+    ...registerStatusCommands({
+      context,
+      outputChannel,
+      logger,
+      ensureLanguageClientReady,
+      refreshLanguageServerStatus,
+      activeEditorSettings,
+      workspaceFolderPaths,
+      currentWorkspaceRuntimeState,
+      buildEnvironmentPresentationInput,
+      languageClientLifecycleSnapshot,
+      languageClientState: () => ({
+        available: Boolean(client),
+        starting: Boolean(languageClientOperation),
+      }),
+      getIndexStatus: () => lastIndexStatus,
+      setIndexStatus: (status) => { lastIndexStatus = status; },
+      getDocsStatus: () => lastDocsStatus,
+      setDocsStatus: (status) => { lastDocsStatus = status; },
+      updateStatusBar,
     }),
     vscode.workspace.onDidChangeConfiguration(async (event) => {
       if (!event.affectsConfiguration("sage")) {
@@ -1474,7 +1083,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       ) {
         runtimeDiscoveredSourceRoots = [];
         runtimeSourceRootDiscoveryGeneration += 1;
-        runtimeSourceRootDiscoveryOperation = undefined;
         scheduleRuntimeSourceRootDiscovery("configuration-change");
       }
       if (
@@ -1500,12 +1108,51 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       cellCodeLensProvider.refresh();
       runtimeDiscoveredSourceRoots = [];
       runtimeSourceRootDiscoveryGeneration += 1;
-      runtimeSourceRootDiscoveryOperation = undefined;
       updateStatusBar();
       scheduleRuntimeSourceRootDiscovery("workspace-folders-changed");
       startLanguageClientInBackground("workspace-folders-changed");
     }),
   );
+
+  if (context.extensionMode !== vscode.ExtensionMode.Production) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand("sage.__test.getLifecycleSnapshot", () => languageClientLifecycleSnapshot()),
+      vscode.commands.registerCommand("sage.__test.getCurrentSageContext", () => {
+        const activeDocument = vscode.window.activeTextEditor?.document;
+        const settings = activeEditorSettings();
+        const policyInput = activationPolicyInput();
+        return {
+          languageId: activeDocument?.languageId,
+          pythonFilesEnabled: settings.pythonFilesEnabled,
+          sourceRootCount: settings.sourceRoots.length,
+          extraPathCount: settings.extraPaths.length,
+          isSageEditor: isSageDocument(activeDocument),
+          shouldAutoStartLanguageClient: shouldAutoStartLanguageClient(policyInput),
+          shouldExposeSageExperience: shouldExposeSageExperience(policyInput),
+        };
+      }),
+      vscode.commands.registerCommand("sage.__test.awaitLanguageClientStable", async () => {
+        if (languageClientOperation) {
+          await languageClientOperation;
+        }
+        return languageClientLifecycleSnapshot();
+      }),
+      vscode.commands.registerCommand("sage.__test.restartLanguageServerAndWait", async () => {
+        await startLanguageClient();
+        return languageClientLifecycleSnapshot();
+      }),
+      vscode.commands.registerCommand(
+        "sage.__test.configureWorkspaceProfile",
+        async (profileId: WorkspaceConfigurationProfileId = "research") => {
+          const profile = WORKSPACE_CONFIGURATION_PROFILES.find((entry) => entry.id === profileId);
+          if (!profile) {
+            throw new Error(`Unknown Sage workspace profile: ${profileId}`);
+          }
+          return applyWorkspaceConfigurationProfile(profile, "test-configure-workspace", false);
+        },
+      ),
+    );
+  }
 
   void setWorkspaceContexts();
   updateStatusBar();
@@ -1514,19 +1161,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export async function deactivate(): Promise<void> {
+  extensionDeactivating = true;
+  languageClientRestartQueued = false;
+  runtimeSourceRootDiscoveryGeneration += 1;
   clearLanguageServerStatusRefresh();
   clearSlowLanguageServerNotice();
-  if (languageClientOperation) {
-    await languageClientOperation;
-  }
-  if (client) {
-    languageClientManagedShutdown = true;
-    languageClientManagedCloseCount += 1;
-    try {
-      await client.stop();
-      client = undefined;
-    } finally {
-      languageClientManagedShutdown = false;
+  const sourceRootDiscovery = runtimeSourceRootDiscoveryOperation;
+  try {
+    if (languageClientOperation) {
+      await languageClientOperation;
     }
+    if (client) {
+      const activeClient = client;
+      client = undefined;
+      languageClientManagedShutdown = true;
+      languageClientManagedCloseCount += 1;
+      try {
+        await activeClient.stop();
+      } finally {
+        languageClientManagedShutdown = false;
+      }
+    }
+  } finally {
+    await sourceRootDiscovery;
   }
 }

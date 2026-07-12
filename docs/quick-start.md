@@ -2,10 +2,12 @@
 
 This is the shortest path to use the Sage VS Code extension from this repository.
 
+Select the exact Node version in `.node-version` before packaging; the repository's `rust-toolchain.toml` pins Rust.
+
 ## Use the Extension Locally
 
 ```bash
-npm install
+npm ci
 npm run package:vsix
 npm run doctor:mac
 npm run configure:workspace -- --workspace /path/to/your/project --profile auto

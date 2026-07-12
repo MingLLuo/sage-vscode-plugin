@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { renderDocumentationHtml } from "./documentationMarkup";
 
-export class DocumentationPanel {
+export class DocumentationPanel implements vscode.Disposable {
   private panel: vscode.WebviewPanel | undefined;
 
   show(title: string, markdown: string): void {
@@ -13,6 +13,7 @@ export class DocumentationPanel {
         {
           enableFindWidget: true,
           enableScripts: false,
+          localResourceRoots: [],
         },
       );
       this.panel.onDidDispose(() => {
@@ -23,5 +24,10 @@ export class DocumentationPanel {
     this.panel.title = title;
     this.panel.webview.html = renderDocumentationHtml(markdown);
     this.panel.reveal(vscode.ViewColumn.Beside, true);
+  }
+
+  dispose(): void {
+    this.panel?.dispose();
+    this.panel = undefined;
   }
 }

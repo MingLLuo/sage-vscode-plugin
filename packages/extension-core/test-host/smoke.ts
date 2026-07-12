@@ -28,6 +28,12 @@ interface ConfigureWorkspaceProfileResult {
   updates: Array<{ setting: string; value: unknown }>;
 }
 
+interface IndexStatusSnapshot {
+  generation?: number;
+  pending_jobs?: number;
+  pending_task?: string | null;
+}
+
 export async function run(): Promise<void> {
   if (process.env.SAGE_TEST_HOST_MODE === "plain-python") {
     await runPlainPythonQuietSmoke();
@@ -53,6 +59,7 @@ export async function run(): Promise<void> {
     vscode.ConfigurationTarget.Workspace,
   );
   await config.update("analysis.extraPaths", ["vendor"], vscode.ConfigurationTarget.Workspace);
+  await config.update("analysis.enablePythonFiles", false, vscode.ConfigurationTarget.Workspace);
   await config.update("analysis.enableRuntimeIntrospection", false, vscode.ConfigurationTarget.Workspace);
   await config.update("docs.showOnHover", true, vscode.ConfigurationTarget.Workspace);
 
@@ -72,10 +79,17 @@ export async function run(): Promise<void> {
   const initialSnapshot = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
   assert.ok(initialSnapshot.launchCount >= 1, "expected the Rust language client to launch during activation");
   assert.equal(initialSnapshot.unexpectedCloseCount, 0, "expected no unexpected client shutdowns before restart");
+  assert.equal(
+    vscode.workspace.getConfiguration("sage", workspaceFolder.uri).get("analysis.enablePythonFiles"),
+    false,
+    "expected the external source bridge check to run with ordinary Python analysis disabled",
+  );
+  await assertEventually(() => verifyExternalSageSourceFollowUpWithPythonDisabled(), 30_000);
 
   await waitForCommand("sage.__test.configureWorkspaceProfile");
   await verifyConfigureWorkspaceProfile(workspaceFolder.uri);
   await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
+  await triggerRefreshDuringInitialCacheReconcile(workspaceFolder.uri);
 
   await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri), 30_000);
   await assertEventually(() => verifyWorkspaceReferencesRename(workspaceFolder.uri), 30_000);
@@ -87,11 +101,22 @@ export async function run(): Promise<void> {
   await assertEventually(() => verifySageAwarePythonWorkspace(workspaceFolder.uri), 30_000);
   await assertEventually(() => verifyCellCodeLens(workspaceFolder.uri), 30_000);
   await assertEventually(() => verifySavedModuleRefresh(workspaceFolder.uri), 30_000);
+  await verifyUnsavedUnicodeNavigationRanges(workspaceFolder.uri);
 
-  await vscode.commands.executeCommand("sage.showIndexStatus");
+  const baselineIndexStatus = await vscode.commands.executeCommand<IndexStatusSnapshot>("sage.showIndexStatus");
   await vscode.commands.executeCommand("sage.showDocsStatus");
-  await vscode.commands.executeCommand("sage.rebuildIndex");
+  const rebuiltIndexStatus = await vscode.commands.executeCommand<IndexStatusSnapshot>("sage.rebuildIndex");
+  assert.ok(baselineIndexStatus, "expected index status before the explicit rebuild");
+  assert.ok(rebuiltIndexStatus, "expected the rebuild command to return its completed status");
+  assert.equal(rebuiltIndexStatus.pending_jobs, 0, "expected rebuild command to wait until indexing is idle");
+  assert.ok(
+    typeof rebuiltIndexStatus.generation === "number"
+      && typeof baselineIndexStatus.generation === "number"
+      && rebuiltIndexStatus.generation > baselineIndexStatus.generation,
+    "expected rebuild command to wait for a newer index generation",
+  );
   await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifySageAwarePythonWorkspace(workspaceFolder.uri), 30_000);
 
   const restartBaseline = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
   const afterRestart = await lifecycleSnapshot("sage.__test.restartLanguageServerAndWait");
@@ -111,6 +136,127 @@ export async function run(): Promise<void> {
   );
 
   await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri), 30_000);
+  await assertEventually(() => verifySageAwarePythonWorkspace(workspaceFolder.uri), 30_000);
+}
+
+async function verifyExternalSageSourceFollowUpWithPythonDisabled(): Promise<void> {
+  const externalSourceRoot = process.env.SAGE_TEST_EXTERNAL_SOURCE_ROOT;
+  assert.ok(externalSourceRoot, "expected extension-host smoke to provide an external Sage source root");
+
+  const sourceUri = vscode.Uri.from({
+    scheme: "sage-source",
+    path: path.join(externalSourceRoot, "sage", "combinat", "combination.py"),
+  });
+  const sourceDocument = await vscode.workspace.openTextDocument(sourceUri);
+  await vscode.window.showTextDocument(sourceDocument);
+  assert.equal(
+    (await sageContextSnapshot()).isSageEditor,
+    true,
+    "expected a configured read-only Sage source to remain a Sage editor with Python analysis disabled",
+  );
+  const sourcePosition = positionOfNth(sourceDocument, "ExternalSmokeCombinations", 1);
+  const definitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      sourceUri,
+      sourcePosition,
+    )) ?? [];
+  assertSingleDefinitionTarget(
+    definitions,
+    "external-sage-src/sage/combinat/combination.py",
+    "follow-up external definition while ordinary Python analysis is disabled",
+    "sage-source",
+  );
+}
+
+async function verifyUnsavedUnicodeNavigationRanges(workspaceUri: vscode.Uri): Promise<void> {
+  const uri = vscode.Uri.joinPath(workspaceUri, "src", "__unsaved_unicode_navigation.sage");
+  await vscode.workspace.fs.writeFile(
+    uri,
+    Buffer.from("def live_helper():\n    return 1\n\nvalue = live_helper()\n", "utf-8"),
+  );
+  const document = await vscode.workspace.openTextDocument(uri);
+  const editor = await vscode.window.showTextDocument(document);
+  const liveText = [
+    "π_value = '🚀'",
+    "def live_helper():",
+    "    return 1",
+    "",
+    "prefix = '🚀'; value = live_helper()",
+    "",
+  ].join("\n");
+  const edit = new vscode.WorkspaceEdit();
+  edit.replace(uri, new vscode.Range(document.positionAt(0), document.positionAt(document.getText().length)), liveText);
+  assert.equal(await vscode.workspace.applyEdit(edit), true, "expected to apply the unsaved Unicode navigation edit");
+  assert.equal(document.isDirty, true, "expected the Unicode navigation fixture to remain unsaved");
+
+  const usagePosition = positionOfNth(document, "live_helper", 2);
+  const definitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      uri,
+      usagePosition,
+    )) ?? [];
+  assertSingleDefinitionTarget(
+    definitions,
+    "src/__unsaved_unicode_navigation.sage",
+    "definition in an unsaved Unicode document",
+    "file",
+  );
+  const definition = definitions[0];
+  assert.ok(definition, "expected the unsaved definition result");
+  assert.equal(
+    document.getText(definitionRange(definition)),
+    "live_helper",
+    "expected the definition range to use the live UTF-16 document coordinates",
+  );
+
+  const references =
+    (await vscode.commands.executeCommand<vscode.Location[]>(
+      "vscode.executeReferenceProvider",
+      uri,
+      usagePosition,
+    )) ?? [];
+  const localReferences = references.filter((location) => location.uri.toString() === uri.toString());
+  assert.equal(localReferences.length, 2, "expected stale indexed ranges to be replaced by two live references");
+  assert.ok(
+    localReferences.every((location) => document.getText(location.range) === "live_helper"),
+    "expected every live reference range to select the symbol exactly",
+  );
+
+  const renameEdit = await vscode.commands.executeCommand<vscode.WorkspaceEdit>(
+    "vscode.executeDocumentRenameProvider",
+    uri,
+    usagePosition,
+    "live_helper_renamed",
+  );
+  assert.ok(renameEdit, "expected rename edits for the unsaved Unicode document");
+  const localRenameEdits = renameEdit.get(uri);
+  assert.equal(localRenameEdits.length, 2, "expected rename to avoid stale duplicate edits");
+  assert.ok(
+    localRenameEdits.every((entry) => document.getText(entry.range) === "live_helper"),
+    "expected every rename edit to use the live UTF-16 symbol range",
+  );
+  editor.selection = new vscode.Selection(usagePosition, usagePosition);
+}
+
+async function triggerRefreshDuringInitialCacheReconcile(workspaceUri: vscode.Uri): Promise<void> {
+  await assertEventually(async () => {
+    const status = await vscode.commands.executeCommand<IndexStatusSnapshot>("sage.showIndexStatus");
+    assert.equal(
+      status?.pending_task,
+      "cache-check",
+      `expected the delayed cold index task, got ${status?.pending_task ?? "idle"}`,
+    );
+  }, 5_000, 50);
+
+  const raceUri = vscode.Uri.joinPath(workspaceUri, "src", "__index_reconcile_refresh_race.sage");
+  await vscode.workspace.fs.writeFile(raceUri, Buffer.from("race_marker = 1\n", "utf-8"));
+  const raceDocument = await vscode.workspace.openTextDocument(raceUri);
+  const edit = new vscode.WorkspaceEdit();
+  edit.insert(raceUri, raceDocument.positionAt(raceDocument.getText().length), "race_marker_saved = race_marker\n");
+  assert.equal(await vscode.workspace.applyEdit(edit), true, "expected to edit the reconcile race fixture");
+  assert.equal(await raceDocument.save(), true, "expected to save while the cold index task is running");
 }
 
 async function runPlainPythonQuietSmoke(): Promise<void> {
@@ -162,9 +308,23 @@ async function verifyWorkspaceHoverDefinitionCompletion(workspaceUri: vscode.Uri
       uri,
       hoverPosition,
     )) ?? [];
+  const localDefinition = definitions.find((definition) =>
+    definitionUri(definition).fsPath.endsWith("src/local_docs.py")
+  );
   assert.ok(
-    definitions.some((definition) => definitionUri(definition).fsPath.endsWith("src/local_docs.py")),
+    localDefinition,
     "expected Rust definition for make_demo_matrix to resolve into local_docs.py",
+  );
+  const expectedLocalDefinitionUri = vscode.Uri.joinPath(workspaceUri, "src", "local_docs.py");
+  assert.equal(
+    definitionUri(localDefinition).toString(),
+    expectedLocalDefinitionUri.toString(),
+    "expected canonical server paths to map back to the workspace URI identity",
+  );
+  assert.equal(
+    vscode.workspace.getWorkspaceFolder(definitionUri(localDefinition))?.uri.toString(),
+    workspaceUri.toString(),
+    "expected the definition target to retain workspace scope",
   );
 
   const completionPosition = positionOfNth(document, "summarize_coefficients", 2, 4);
@@ -218,27 +378,81 @@ async function verifyExternalSageSourceReferenceBridge(workspaceUri: vscode.Uri)
   const externalSourceRoot = process.env.SAGE_TEST_EXTERNAL_SOURCE_ROOT;
   assert.ok(externalSourceRoot, "expected extension-host smoke to provide an external Sage source root");
 
-  const uri = vscode.Uri.file(path.join(externalSourceRoot, "sage", "combinat", "combination.py"));
-  const document = await vscode.workspace.openTextDocument(uri);
-  await vscode.window.showTextDocument(document);
+  const usageUri = vscode.Uri.joinPath(workspaceUri, "src", "__external_navigation_bridge.sage");
+  const usageDocument = await vscode.workspace.openTextDocument(usageUri);
+  await vscode.window.showTextDocument(usageDocument);
 
-  const combinationsPosition = positionOfNth(document, "Combinations", 1);
+  const usagePosition = positionOfNth(usageDocument, "ExternalSmokeCombinations", 1);
+  const sourceDefinitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      usageUri,
+      usagePosition,
+    )) ?? [];
+  const sourceDefinition = sourceDefinitions.find((definition) =>
+    normalizePathForAssertion(definitionUri(definition).fsPath)
+      .endsWith("external-sage-src/sage/combinat/combination.py")
+  );
+  assert.ok(
+    sourceDefinition,
+    `expected ExternalSmokeCombinations to resolve into the external Sage source fixture, got ${sourceDefinitions.map((definition) => definitionUri(definition).toString()).join(", ")}`,
+  );
+  const sourceUri = definitionUri(sourceDefinition);
+  assert.equal(sourceUri.scheme, "sage-source", "expected the real definition jump to use the read-only source view");
+
+  const sourceDocument = await vscode.workspace.openTextDocument(sourceUri);
+  const sourceEditor = await vscode.window.showTextDocument(sourceDocument);
+  const sourcePosition = definitionRange(sourceDefinition).start;
+  sourceEditor.selection = new vscode.Selection(sourcePosition, sourcePosition);
+
+  const followUpDefinitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      sourceUri,
+      sourcePosition,
+    )) ?? [];
+  assertSingleDefinitionTarget(
+    followUpDefinitions,
+    "external-sage-src/sage/combinat/combination.py",
+    "follow-up ExternalSmokeCombinations definition from sage-source",
+    "sage-source",
+  );
+
   const references =
     (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
       "vscode.executeReferenceProvider",
-      uri,
-      combinationsPosition,
+      sourceUri,
+      sourcePosition,
     )) ?? [];
-  const referenceUris = new Set(references.map((reference) => definitionUri(reference).fsPath));
+  const referenceUris = references.map((reference) => definitionUri(reference));
   assert.ok(
-    referenceUris.has(uri.fsPath),
-    "expected standard VS Code references from external Sage source to include the declaration",
+    referenceUris.some((entry) =>
+      entry.scheme === "sage-source"
+      && normalizePathForAssertion(entry.fsPath).endsWith("external-sage-src/sage/combinat/combination.py")
+    ),
+    "expected references from the real sage-source jump to include its read-only declaration",
   );
   assert.ok(
-    [...referenceUris].some((entry) =>
-      normalizePathForAssertion(entry).endsWith("src/07_symbolic_and_combinatorics.sage")
+    referenceUris.some((entry) =>
+      normalizePathForAssertion(entry.fsPath).endsWith("src/__external_navigation_bridge.sage")
     ),
-    "expected standard VS Code references from external Sage source to include workspace Sage usages",
+    "expected references from the real sage-source jump to include workspace Sage usages",
+  );
+
+  const commandReferences =
+    (await vscode.commands.executeCommand<vscode.Location[]>("sage.findReferences")) ?? [];
+  assert.ok(
+    commandReferences.some((entry) =>
+      entry.uri.scheme === "sage-source"
+      && normalizePathForAssertion(entry.uri.fsPath).endsWith("external-sage-src/sage/combinat/combination.py")
+    ),
+    "expected the user-facing Sage references command to preserve the read-only declaration URI",
+  );
+  assert.ok(
+    commandReferences.some((entry) =>
+      normalizePathForAssertion(entry.uri.fsPath).endsWith("src/__external_navigation_bridge.sage")
+    ),
+    "expected the user-facing Sage references command to include the workspace usage",
   );
 }
 
@@ -372,7 +586,7 @@ async function verifySageAwarePythonWorkspace(workspaceUri: vscode.Uri): Promise
     "sage-source",
   );
 
-  const matrixPosition = positionOfNth(document, "matrix", 3);
+  const matrixPosition = positionOfNth(document, "mat = matrix", 1, "mat = ".length);
   const matrixDefinitions =
     (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
       "vscode.executeDefinitionProvider",
@@ -380,6 +594,25 @@ async function verifySageAwarePythonWorkspace(workspaceUri: vscode.Uri): Promise
       matrixPosition,
     )) ?? [];
   assertSingleDefinitionTarget(matrixDefinitions, "sage/matrix/constructor.pyx", "matrix", "sage-source");
+  const matrixDefinition = matrixDefinitions[0];
+  assert.ok(matrixDefinition, "expected matrix definition target for follow-up navigation");
+  const matrixSourceUri = definitionUri(matrixDefinition);
+  const matrixSourceDocument = await vscode.workspace.openTextDocument(matrixSourceUri);
+  await vscode.window.showTextDocument(matrixSourceDocument);
+  assert.equal(matrixSourceUri.scheme, "sage-source");
+  assert.equal(matrixSourceDocument.languageId, "sagemath-cython");
+  const matrixFollowUpDefinitions =
+    (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider",
+      matrixSourceUri,
+      definitionRange(matrixDefinition).start,
+    )) ?? [];
+  assertSingleDefinitionTarget(
+    matrixFollowUpDefinitions,
+    "sage/matrix/constructor.pyx",
+    "matrix follow-up definition from sage-source Cython",
+    "sage-source",
+  );
 
   const ringUsagePosition = positionOfNth(document, "ring.gens", 1);
   const polynomialTypeDefinitions =
@@ -693,9 +926,10 @@ function assertSingleDefinitionTarget(
   );
   const onlyDefinition = definitions[0];
   assert.ok(onlyDefinition, `expected ${label} definition to exist`);
+  const actualUri = definitionUri(onlyDefinition);
   assert.ok(
-    definitionUri(onlyDefinition).fsPath.endsWith(expectedPathSuffix),
-    `expected ${label} definition to resolve into ${expectedPathSuffix}`,
+    normalizePathForAssertion(actualUri.fsPath).endsWith(expectedPathSuffix),
+    `expected ${label} definition to resolve into ${expectedPathSuffix}, got ${actualUri.toString()} (${actualUri.fsPath})`,
   );
   if (expectedScheme) {
     assert.equal(
