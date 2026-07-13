@@ -25,6 +25,8 @@ import { workspaceAliasedSourcePath } from "./sourceRootPaths";
 import { buildWorkspaceInitializationData, resolveConfiguredPaths } from "./workspaceDiscovery";
 import { logToChannel } from "./extensionLogger";
 
+export { executeSageCommand } from "./sageCommandClient";
+
 export const RUST_LSP_COMMANDS = {
   indexStatus: "sage.__rust.indexStatus",
   docsStatus: "sage.__rust.docsStatus",
@@ -302,20 +304,6 @@ export async function requestDocumentation(
     },
   );
   return normalizeDocumentationResponse(response);
-}
-
-export async function executeSageCommand<T>(
-  client: LanguageClient,
-  command: string,
-  args: unknown[] = [],
-): Promise<T | null> {
-  return client.sendRequest<T | null>(
-    "workspace/executeCommand",
-    {
-      command,
-      arguments: args,
-    },
-  );
 }
 
 function resolvePyrightServerPath(extensionPath: string): string | undefined {

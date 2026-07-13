@@ -94,6 +94,7 @@ export async function run(): Promise<void> {
   await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri), 30_000);
   await assertEventually(() => verifyWorkspaceReferencesRename(workspaceFolder.uri), 30_000);
   await assertEventually(() => verifyExternalSageSourceReferenceBridge(workspaceFolder.uri), 30_000);
+  await verifyExternalSageSourceRefresh();
   await assertEventually(() => verifyProjectedDiagnostics(workspaceFolder.uri), 30_000);
   await assertEventually(() => verifyDocumentAndWorkspaceSymbols(workspaceFolder.uri), 30_000);
   await assertEventually(() => verifyNativeCythonDocumentSymbols(workspaceFolder.uri), 30_000);
@@ -454,6 +455,55 @@ async function verifyExternalSageSourceReferenceBridge(workspaceUri: vscode.Uri)
     ),
     "expected the user-facing Sage references command to include the workspace usage",
   );
+}
+
+async function verifyExternalSageSourceRefresh(): Promise<void> {
+  const externalSourceRoot = process.env.SAGE_TEST_EXTERNAL_SOURCE_ROOT;
+  assert.ok(externalSourceRoot, "expected extension-host smoke to provide an external Sage source root");
+  const backingUri = vscode.Uri.file(
+    path.join(externalSourceRoot, "sage", "combinat", "combination.py"),
+  );
+  const sourceUri = vscode.Uri.from({ scheme: "sage-source", path: backingUri.fsPath });
+  const sourceDocument = await vscode.workspace.openTextDocument(sourceUri);
+  await vscode.window.showTextDocument(sourceDocument);
+  const original = Buffer.from(await vscode.workspace.fs.readFile(backingUri));
+  const changedText = `# external source watcher refresh\n${original.toString("utf8")}`;
+
+  try {
+    await vscode.workspace.fs.writeFile(backingUri, Buffer.from(changedText, "utf8"));
+    await assertEventually(async () => {
+      assert.equal(
+        sourceDocument.getText(),
+        changedText,
+        "expected an already-open sage-source document to refresh from its backing file",
+      );
+    }, 10_000, 50);
+
+    await assertEventually(async () => {
+      const currentPosition = positionOfNth(sourceDocument, "ExternalSmokeCombinations", 1);
+      const definitions =
+        (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+          "vscode.executeDefinitionProvider",
+          sourceUri,
+          currentPosition,
+        )) ?? [];
+      assertSingleDefinitionTarget(
+        definitions,
+        "external-sage-src/sage/combinat/combination.py",
+        "definition after an external sage-source refresh",
+        "sage-source",
+      );
+    }, 10_000, 100);
+  } finally {
+    await vscode.workspace.fs.writeFile(backingUri, original);
+    await assertEventually(async () => {
+      assert.equal(
+        sourceDocument.getText(),
+        original.toString("utf8"),
+        "expected the sage-source document to refresh after restoring its backing file",
+      );
+    }, 10_000, 50);
+  }
 }
 
 async function verifyProjectedDiagnostics(workspaceUri: vscode.Uri): Promise<void> {

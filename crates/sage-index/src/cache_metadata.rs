@@ -21,6 +21,36 @@ pub(super) fn cached_counts_for_roots(
     cached_counts_for_roots_by_path_scan(connection, roots)
 }
 
+pub(super) fn verified_cached_counts_for_roots(
+    connection: &Connection,
+    roots: &[PathBuf],
+) -> Result<(usize, usize, usize)> {
+    let metadata_counts = load_cached_counts_from_metadata_partial(connection, roots)?;
+    let actual_counts = actual_cached_counts_for_roots(connection, roots)?;
+    if let Some(metadata_counts) = metadata_counts {
+        if metadata_counts != actual_counts {
+            bail!(
+                "cache metadata counts {metadata_counts:?} do not match stored rows {actual_counts:?}"
+            );
+        }
+    }
+    Ok(actual_counts)
+}
+
+pub(super) fn actual_cached_counts_for_roots(
+    connection: &Connection,
+    roots: &[PathBuf],
+) -> Result<(usize, usize, usize)> {
+    let mut counts = (0usize, 0usize, 0usize);
+    for root in metadata_count_roots(roots) {
+        let root_counts = count_rows_under_root(connection, &root.display().to_string())?;
+        counts.0 = counts.0.saturating_add(root_counts.0);
+        counts.1 = counts.1.saturating_add(root_counts.1);
+        counts.2 = counts.2.saturating_add(root_counts.2);
+    }
+    Ok(counts)
+}
+
 pub(super) fn cached_counts_for_roots_by_path_scan(
     connection: &Connection,
     roots: &[PathBuf],
@@ -546,32 +576,49 @@ pub(super) fn count_rows_under_root(
     connection: &Connection,
     root: &str,
 ) -> Result<(usize, usize, usize)> {
-    let like_pattern = root_like_pattern(root);
+    let (child_start, child_end) = child_path_range(root);
     let file_count = connection.query_row(
-        "select count(*) from files where path = ?1 or path like ?2",
-        params![root, like_pattern],
+        "select
+           (select count(*) from files where path = ?1) +
+           (select count(*) from files where path >= ?2 and path < ?3 and path != ?1)",
+        params![root, child_start, child_end],
         |row| row.get::<_, usize>(0),
     )?;
     let symbol_count = connection.query_row(
-        "select count(*) from symbols where path = ?1 or path like ?2",
-        params![root, like_pattern],
+        "select
+           (select count(*) from symbols where path = ?1) +
+           (select count(*) from symbols where path >= ?2 and path < ?3 and path != ?1)",
+        params![root, child_start, child_end],
         |row| row.get::<_, usize>(0),
     )?;
     let doc_count = connection.query_row(
-        "select count(*) from docs where detail != 'module' and (path = ?1 or path like ?2)",
-        params![root, like_pattern],
+        "select
+           (select count(*) from docs where path = ?1 and detail != 'module') +
+           (select count(*) from docs
+            where path >= ?2 and path < ?3 and path != ?1 and detail != 'module')",
+        params![root, child_start, child_end],
         |row| row.get::<_, usize>(0),
     )?;
     Ok((file_count, symbol_count, doc_count))
 }
 
-pub(super) fn root_like_pattern(root: &str) -> String {
+fn child_path_range(root: &str) -> (String, String) {
     let separator = std::path::MAIN_SEPARATOR;
-    if root.ends_with(separator) {
-        format!("{root}%")
+    let child_start = if root.ends_with(separator) {
+        root.to_string()
     } else {
-        format!("{root}{separator}%")
-    }
+        format!("{root}{separator}")
+    };
+    let next_separator = char::from_u32(separator as u32 + 1)
+        .expect("the platform path separator must have a following Unicode scalar");
+    let child_end = format!(
+        "{}{}",
+        child_start
+            .strip_suffix(separator)
+            .expect("child path prefix must end with the platform separator"),
+        next_separator
+    );
+    (child_start, child_end)
 }
 
 pub(super) fn load_file_fingerprints_from_db(

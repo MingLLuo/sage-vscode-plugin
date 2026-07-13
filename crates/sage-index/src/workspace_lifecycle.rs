@@ -113,12 +113,24 @@ impl WorkspaceIndex {
                 if let Ok(Some((file_count, symbol_count, doc_count))) =
                     load_cached_counts_from_metadata(&connection, &self.options.roots)
                 {
+                    let actual_counts =
+                        actual_cached_counts_for_roots(&connection, &self.options.roots);
+                    if !actual_counts
+                        .is_ok_and(|counts| counts == (file_count, symbol_count, doc_count))
+                    {
+                        drop(connection);
+                        self.cache_miss_count = self.cache_miss_count.saturating_add(1);
+                        return self.rebuild();
+                    }
                     let mismatches = load_root_fingerprint_mismatches_from_metadata(
                         &connection,
                         &self.options.roots,
                     )
                     .unwrap_or_default();
-                    if mismatches.is_empty() && file_count > 0 {
+                    let editable_roots_unchanged = self
+                        .editable_cache_fingerprints_match(&connection)
+                        .unwrap_or(false);
+                    if mismatches.is_empty() && file_count > 0 && editable_roots_unchanged {
                         self.files.clear();
                         self.symbols_by_name.clear();
                         self.clear_lookup_cache();
@@ -268,12 +280,10 @@ impl WorkspaceIndex {
         let (file_count, symbol_count, doc_count) =
             match cached_counts_for_roots(&connection, &self.options.roots) {
                 Ok(counts) => counts,
-                Err(error) => {
+                Err(_) => {
+                    drop(connection);
                     self.cache_miss_count = self.cache_miss_count.saturating_add(1);
-                    self.last_error = Some(error.to_string());
-                    self.last_hydrate_ms = started.elapsed().as_millis();
-                    self.last_index_ms = self.last_hydrate_ms;
-                    return Ok(self.status());
+                    return self.rebuild();
                 }
             };
         if file_count == 0 {
@@ -733,9 +743,33 @@ impl WorkspaceIndex {
         load_file_fingerprints_from_db(&connection, &self.options.roots)
     }
 
+    fn editable_cache_fingerprints_match(&self, connection: &Connection) -> Result<bool> {
+        if self.options.editable_roots.is_empty() {
+            return Ok(true);
+        }
+        let mut editable_options = self.options.clone();
+        editable_options.roots = self.options.editable_roots.clone();
+        let current_paths = collect_indexable_paths(&editable_options);
+        let cached_fingerprints =
+            load_file_fingerprints_from_db(connection, &self.options.editable_roots)?;
+        if current_paths.len() != cached_fingerprints.len() {
+            return Ok(false);
+        }
+        for path in current_paths {
+            let Some(cached_fingerprint) = cached_fingerprints.get(&path) else {
+                return Ok(false);
+            };
+            if !file_fingerprint(&path).is_ok_and(|fingerprint| &fingerprint == cached_fingerprint)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
     fn cached_counts_for_current_roots(&self) -> Result<(usize, usize, usize)> {
         let connection = Connection::open(&self.db_path)
             .with_context(|| format!("open index db {}", self.db_path.display()))?;
-        cached_counts_for_roots(&connection, &self.options.roots)
+        verified_cached_counts_for_roots(&connection, &self.options.roots)
     }
 }

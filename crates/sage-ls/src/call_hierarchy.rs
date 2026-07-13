@@ -133,17 +133,7 @@ pub(super) fn call_hierarchy_item_for_local_symbol_at_position(
         .filter(|symbol| {
             symbol.name == word && symbol.path == path && is_call_hierarchy_symbol(symbol)
         })
-        .min_by_key(|symbol| {
-            (
-                if lsp_range_for_text(text, &symbol.range) == range {
-                    0
-                } else {
-                    1
-                },
-                symbol.range.start_line,
-                symbol.range.start_character,
-            )
-        })
+        .find(|symbol| lsp_range_for_text(text, &symbol.range) == range)
         .map(|symbol| call_hierarchy_item_for_symbol_with_folds(uri, text, &folds, symbol))
 }
 

@@ -56,8 +56,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use text_positions::{
     apply_text_document_change, byte_offset_to_utf16_character, is_word_byte, line_byte_bounds,
-    lsp_position_for_byte_column, lsp_range_for_path, lsp_range_for_path_cached,
-    lsp_range_for_text, query_position_from_lsp, utf16_character_to_byte_offset, word_at_position,
+    lsp_position_for_byte_column, lsp_range_for_path, lsp_range_for_text, query_position_from_lsp,
+    utf16_character_to_byte_offset, word_at_position,
 };
 use tokio::sync::{Mutex, RwLock};
 use tower_lsp::jsonrpc::Result;
@@ -229,7 +229,6 @@ struct Backend {
     index: Arc<RwLock<WorkspaceIndex>>,
     open_documents: Arc<RwLock<OpenDocumentMap>>,
     navigation_cache: Arc<RwLock<NavigationQueryCache>>,
-    editable_roots: Arc<RwLock<Vec<PathBuf>>>,
     diagnostics_enabled: Arc<RwLock<bool>>,
     docs_on_hover_enabled: Arc<RwLock<bool>>,
     docs_preferred_source: Arc<RwLock<DocumentationPreferredSource>>,
@@ -308,15 +307,24 @@ fn navigation_query_cache_key(
 struct RenameTarget {
     word: String,
     range: Range,
-    declaration: Option<Location>,
+    definition: QueryDefinition,
+    definition_ranges: Vec<sage_index::SourceRange>,
+    declaration: Location,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ReferenceCollectionMode {
+    References,
+    Rename,
 }
 
 #[derive(Clone, Debug)]
-struct WordPositionContext {
+struct ResolvedReferenceTarget {
     word: String,
     range: Range,
-    path: PathBuf,
-    text: String,
+    definition: QueryDefinition,
+    definition_ranges: Vec<sage_index::SourceRange>,
+    declaration: Option<Location>,
 }
 
 #[derive(Clone, Debug)]
@@ -335,7 +343,6 @@ async fn main() {
         index: Arc::new(RwLock::new(WorkspaceIndex::default())),
         open_documents: Arc::new(RwLock::new(OpenDocumentMap::new())),
         navigation_cache: Arc::new(RwLock::new(NavigationQueryCache::default())),
-        editable_roots: Arc::new(RwLock::new(Vec::new())),
         diagnostics_enabled: Arc::new(RwLock::new(true)),
         docs_on_hover_enabled: Arc::new(RwLock::new(true)),
         docs_preferred_source: Arc::new(RwLock::new(DocumentationPreferredSource::Auto)),
@@ -397,7 +404,6 @@ impl LanguageServer for Backend {
         let _ = hydrated.hydrate_from_cache();
         trace_initialize_phase(initialize_started, "hydrate");
         *self.index.write().await = hydrated;
-        *self.editable_roots.write().await = editable_roots;
         self.spawn_cache_reconcile();
         trace_initialize_phase(initialize_started, "spawn-reconcile");
 
@@ -665,11 +671,11 @@ impl LanguageServer for Backend {
                 None,
                 QueryFeatures::hover(),
             );
-            drop(index);
             self.navigation_cache.write().await.insert(
                 navigation_query_cache_key(uri, &document, position, index_generation),
                 query.clone(),
             );
+            drop(index);
             query
         };
         let show_docs_on_hover = *self.docs_on_hover_enabled.read().await;
@@ -886,36 +892,19 @@ impl LanguageServer for Backend {
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
         let uri = &params.text_document_position.text_document.uri;
-        let Some(context) = self
-            .word_context_at_uri_position(uri, params.text_document_position.position)
+        let Some(target) = self
+            .resolved_reference_target_at(uri, params.text_document_position.position)
             .await
         else {
             return Ok(Some(Vec::new()));
         };
-        let declaration = if params.context.include_declaration {
-            if source_range_is_declaration(&context.text, &context.word, &context.range) {
-                Some(Location {
-                    uri: uri.clone(),
-                    range: context.range,
-                })
-            } else {
-                self.definition_location_at(uri, params.text_document_position.position)
-                    .await
-                    .or_else(|| {
-                        declaration_location_for_source_position(
-                            uri,
-                            &context.path,
-                            &context.text,
-                            &context.word,
-                            params.text_document_position.position,
-                        )
-                    })
-            }
-        } else {
-            None
-        };
         Ok(Some(
-            self.reference_locations(&context.word, declaration).await,
+            self.reference_locations(
+                &target,
+                params.context.include_declaration,
+                ReferenceCollectionMode::References,
+            )
+            .await,
         ))
     }
 
@@ -957,7 +946,17 @@ impl LanguageServer for Backend {
         }
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
         for location in self
-            .reference_locations(&target.word, target.declaration)
+            .reference_locations(
+                &ResolvedReferenceTarget {
+                    word: target.word.clone(),
+                    range: target.range,
+                    definition: target.definition.clone(),
+                    definition_ranges: target.definition_ranges.clone(),
+                    declaration: Some(target.declaration),
+                },
+                true,
+                ReferenceCollectionMode::Rename,
+            )
             .await
         {
             changes.entry(location.uri).or_default().push(TextEdit {
@@ -1101,7 +1100,16 @@ impl LanguageServer for Backend {
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
         let mut calls = Vec::new();
         let mut contexts: HashMap<Url, CallHierarchySourceContext> = HashMap::new();
-        for location in self.reference_locations(&params.item.name, None).await {
+        let Some(target) = self
+            .resolved_reference_target_at(&params.item.uri, params.item.selection_range.start)
+            .await
+        else {
+            return Ok(Some(Vec::new()));
+        };
+        for location in self
+            .reference_locations(&target, false, ReferenceCollectionMode::References)
+            .await
+        {
             if location.uri == params.item.uri && location.range == params.item.selection_range {
                 continue;
             }
@@ -1485,11 +1493,11 @@ impl Backend {
             return query;
         }
         let query = index.query_source_at_navigation(path, &document.text, query_position);
-        drop(index);
         self.navigation_cache.write().await.insert(
             navigation_query_cache_key(uri, document, position, index_generation),
             query.clone(),
         );
+        drop(index);
         query
     }
 
@@ -1503,28 +1511,35 @@ impl Backend {
         std::fs::read_to_string(path).ok()
     }
 
-    async fn word_context_at_uri_position(
-        &self,
-        uri: &Url,
-        position: Position,
-    ) -> Option<WordPositionContext> {
-        let path = uri_to_path(uri)?;
-        let text = self.text_for_uri_or_file(uri).await?;
-        let (word, range) = word_at_position(&text, position)?;
-        Some(WordPositionContext {
-            word,
-            range,
-            path,
-            text,
-        })
-    }
-
     async fn prefix_at_uri_position(&self, uri: &Url, position: Position) -> Option<String> {
         let document = self.document_for_uri(uri).await?;
         current_prefix(&document.text, position)
     }
 
     async fn rename_target(&self, uri: &Url, position: Position) -> Option<RenameTarget> {
+        let target = self.resolved_reference_target_at(uri, position).await?;
+        let is_editable = self
+            .index
+            .read()
+            .await
+            .is_editable_path(&target.definition.path);
+        if !is_editable {
+            return None;
+        }
+        Some(RenameTarget {
+            word: target.word,
+            range: target.range,
+            definition: target.definition,
+            definition_ranges: target.definition_ranges,
+            declaration: target.declaration?,
+        })
+    }
+
+    async fn resolved_reference_target_at(
+        &self,
+        uri: &Url,
+        position: Position,
+    ) -> Option<ResolvedReferenceTarget> {
         let document = self.document_for_uri(uri).await?;
         let path = uri_to_path(uri)?;
         let (word, range) = word_at_position(&document.text, position)?;
@@ -1533,52 +1548,49 @@ impl Backend {
         {
             return None;
         }
-        if self.path_is_editable_fast(&path).await
-            && local_rename_target_for_source(&path, &document.text, &word, range)
-        {
-            let declaration = self.editable_definition_location_at(uri, position).await;
-            return Some(RenameTarget {
-                word,
-                range,
-                declaration,
-            });
-        }
         let query = self
             .navigation_query_for_document(uri, &document, &path, position)
             .await;
-        let definition = query.definition.as_ref()?;
-        let is_editable = self.index.read().await.is_editable_path(&definition.path);
-        if !is_editable {
-            return None;
-        }
-        Some(RenameTarget {
+        let definition = query.definition?;
+        let definition_ranges = self.definition_identity_ranges(&definition).await;
+        let declaration = self.location_for_query_definition(&definition).await;
+        Some(ResolvedReferenceTarget {
             word,
             range,
-            declaration: Some(self.location_for_query_definition(definition).await?),
+            definition,
+            definition_ranges,
+            declaration,
         })
     }
 
-    async fn path_is_editable_fast(&self, path: &Path) -> bool {
-        let roots = self.editable_roots.read().await;
-        roots.is_empty() || roots.iter().any(|root| path.starts_with(root))
-    }
-
-    async fn editable_definition_location_at(
+    async fn definition_identity_ranges(
         &self,
-        uri: &Url,
-        position: Position,
-    ) -> Option<Location> {
-        let document = self.document_for_uri(uri).await?;
-        let path = uri_to_path(uri)?;
-        let query = self
-            .navigation_query_for_document(uri, &document, &path, position)
-            .await;
-        let definition = query.definition.as_ref()?;
-        let is_editable = self.index.read().await.is_editable_path(&definition.path);
-        if !is_editable {
-            return None;
+        definition: &QueryDefinition,
+    ) -> Vec<sage_index::SourceRange> {
+        let mut ranges = vec![definition.range.clone()];
+        if let Some((_, document)) = self.open_document_for_path(&definition.path).await {
+            if let Some(range) = live_definition_range(definition, &document.text) {
+                if !ranges.contains(&range) {
+                    ranges.push(range);
+                }
+            }
         }
-        self.location_for_query_definition(definition).await
+        if let Ok(text) = std::fs::read_to_string(&definition.path) {
+            let mut matching = parse_source(
+                module_name_for_path(&definition.path),
+                &definition.path,
+                &text,
+            )
+            .symbols
+            .into_iter()
+            .filter(|symbol| symbol.name == definition.name && symbol.detail == definition.detail);
+            if let Some(symbol) = matching.next() {
+                if matching.next().is_none() && !ranges.contains(&symbol.range) {
+                    ranges.push(symbol.range);
+                }
+            }
+        }
+        ranges
     }
 
     async fn definition_location_at(&self, uri: &Url, position: Position) -> Option<Location> {
@@ -1598,53 +1610,85 @@ impl Backend {
 
     async fn reference_locations(
         &self,
-        word: &str,
-        declaration: Option<Location>,
+        target: &ResolvedReferenceTarget,
+        include_declaration: bool,
+        mode: ReferenceCollectionMode,
     ) -> Vec<Location> {
         let mut seen = BTreeSet::new();
         let mut locations = Vec::new();
-        let mut source_text_by_path = HashMap::new();
+        let mut source_text_by_path: HashMap<PathBuf, Option<String>> = HashMap::new();
         let open_documents = self.open_documents.read().await.clone();
         let open_paths: BTreeSet<PathBuf> = open_document_physical_paths(&open_documents)
             .into_iter()
             .collect();
-        if let Some(location) = declaration {
-            push_reference_location(&mut locations, &mut seen, location);
+        if include_declaration {
+            if let Some(declaration) = target.declaration.clone() {
+                push_reference_location(&mut locations, &mut seen, declaration);
+            }
         }
         let index = self.index.read().await;
-        for reference in index.editable_references(word) {
+        for reference in index.editable_references(&target.word) {
             if open_paths.contains(&canonical_path_for_comparison(&reference.path)) {
                 continue;
             }
+            let Some(text) = source_text_by_path
+                .entry(reference.path.clone())
+                .or_insert_with(|| std::fs::read_to_string(&reference.path).ok())
+                .as_deref()
+            else {
+                continue;
+            };
+            if !reference_candidate_matches_target(
+                &index,
+                &reference.path,
+                text,
+                &reference.range,
+                target,
+            ) {
+                continue;
+            }
             if let Ok(uri) = Url::from_file_path(&reference.path) {
-                push_reference_location(
+                push_scoped_reference_location(
                     &mut locations,
                     &mut seen,
                     Location {
                         uri,
-                        range: lsp_range_for_path_cached(
-                            &mut source_text_by_path,
-                            &reference.path,
-                            &reference.range,
-                        ),
+                        range: lsp_range_for_text(text, &reference.range),
                     },
+                    target.declaration.as_ref(),
+                    include_declaration,
                 );
             }
         }
-        drop(index);
         for live in unique_live_documents(&open_documents) {
-            for reference in sage_index::references_in_source(&live.path, &live.document.text, word)
+            if !reference_path_is_collectible(&index, &live.path, mode) {
+                continue;
+            }
+            for reference in
+                sage_index::references_in_source(&live.path, &live.document.text, &target.word)
             {
-                push_reference_location(
+                if !reference_candidate_matches_target(
+                    &index,
+                    &live.path,
+                    &live.document.text,
+                    &reference.range,
+                    target,
+                ) {
+                    continue;
+                }
+                push_scoped_reference_location(
                     &mut locations,
                     &mut seen,
                     Location {
                         uri: live.uri.clone(),
                         range: lsp_range_for_text(&live.document.text, &reference.range),
                     },
+                    target.declaration.as_ref(),
+                    include_declaration,
                 );
             }
         }
+        drop(index);
         locations
     }
 
@@ -1880,26 +1924,6 @@ fn documentation_record_for_source_position(
         })
         .cloned()
         .map(documentation_record_from_symbol)
-}
-
-fn declaration_location_for_source_position(
-    uri: &Url,
-    path: &Path,
-    text: &str,
-    word: &str,
-    position: Position,
-) -> Option<Location> {
-    let query_position = query_position_from_lsp(text, position)?;
-    parse_source(module_name_for_path(path), path, text)
-        .symbols
-        .into_iter()
-        .filter(|symbol| symbol.name == word)
-        .filter(|symbol| !matches!(symbol.kind, SageSymbolKind::Module | SageSymbolKind::Import))
-        .find(|symbol| source_range_contains_position(&symbol.range, query_position))
-        .map(|symbol| Location {
-            uri: uri.clone(),
-            range: lsp_range_for_text(text, &symbol.range),
-        })
 }
 
 fn source_range_contains_position(
@@ -2149,32 +2173,6 @@ fn is_code_reference_range(_path: &Path, text: &str, word: &str, target_range: R
         .is_some_and(|range| sage_index::is_code_reference_at_range(text, word, &range))
 }
 
-fn local_rename_target_for_source(
-    path: &Path,
-    text: &str,
-    word: &str,
-    target_range: Range,
-) -> bool {
-    if !is_code_reference_range(path, text, word, target_range) {
-        return false;
-    }
-    parse_source(module_name_for_path(path), path, text)
-        .symbols
-        .into_iter()
-        .any(|symbol| {
-            symbol.name == word
-                && symbol.path == path
-                && matches!(
-                    symbol.kind,
-                    SageSymbolKind::Class
-                        | SageSymbolKind::Function
-                        | SageSymbolKind::Variable
-                        | SageSymbolKind::CythonDeclaration
-                        | SageSymbolKind::PreparserGenerator
-                )
-        })
-}
-
 fn source_range_from_lsp(text: &str, range: Range) -> Option<sage_index::SourceRange> {
     let start = query_position_from_lsp(text, range.start)?;
     let end = query_position_from_lsp(text, range.end)?;
@@ -2380,38 +2378,6 @@ fn live_definition_range(
     .map(|symbol| symbol.range)
 }
 
-fn source_range_is_declaration(text: &str, word: &str, range: &Range) -> bool {
-    let Some(line) = text.lines().nth(range.start.line as usize) else {
-        return false;
-    };
-    let Some(start) = utf16_character_to_byte_offset(line, range.start.character) else {
-        return false;
-    };
-    let prefix = line[..start].trim_start();
-    if prefix.starts_with("def ")
-        || prefix.starts_with("class ")
-        || prefix.starts_with("cdef ")
-        || prefix.starts_with("cpdef ")
-        || prefix.ends_with(" def ")
-        || prefix.ends_with(" class ")
-    {
-        return true;
-    }
-    let before_word = &line[..start];
-    let declaration_patterns = [
-        format!("def {word}"),
-        format!("class {word}"),
-        format!("cdef {word}"),
-        format!("cpdef {word}"),
-        format!("cdef class {word}"),
-        format!("cdef inline {word}"),
-        format!("cpdef inline {word}"),
-    ];
-    declaration_patterns
-        .iter()
-        .any(|pattern| before_word.trim_start().ends_with(pattern))
-}
-
 fn should_defer_python_import_definition_to_python_provider(
     path: &Path,
     text: &str,
@@ -2523,6 +2489,77 @@ fn push_reference_location(
     if seen.insert(key) {
         locations.push(location);
     }
+}
+
+fn push_scoped_reference_location(
+    locations: &mut Vec<Location>,
+    seen: &mut BTreeSet<String>,
+    location: Location,
+    declaration: Option<&Location>,
+    include_declaration: bool,
+) {
+    if !include_declaration
+        && declaration.is_some_and(|declaration| same_physical_location(declaration, &location))
+    {
+        return;
+    }
+    push_reference_location(locations, seen, location);
+}
+
+fn same_physical_location(left: &Location, right: &Location) -> bool {
+    if left.range != right.range {
+        return false;
+    }
+    match (uri_to_path(&left.uri), uri_to_path(&right.uri)) {
+        (Some(left), Some(right)) => {
+            canonical_path_for_comparison(&left) == canonical_path_for_comparison(&right)
+        }
+        _ => left.uri == right.uri,
+    }
+}
+
+fn reference_candidate_matches_target(
+    index: &WorkspaceIndex,
+    path: &Path,
+    text: &str,
+    range: &sage_index::SourceRange,
+    target: &ResolvedReferenceTarget,
+) -> bool {
+    let candidate = index
+        .query_source_at_navigation(
+            path,
+            text,
+            QueryPosition {
+                line: range.start_line,
+                character: range.start_character,
+            },
+        )
+        .definition;
+    candidate.is_some_and(|candidate| {
+        same_definition_owner_identity(&target.definition, &candidate)
+            && target.definition_ranges.contains(&candidate.range)
+    })
+}
+
+fn reference_path_is_collectible(
+    index: &WorkspaceIndex,
+    path: &Path,
+    mode: ReferenceCollectionMode,
+) -> bool {
+    mode == ReferenceCollectionMode::References
+        || index.is_editable_path(&canonical_path_for_comparison(path))
+}
+
+#[cfg(test)]
+fn same_definition_identity(left: &QueryDefinition, right: &QueryDefinition) -> bool {
+    same_definition_owner_identity(left, right) && left.range == right.range
+}
+
+fn same_definition_owner_identity(left: &QueryDefinition, right: &QueryDefinition) -> bool {
+    left.name == right.name
+        && left.module == right.module
+        && left.detail == right.detail
+        && canonical_path_for_comparison(&left.path) == canonical_path_for_comparison(&right.path)
 }
 
 fn encode_semantic_tokens(text: &str) -> Vec<SemanticToken> {

@@ -438,10 +438,15 @@ test("extension scopes direct navigation bridges to read-only external Sage sour
     "the external bridge must not duplicate the LanguageClient Python reference provider",
   );
   assert.match(navigationSource, /isExternalSageSourceDocument/);
-  assert.match(
+  assert.doesNotMatch(
     navigationSource,
     /openTextDocument\(sourceUri\)/,
-    "the bridge should preload the backing file before requesting follow-up navigation",
+    "the bridge must not create a stale hidden file document for external source navigation",
+  );
+  assert.match(
+    navigationSource,
+    /externalSourceTextIsCurrent/,
+    "the bridge should reject stale visible positions before requesting follow-up navigation",
   );
   assert.match(
     navigationSource,

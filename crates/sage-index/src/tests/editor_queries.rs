@@ -371,3 +371,95 @@ fn query_resolves_instance_method_from_constructor_assignment() {
     );
     fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn navigation_uses_constructor_class_for_same_file_method_candidates() {
+    let root = test_root("same-file-method-owner");
+    let source_path = root.join("methods.py");
+    let source = "class First:\n    def target(self):\n        return 'first'\n\nclass Second:\n    def target(self):\n        return 'second'\n\nvalue = Second()\nresult = value.target()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+    let (line, character) = member_position(source, "target");
+
+    let query =
+        index.query_source_at_navigation(&source_path, source, QueryPosition { line, character });
+    let definition = query.definition.expect("Second.target should resolve");
+    assert_eq!(definition.detail, "Method Second.target");
+    assert_eq!(definition.path, normalize_path(source_path.clone()));
+    assert_eq!(
+        definition.range,
+        SourceRange {
+            start_line: 5,
+            start_character: 8,
+            end_line: 5,
+            end_character: 14,
+        }
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn navigation_resolves_unindexed_local_symbols_with_lexical_scope() {
+    let root = test_root("unindexed-local-navigation");
+    let source_path = root.join("live.py");
+    let source = "def target():\n    return 1\n\ndef caller():\n    return target()\n";
+    let index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+
+    let query = index.query_source_at_navigation(
+        &source_path,
+        source,
+        QueryPosition {
+            line: 4,
+            character: 11,
+        },
+    );
+    let definition = query
+        .definition
+        .expect("live local function should resolve");
+    assert_eq!(definition.name, "target");
+    assert_eq!(definition.path, normalize_path(source_path.clone()));
+    assert_eq!(definition.range.start_line, 0);
+
+    let isolated_source = "def outer_a():\n    def nested():\n        return 1\n    return nested()\n\ndef outer_b():\n    return nested()\n";
+    let isolated = index.query_source_at_navigation(
+        &source_path,
+        isolated_source,
+        QueryPosition {
+            line: 6,
+            character: 11,
+        },
+    );
+    assert!(
+        isolated.definition.is_none(),
+        "a nested definition from another lexical scope must not be selected"
+    );
+
+    let class_source =
+        "class Example:\n    class_value = 1\n\n    def read(self):\n        return class_value\n";
+    let class_lookup = index.query_source_at_navigation(
+        &source_path,
+        class_source,
+        QueryPosition {
+            line: 4,
+            character: 15,
+        },
+    );
+    assert!(
+        class_lookup.definition.is_none(),
+        "class namespace bindings are not lexical locals inside methods"
+    );
+    fs::remove_dir_all(root).ok();
+}

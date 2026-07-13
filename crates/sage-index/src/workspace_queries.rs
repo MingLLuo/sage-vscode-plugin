@@ -410,6 +410,27 @@ impl WorkspaceIndex {
                 resolved = Some(record);
             }
         }
+        if resolved.is_none()
+            && !suppress_global_fallback
+            && dotted_symbol.is_none()
+            && target_is_code
+        {
+            let local_module = module_hint.as_deref().unwrap_or("document");
+            if let Some(local_symbol) = local_shadow_symbol_from_source(
+                local_module,
+                &query_path,
+                source,
+                lookup_name,
+                &target_range,
+            ) {
+                resolution_confidence = Some("high".to_string());
+                resolution_reason = Some(format!(
+                    "resolved `{lookup_name}` from the current document's lexical scope"
+                ));
+                candidate_count = 1;
+                resolved = Some(local_symbol);
+            }
+        }
         if resolved.is_none() && !suppress_global_fallback {
             resolved = self
                 .resolve_symbol(lookup_name, module_hint.as_deref())

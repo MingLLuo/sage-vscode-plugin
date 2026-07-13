@@ -134,7 +134,7 @@ fn workspace_symbols_rank_exact_prefix_and_word_boundary_matches() {
 }
 
 #[test]
-fn cache_metadata_hydrates_counts_without_path_scan() {
+fn cache_metadata_hydrates_counts_without_row_scan() {
     let root = test_root("metadata-hydrate");
     fs::write(
         root.join("docs.py"),
@@ -209,6 +209,52 @@ fn cache_metadata_counts_overlapping_roots_without_double_counting() {
     assert_eq!(status.symbol_count, rebuilt.symbol_count);
     assert_eq!(status.doc_count, rebuilt.doc_count);
     assert_eq!(status.cache_miss_count, 0);
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn cache_metadata_counts_escape_like_wildcards_in_roots() {
+    let root = test_root("metadata-like-wildcards");
+    let roots = ["a_b", "axb", "p%q", "pZZq"]
+        .into_iter()
+        .map(|name| root.join(name))
+        .collect::<Vec<_>>();
+    for (index, source_root) in roots.iter().enumerate() {
+        fs::create_dir_all(source_root).unwrap();
+        fs::write(
+            source_root.join(format!("module_{index}.py")),
+            format!("def symbol_{index}():\n    return {index}\n"),
+        )
+        .unwrap();
+    }
+    let options = IndexOptions {
+        roots: roots.clone(),
+        editable_roots: roots.clone(),
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    let mut index = WorkspaceIndex::new(options.clone());
+    let rebuilt = index.rebuild().unwrap();
+    assert_eq!(rebuilt.indexed_file_count, 4);
+    assert_eq!(rebuilt.symbol_count, 8);
+
+    let connection = Connection::open(index.db_path()).unwrap();
+    for source_root in &index.options().roots {
+        assert_eq!(
+            root_metadata_for_schema(&connection, "", source_root).unwrap(),
+            Some((1, Some(source_root_fingerprint(source_root).digest))),
+            "metadata for {} must not include a LIKE-matching sibling",
+            source_root.display()
+        );
+    }
+    drop(connection);
+
+    let mut hydrated = WorkspaceIndex::new(options);
+    let status = hydrated.hydrate_from_cache().unwrap();
+    assert_eq!(status.indexed_file_count, 4);
+    assert_eq!(status.symbol_count, 8);
+    assert_eq!(status.last_operation.as_deref(), Some("hydrate"));
     fs::remove_dir_all(root).ok();
 }
 

@@ -561,6 +561,23 @@ impl WorkspaceIndex {
                 suppress_global_fallback: true,
             };
         }
+        let constructor_candidates: Vec<_> = candidates
+            .iter()
+            .filter(|candidate| {
+                method_candidate_matches_constructor(
+                    candidate,
+                    member,
+                    constructor_name,
+                    &owner_symbol.name,
+                )
+            })
+            .cloned()
+            .collect();
+        let candidates = if constructor_candidates.is_empty() {
+            candidates
+        } else {
+            constructor_candidates
+        };
         let same_path: Vec<_> = candidates
             .iter()
             .filter(|candidate| {
@@ -873,4 +890,21 @@ impl WorkspaceIndex {
         }
         best_symbol(dedupe_symbol_records(resolved))
     }
+}
+
+fn method_candidate_matches_constructor(
+    candidate: &SymbolRecord,
+    member: &str,
+    constructor_name: &str,
+    owner_symbol_name: &str,
+) -> bool {
+    let owner_matches =
+        |class_name: &str| class_name == constructor_name || class_name == owner_symbol_name;
+    if let Some((class_name, method_name)) = method_detail_parts(&candidate.detail) {
+        return method_name == member && owner_matches(class_name);
+    }
+    if let Some((class_name, alias, _target)) = class_method_alias_detail_parts(&candidate.detail) {
+        return alias == member && owner_matches(class_name);
+    }
+    false
 }

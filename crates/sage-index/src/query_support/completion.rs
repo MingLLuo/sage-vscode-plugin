@@ -66,6 +66,7 @@ pub(crate) fn local_shadow_symbol_from_source(
     name: &str,
     target_range: &SourceRange,
 ) -> Option<SymbolRecord> {
+    let target_scope = definition_scope_at_line(source, target_range.start_line);
     parse_source(module, path, source)
         .symbols
         .into_iter()
@@ -73,15 +74,87 @@ pub(crate) fn local_shadow_symbol_from_source(
             record.name == name
                 && record.kind != SymbolKind::Import
                 && is_local_shadow_before_or_at_target(record, target_range)
+                && scope_is_visible_from(
+                    &definition_scope_at_line(source, record.range.start_line),
+                    &target_scope,
+                )
         })
         .min_by_key(|record| {
+            let scope_depth = definition_scope_at_line(source, record.range.start_line).len();
             (
+                usize::MAX - scope_depth,
                 target_range
                     .start_line
                     .saturating_sub(record.range.start_line),
                 symbol_choice_key(record),
             )
         })
+}
+
+fn definition_scope_at_line(source: &str, target_line: u32) -> Vec<DefinitionScope> {
+    let mut scope: Vec<(DefinitionScope, usize)> = Vec::new();
+    for (line_index, line) in source.lines().enumerate().take(target_line as usize + 1) {
+        let trimmed = line.trim_start();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indent = line_indent(line);
+        while scope
+            .last()
+            .is_some_and(|(_, scope_indent)| *scope_indent >= indent)
+        {
+            scope.pop();
+        }
+        if line_index as u32 == target_line {
+            break;
+        }
+        if let Some(kind) = definition_scope_kind(trimmed) {
+            scope.push((
+                DefinitionScope {
+                    line: line_index as u32,
+                    kind,
+                },
+                indent,
+            ));
+        }
+    }
+    scope.into_iter().map(|(scope, _)| scope).collect()
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DefinitionScopeKind {
+    Function,
+    Class,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DefinitionScope {
+    line: u32,
+    kind: DefinitionScopeKind,
+}
+
+fn definition_scope_kind(trimmed: &str) -> Option<DefinitionScopeKind> {
+    if trimmed.starts_with("class ") || trimmed.starts_with("cdef class ") {
+        return Some(DefinitionScopeKind::Class);
+    }
+    (trimmed.starts_with("def ")
+        || trimmed.starts_with("async def ")
+        || (trimmed.starts_with("cpdef ") && trimmed.contains('('))
+        || (trimmed.starts_with("cdef ") && trimmed.contains('(')))
+    .then_some(DefinitionScopeKind::Function)
+}
+
+fn scope_is_visible_from(
+    binding_scope: &[DefinitionScope],
+    target_scope: &[DefinitionScope],
+) -> bool {
+    if !target_scope.starts_with(binding_scope) {
+        return false;
+    }
+    binding_scope.len() == target_scope.len()
+        || binding_scope
+            .last()
+            .is_none_or(|scope| scope.kind == DefinitionScopeKind::Function)
 }
 
 fn is_local_shadow_before_or_at_target(record: &SymbolRecord, target_range: &SourceRange) -> bool {

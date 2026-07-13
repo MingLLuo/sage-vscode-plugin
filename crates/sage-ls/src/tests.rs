@@ -42,6 +42,327 @@ fn on_disk_navigation_cache_identity_tracks_unicode_source_content() {
 }
 
 #[test]
+fn reference_candidates_are_scoped_to_the_resolved_definition() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "sage-ls-reference-scope-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let first_path = root.join("first.py");
+    let second_path = root.join("second.py");
+    let first_consumer_path = root.join("first_consumer.py");
+    let shared_consumer_path = root.join("shared_consumer.py");
+    let second_consumer_path = root.join("second_consumer.py");
+    let first_definition = "def target():\n    return 1\n\nunknown.target()\n";
+    let second_definition = "def target():\n    return 2\n";
+    let first_consumer = "from first import target\nvalue = target()\n";
+    let shared_consumer = "from first import target\nother = target()\n";
+    let second_consumer = "from second import target\nvalue = target()\n";
+    std::fs::write(&first_path, first_definition).unwrap();
+    std::fs::write(&second_path, second_definition).unwrap();
+    std::fs::write(&first_consumer_path, first_consumer).unwrap();
+    std::fs::write(&shared_consumer_path, shared_consumer).unwrap();
+    std::fs::write(&second_consumer_path, second_consumer).unwrap();
+
+    let root = root.canonicalize().unwrap();
+    let first_path = first_path.canonicalize().unwrap();
+    let second_path = second_path.canonicalize().unwrap();
+    let first_consumer_path = first_consumer_path.canonicalize().unwrap();
+    let shared_consumer_path = shared_consumer_path.canonicalize().unwrap();
+    let second_consumer_path = second_consumer_path.canonicalize().unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join("cache"),
+        enable_pyx: true,
+    });
+    index.preload_indexed_files(vec![
+        parse_source("first", &first_path, first_definition),
+        parse_source("second", &second_path, second_definition),
+    ]);
+
+    let definition = index
+        .query_source_at_navigation(
+            &first_consumer_path,
+            first_consumer,
+            QueryPosition {
+                line: 1,
+                character: 10,
+            },
+        )
+        .definition
+        .expect("first import should resolve");
+    let target = ResolvedReferenceTarget {
+        word: "target".to_string(),
+        range: Range::default(),
+        definition_ranges: vec![definition.range.clone()],
+        definition,
+        declaration: None,
+    };
+    let usage_range = |path: &Path, source: &str| {
+        sage_index::references_in_source(path, source, "target")
+            .into_iter()
+            .find(|reference| reference.range.start_line == 1)
+            .unwrap()
+            .range
+    };
+
+    assert!(reference_candidate_matches_target(
+        &index,
+        &first_consumer_path,
+        first_consumer,
+        &usage_range(&first_consumer_path, first_consumer),
+        &target,
+    ));
+    assert!(reference_candidate_matches_target(
+        &index,
+        &shared_consumer_path,
+        shared_consumer,
+        &usage_range(&shared_consumer_path, shared_consumer),
+        &target,
+    ));
+    assert!(!reference_candidate_matches_target(
+        &index,
+        &second_consumer_path,
+        second_consumer,
+        &usage_range(&second_consumer_path, second_consumer),
+        &target,
+    ));
+    let unresolved_same_file =
+        sage_index::references_in_source(&first_path, first_definition, "target")
+            .into_iter()
+            .find(|reference| reference.range.start_line == 3)
+            .unwrap();
+    assert!(
+        !reference_candidate_matches_target(
+            &index,
+            &first_path,
+            first_definition,
+            &unresolved_same_file.range,
+            &target,
+        ),
+        "an unresolved same-file occurrence must not enter a rename edit"
+    );
+    assert!(same_definition_identity(
+        &target.definition,
+        &index
+            .query_source_at_navigation(
+                &first_path,
+                first_definition,
+                QueryPosition {
+                    line: 0,
+                    character: 5,
+                },
+            )
+            .definition
+            .unwrap(),
+    ));
+    assert!(!same_definition_identity(
+        &target.definition,
+        &index
+            .query_source_at_navigation(
+                &second_path,
+                second_definition,
+                QueryPosition {
+                    line: 0,
+                    character: 5,
+                },
+            )
+            .definition
+            .unwrap(),
+    ));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn rename_reference_collection_rejects_non_editable_live_paths() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "sage-ls-reference-editability-{}-{nonce}",
+        std::process::id()
+    ));
+    let editable = root.join("workspace");
+    let external = root.join("external");
+    std::fs::create_dir_all(&editable).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+    let editable = editable.canonicalize().unwrap();
+    let external = external.canonicalize().unwrap();
+    let index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![editable.clone(), external.clone()],
+        editable_roots: vec![editable.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join("cache"),
+        enable_pyx: true,
+    });
+
+    assert!(reference_path_is_collectible(
+        &index,
+        &editable.join("open.py"),
+        ReferenceCollectionMode::Rename,
+    ));
+    assert!(!reference_path_is_collectible(
+        &index,
+        &external.join("open.py"),
+        ReferenceCollectionMode::Rename,
+    ));
+    assert!(reference_path_is_collectible(
+        &index,
+        &external.join("open.py"),
+        ReferenceCollectionMode::References,
+    ));
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn method_definition_identity_keeps_owner_specific_targets_separate() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "sage-ls-method-owner-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("owners.py");
+    let source = [
+        "class First:",
+        "    def target(self):",
+        "        return 1",
+        "",
+        "class Second:",
+        "    def target(self):",
+        "        return 2",
+        "",
+        "value = Second()",
+        "value.target()",
+    ]
+    .join("\n");
+    std::fs::write(&path, &source).unwrap();
+    let root = root.canonicalize().unwrap();
+    let path = path.canonicalize().unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join("cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+    let definitions: Vec<_> = parse_source("owners", &path, &source)
+        .symbols
+        .into_iter()
+        .filter(|symbol| symbol.name == "target")
+        .map(|symbol| QueryDefinition {
+            name: symbol.name,
+            path: symbol.path,
+            range: symbol.range,
+            detail: symbol.detail,
+            module: symbol.module,
+        })
+        .collect();
+    let first = definitions
+        .iter()
+        .find(|definition| definition.detail == "Method First.target")
+        .unwrap();
+    let second = definitions
+        .iter()
+        .find(|definition| definition.detail == "Method Second.target")
+        .unwrap();
+
+    assert!(!same_definition_identity(second, first));
+    assert!(same_definition_identity(second, second));
+
+    let query = index.query_source_at_navigation(
+        &path,
+        &source,
+        QueryPosition {
+            line: 9,
+            character: 8,
+        },
+    );
+    let target = query
+        .definition
+        .expect("unified navigation should resolve the member owner");
+    assert_eq!(target.detail, "Method Second.target");
+    let uri = Url::from_file_path(&path).unwrap();
+    let item = call_hierarchy_item_for_local_definition(&uri, &path, &source, &target)
+        .expect("call hierarchy should reuse the owner-aware navigation target");
+    assert_eq!(item.selection_range.start, Position::new(5, 8));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn definition_identity_separates_same_path_nested_definitions() {
+    let path = PathBuf::from("/workspace/nested.py");
+    let first = QueryDefinition {
+        name: "target".to_string(),
+        path: path.clone(),
+        range: sage_index::SourceRange {
+            start_line: 1,
+            start_character: 8,
+            end_line: 1,
+            end_character: 14,
+        },
+        detail: "Function target".to_string(),
+        module: "nested".to_string(),
+    };
+    let second = QueryDefinition {
+        range: sage_index::SourceRange {
+            start_line: 5,
+            start_character: 8,
+            end_line: 5,
+            end_character: 14,
+        },
+        ..first.clone()
+    };
+
+    assert!(same_definition_owner_identity(&first, &second));
+    assert!(!same_definition_identity(&first, &second));
+}
+
+#[test]
+fn scoped_reference_locations_honor_include_declaration() {
+    let uri = Url::parse("file:///workspace/demo.py").unwrap();
+    let declaration = Location {
+        uri: uri.clone(),
+        range: Range::new(Position::new(0, 4), Position::new(0, 10)),
+    };
+    let usage = Location {
+        uri,
+        range: Range::new(Position::new(3, 0), Position::new(3, 6)),
+    };
+    let mut locations = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    push_scoped_reference_location(
+        &mut locations,
+        &mut seen,
+        declaration.clone(),
+        Some(&declaration),
+        false,
+    );
+    push_scoped_reference_location(
+        &mut locations,
+        &mut seen,
+        usage.clone(),
+        Some(&declaration),
+        false,
+    );
+    assert_eq!(locations, vec![usage]);
+}
+
+#[test]
 fn sage_inlay_hints_infer_common_constructor_assignments() {
     let source = [
         "F = GF(7)",
@@ -297,45 +618,6 @@ fn documentation_source_position_covers_external_definition_files() {
         .docstring
         .as_deref()
         .is_some_and(|doc| doc.contains("EXAMPLES::")));
-}
-
-#[test]
-fn declaration_source_position_covers_external_definition_files() {
-    let path = PathBuf::from("/workspace/sage/combinat/combination.py");
-    let uri = Url::from_file_path(&path).unwrap();
-    let source = [
-        "from sage.misc.lazy_import import lazy_import",
-        "",
-        "def Combinations(mset, k=None, *, as_tuples=False):",
-        "    return []",
-    ]
-    .join("\n");
-
-    let location = declaration_location_for_source_position(
-        &uri,
-        &path,
-        &source,
-        "Combinations",
-        Position::new(2, 8),
-    )
-    .expect("definition source position should be returned as declaration");
-
-    assert_eq!(location.uri, uri);
-    assert_eq!(
-        location.range,
-        Range::new(Position::new(2, 4), Position::new(2, 16))
-    );
-    assert!(
-        declaration_location_for_source_position(
-            &location.uri,
-            &path,
-            &source,
-            "lazy_import",
-            Position::new(0, 34),
-        )
-        .is_none(),
-        "imported names should not become declarations"
-    );
 }
 
 #[test]
@@ -778,19 +1060,6 @@ fn lsp_utf16_positions_resolve_symbols_after_unicode_prefixes() {
         lsp_range_for_text(source, &usage_reference.range),
         word_range
     );
-
-    let declaration = "π = 0; def target():";
-    let declaration_byte = declaration.find("target").unwrap();
-    let declaration_position = Position::new(
-        0,
-        declaration[..declaration_byte].encode_utf16().count() as u32,
-    );
-    let (_, declaration_range) = word_at_position(declaration, declaration_position).unwrap();
-    assert!(source_range_is_declaration(
-        declaration,
-        "target",
-        &declaration_range,
-    ));
 }
 
 #[test]
@@ -853,7 +1122,7 @@ fn call_hierarchy_enclosing_item_finds_nearest_function_block() {
 }
 
 #[test]
-fn call_hierarchy_prepare_prefers_open_document_local_definitions() {
+fn call_hierarchy_local_fast_path_only_matches_declarations() {
     let path = PathBuf::from("/workspace/demo.py");
     let uri = Url::from_file_path(&path).unwrap();
     let source = [
@@ -869,13 +1138,9 @@ fn call_hierarchy_prepare_prefers_open_document_local_definitions() {
     ]
     .join("\n");
 
-    let item = call_hierarchy_item_for_local_symbol_at_position(
-        &uri,
-        &path,
-        &source,
-        Position::new(8, 13),
-    )
-    .expect("local function reference should resolve before global index fallback");
+    let item =
+        call_hierarchy_item_for_local_symbol_at_position(&uri, &path, &source, Position::new(2, 8))
+            .expect("local declaration should use the live-document fast path");
 
     assert_eq!(item.name, "kernel_columns");
     assert_eq!(item.uri, uri);
@@ -887,33 +1152,13 @@ fn call_hierarchy_prepare_prefers_open_document_local_definitions() {
         item.range,
         Range::new(Position::new(2, 0), Position::new(5, 12))
     );
-}
-
-#[test]
-fn local_rename_fast_path_allows_editable_symbols_but_not_imports() {
-    let path = PathBuf::from("/workspace/demo.py");
-    let source = [
-        "from sage.all import PolynomialRing",
-        "",
-        "def kernel_columns(A):",
-        "    return A",
-        "",
-        "value = kernel_columns(M)",
-    ]
-    .join("\n");
-
-    assert!(local_rename_target_for_source(
+    assert!(call_hierarchy_item_for_local_symbol_at_position(
+        &uri,
         &path,
         &source,
-        "kernel_columns",
-        Range::new(Position::new(5, 8), Position::new(5, 22)),
-    ));
-    assert!(!local_rename_target_for_source(
-        &path,
-        &source,
-        "PolynomialRing",
-        Range::new(Position::new(0, 21), Position::new(0, 35)),
-    ));
+        Position::new(8, 13),
+    )
+    .is_none());
 }
 
 #[test]

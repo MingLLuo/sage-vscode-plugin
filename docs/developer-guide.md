@@ -79,9 +79,17 @@ current static-analysis baseline should be extended safely.
 - `src/languageClient.ts`
   Starts the Rust `sage-ls` process, watches Sage/Cython document types, and sends command-backed documentation/status
   requests while suppressing client-library auto-restarts during extension-managed shutdown and restart cycles.
+- `src/sageCommandClient.ts` and `boundedOperation.ts`
+  Keep execute-command requests on the typed LSP protocol overload and bound status/start/stop waits. Do not switch
+  command requests back to the string-plus-token overload: it serializes the parameters as a positional array.
+- `src/sageSourceView.ts` and `backingFileWatchRegistry.ts`
+  Serve read-only external Sage sources and share directory watchers across their backing files. Directory watches keep
+  virtual documents current across atomic saves and Git checkouts; reads are registered before I/O to avoid a stale
+  first snapshot.
 - `src/externalSourceNavigation.ts`
   Bridges definition, declaration, implementation, type-definition, and reference requests from a read-only
-  `sage-source:` editor to its backing `file:` document, then rewrites results back to the appropriate visible URI.
+  `sage-source:` editor to its backing `file:` URI, then rewrites results back to the appropriate visible URI. It verifies
+  the visible text against disk before forwarding a position and must not open a second hidden `file:` document.
 - `src/executionCommands.ts`
   Registers file, selection, and cell execution commands. Terminal/process construction remains in `executionPlan.ts`
   and `terminalManager.ts` so command handlers only validate editor and workspace state.
@@ -177,7 +185,10 @@ Rust index:
   lookup state.
 - `crates/sage-index/src/cache_metadata.rs`, `cache_persistence.rs`, `cache_queries.rs`, and `materialized_cache.rs`
   Split schema metadata and fingerprints, writes, reads, and materialized Sage export/method caches. Keep cache count and
-  root validation here so a missing or truncated cache cannot be mistaken for a valid warm index.
+  root validation here so a missing or truncated cache cannot be mistaken for a valid warm index. Hydration reads the
+  transactionally persisted metadata on the startup path; the immediately scheduled reconciliation performs exact,
+  index-range-backed row validation and rebuilds a logically truncated database. Refresh validates synchronously before
+  applying incremental writes.
 - `crates/sage-index/src/source_analysis.rs` and `crates/sage-index/src/source_analysis/`
   Route file discovery, `.sage` preprocessing, declarations, imports/exports, diagnostics, semantic tokens, references,
   and source-import analysis through small parsing submodules.

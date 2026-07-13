@@ -240,6 +240,144 @@ fn hydrated_refresh_rebuilds_complete_primary_cache_when_database_disappears() {
 }
 
 #[test]
+fn reconcile_after_hydrate_rebuilds_when_cached_rows_are_truncated() {
+    let root = test_root("hydrate-truncated-cache");
+    let source = root.join("module.py");
+    fs::write(
+        &source,
+        "def restored_symbol():\n    \"\"\"Restored documentation.\"\"\"\n    return 1\n",
+    )
+    .unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    for table in ["files", "symbols", "docs"] {
+        let mut initial = WorkspaceIndex::new(options.clone());
+        initial.rebuild().unwrap();
+        let connection = Connection::open(initial.db_path()).unwrap();
+        connection
+            .execute(&format!("delete from {table}"), [])
+            .unwrap();
+        drop(connection);
+
+        let mut hydrated = WorkspaceIndex::new(options.clone());
+        let hydrated_status = hydrated.hydrate_from_cache().unwrap();
+        assert_eq!(hydrated_status.last_operation.as_deref(), Some("hydrate"));
+        let status = hydrated.reconcile_with_cache().unwrap();
+        assert_eq!(
+            status.last_operation.as_deref(),
+            Some("rebuild"),
+            "truncating {table} must trigger recovery"
+        );
+        assert!(status.cache_miss_count >= 1, "{status:?}");
+        assert!(hydrated.symbol("restored_symbol").is_some());
+        assert_eq!(
+            hydrated
+                .documentation_for_symbol("restored_symbol")
+                .and_then(|record| record.docstring),
+            Some("Restored documentation.".to_string())
+        );
+    }
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn fast_reconcile_rebuilds_when_cache_is_truncated_after_hydrate() {
+    let root = test_root("reconcile-truncated-cache");
+    let source = root.join("module.py");
+    fs::write(&source, "def restored_symbol():\n    return 1\n").unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    WorkspaceIndex::new(options.clone()).rebuild().unwrap();
+    let mut hydrated = WorkspaceIndex::new(options);
+    hydrated.hydrate_from_cache().unwrap();
+    let connection = Connection::open(hydrated.db_path()).unwrap();
+    connection.execute("delete from symbols", []).unwrap();
+    drop(connection);
+
+    let status = hydrated.reconcile_with_cache().unwrap();
+    assert_eq!(status.last_operation.as_deref(), Some("rebuild"));
+    assert!(hydrated.symbol("restored_symbol").is_some());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn hydrated_refresh_rebuilds_when_unchanged_cache_rows_are_truncated() {
+    let root = test_root("refresh-truncated-cache");
+    let changed_source = root.join("changed.py");
+    let unchanged_source = root.join("unchanged.py");
+    fs::write(&changed_source, "def before():\n    return 1\n").unwrap();
+    fs::write(&unchanged_source, "def unchanged():\n    return 2\n").unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    WorkspaceIndex::new(options.clone()).rebuild().unwrap();
+    let mut hydrated = WorkspaceIndex::new(options);
+    hydrated.hydrate_from_cache().unwrap();
+    let connection = Connection::open(hydrated.db_path()).unwrap();
+    connection
+        .execute(
+            "delete from symbols where path = ?1",
+            params![normalize_path(unchanged_source.clone())
+                .display()
+                .to_string()],
+        )
+        .unwrap();
+    drop(connection);
+    fs::write(&changed_source, "def after():\n    return 3\n").unwrap();
+
+    let status = hydrated
+        .refresh_paths(std::slice::from_ref(&changed_source), &[])
+        .unwrap();
+    assert_eq!(status.last_operation.as_deref(), Some("rebuild"));
+    assert!(hydrated.symbol("before").is_none());
+    assert!(hydrated.symbol("after").is_some());
+    assert!(hydrated.symbol("unchanged").is_some());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn reconcile_checks_editable_file_fingerprints_before_fast_path() {
+    let root = test_root("reconcile-editable-fingerprint");
+    let source = root.join("module.py");
+    fs::write(&source, "def before():\n    return 1\n").unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    WorkspaceIndex::new(options.clone()).rebuild().unwrap();
+    let mut hydrated = WorkspaceIndex::new(options);
+    hydrated.hydrate_from_cache().unwrap();
+    fs::write(
+        &source,
+        "def replacement_with_different_size():\n    return 2\n",
+    )
+    .unwrap();
+
+    let status = hydrated.reconcile_with_cache().unwrap();
+    assert_ne!(status.last_operation.as_deref(), Some("fast-reconcile"));
+    assert!(hydrated.symbol("before").is_none());
+    assert!(hydrated.symbol("replacement_with_different_size").is_some());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn hydrate_missing_configured_cache_stays_on_configured_path() {
     let root = test_root("cache-hydrate-missing-primary");
     let configured_cache = root.join(".cache");

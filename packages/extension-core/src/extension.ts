@@ -8,6 +8,7 @@ import {
   shouldAutoStartLanguageClient,
   shouldExposeSageExperience,
 } from "./activationPolicy";
+import { withOperationTimeout } from "./boundedOperation";
 import { readSettings } from "./configuration";
 import { SageCellCodeLensProvider } from "./cellCodeLens";
 import { DocumentationPanel } from "./docsPanel";
@@ -88,6 +89,7 @@ import {
 import { LanguageServerStatusRefreshController } from "./statusRefreshController";
 
 let client: LanguageClient | undefined;
+let pendingLanguageClient: LanguageClient | undefined;
 let languageClientOperation: Promise<void> | undefined;
 let languageClientRestartQueued = false;
 let languageClientManagedShutdown = false;
@@ -110,6 +112,8 @@ const shownIndexMaintenanceNotices = new Set<string>();
 
 const LANGUAGE_SERVER_STATUS_REFRESH_INTERVAL_MS = 1500;
 const LANGUAGE_SERVER_STATUS_REFRESH_LOG_EVERY = 12;
+const LANGUAGE_SERVER_STATUS_REQUEST_TIMEOUT_MS = 5_000;
+const LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS = 5_000;
 const SLOW_LANGUAGE_SERVER_NOTICE_MS = 8000;
 const GETTING_STARTED_WALKTHROUGH_ID = "gettingStarted";
 
@@ -243,6 +247,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const logger = createOutputLogger(outputChannel);
   const docsPanel = new DocumentationPanel();
   const terminalManager = new SageTerminalManager();
+  const sageSourceProvider = new SageSourceTextDocumentProvider();
   const languageServerFileWatcher = vscode.workspace.createFileSystemWatcher(SAGE_LANGUAGE_FILE_GLOB);
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   const cellCodeLensProvider = new SageCellCodeLensProvider({
@@ -294,6 +299,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     languageOutputChannel,
     docsPanel,
     terminalManager,
+    sageSourceProvider,
     languageServerFileWatcher,
     statusBarItem,
     cellCodeLensProvider,
@@ -577,23 +583,34 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             },
           });
           languageClientLaunchCount += 1;
+          pendingLanguageClient = nextClient;
           await nextClient.start();
           if (extensionDeactivating) {
+            if (pendingLanguageClient !== nextClient) {
+              // deactivate() already took ownership of a startup that exceeded
+              // its bounded wait and stopped the best available client handle.
+              continue;
+            }
             languageClientManagedShutdown = true;
             languageClientManagedCloseCount += 1;
             try {
               await nextClient.stop();
             } finally {
               languageClientManagedShutdown = false;
+              if (pendingLanguageClient === nextClient) {
+                pendingLanguageClient = undefined;
+              }
             }
             continue;
           }
           client = nextClient;
+          pendingLanguageClient = undefined;
           await refreshLanguageServerStatus();
           scheduleLanguageServerStatusRefresh();
           logger.info("extension", "language client started", { launchCount: languageClientLaunchCount });
         } catch (error) {
           client = undefined;
+          pendingLanguageClient = undefined;
           if (extensionDeactivating) {
             continue;
           }
@@ -749,6 +766,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     ...registerExternalSourceNavigationProviders({
       ensureLanguageClientReady,
       isExternalSourceDocument: isExternalSageSourceDocument,
+      refreshExternalSourceDocument: (document) => sageSourceProvider.refresh(document.uri),
       logger,
     }),
   );
@@ -761,11 +779,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updateStatusBar();
       return;
     }
+    const cancellation = new vscode.CancellationTokenSource();
     try {
-      const [indexStatus, docsStatus] = await Promise.all([
-        executeSageCommand<IndexStatusSummary>(activeClient, RUST_LSP_COMMANDS.indexStatus),
-        executeSageCommand<DocsStatusSummary>(activeClient, RUST_LSP_COMMANDS.docsStatus),
-      ]);
+      const [indexStatus, docsStatus] = await withOperationTimeout(
+        Promise.all([
+          executeSageCommand<IndexStatusSummary>(
+            activeClient,
+            RUST_LSP_COMMANDS.indexStatus,
+            [],
+            cancellation.token,
+          ),
+          executeSageCommand<DocsStatusSummary>(
+            activeClient,
+            RUST_LSP_COMMANDS.docsStatus,
+            [],
+            cancellation.token,
+          ),
+        ]),
+        LANGUAGE_SERVER_STATUS_REQUEST_TIMEOUT_MS,
+        "Sage language server status refresh",
+        () => cancellation.cancel(),
+      );
       if (client !== activeClient || extensionDeactivating) {
         return;
       }
@@ -775,6 +809,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     } catch (error) {
       logger.warn("extension", "failed to refresh language server status", { error: String(error) });
     } finally {
+      cancellation.dispose();
       if (!extensionDeactivating && client === activeClient) {
         updateStatusBar();
       }
@@ -829,8 +864,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(
       SAGE_SOURCE_SCHEME,
-      new SageSourceTextDocumentProvider(),
+      sageSourceProvider,
     ),
+    vscode.workspace.onDidCloseTextDocument((document) => {
+      sageSourceProvider.release(document.uri);
+    }),
     vscode.window.onDidCloseTerminal((terminal) => {
       terminalManager.handleClosedTerminal(terminal);
     }),
@@ -1169,15 +1207,32 @@ export async function deactivate(): Promise<void> {
   const sourceRootDiscovery = runtimeSourceRootDiscoveryOperation;
   try {
     if (languageClientOperation) {
-      await languageClientOperation;
+      try {
+        await withOperationTimeout(
+          languageClientOperation,
+          LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
+          "Sage language client operation during shutdown",
+        );
+      } catch {
+        // Continue with the best available client handle. A status request or
+        // startup handshake must never keep the extension host alive forever.
+      }
     }
-    if (client) {
-      const activeClient = client;
+    const activeClient = client ?? pendingLanguageClient;
+    if (activeClient) {
       client = undefined;
+      pendingLanguageClient = undefined;
       languageClientManagedShutdown = true;
       languageClientManagedCloseCount += 1;
       try {
-        await activeClient.stop();
+        await withOperationTimeout(
+          activeClient.stop(),
+          LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
+          "Sage language client stop",
+        );
+      } catch {
+        // VS Code is already deactivating; bounded shutdown is preferable to
+        // waiting indefinitely for a failed child-process transport.
       } finally {
         languageClientManagedShutdown = false;
       }
