@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 
 import { readSettings } from "./configuration";
 import { currentSageCell } from "./sageCells";
+import { prepareRunFileDocument } from "./runFilePreparation";
 import type { SageTerminalManager } from "./terminalManager";
 import { resolveRuntimePythonPaths } from "./workspaceDiscovery";
 
@@ -34,16 +35,44 @@ export function registerExecutionCommands(
         void vscode.window.showWarningMessage("Sage can only run local files from disk.");
         return;
       }
+      const preparation = await prepareRunFileDocument(editor.document);
+      if (!preparation.ready) {
+        if (preparation.reason === "save-not-completed") {
+          void vscode.window.showWarningMessage(
+            "Sage did not run the current file because saving its unsaved changes was cancelled or did not complete.",
+          );
+        } else {
+          const detail = preparation.error instanceof Error
+            ? preparation.error.message
+            : String(preparation.error);
+          void vscode.window.showErrorMessage(
+            `Sage could not save the current file, so it was not run: ${detail}`,
+          );
+        }
+        return;
+      }
       const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
       const runtimePythonPaths = resolveRuntimePythonPaths(
-        dependencies.workspaceFolderPaths(),
+        workspacePathsForDocument(editor.document, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
         settings.extraPaths,
       );
-      const terminal = await dependencies.terminalManager.runFile(
-        { ...settings, runtimePythonPaths },
-        editor.document.uri.fsPath,
-      );
+      let terminal: vscode.Terminal | undefined;
+      try {
+        terminal = await dependencies.terminalManager.runFile(
+          { ...settings, runtimePythonPaths },
+          editor.document.uri.fsPath,
+        );
+      } catch (error) {
+        const action = await vscode.window.showErrorMessage(
+          `Sage could not run the current file: ${String(error)}`,
+          "Select Interpreter",
+        );
+        if (action === "Select Interpreter") {
+          await vscode.commands.executeCommand("sage.selectInterpreter");
+        }
+        return;
+      }
       terminal?.show(true);
       dependencies.showExecutionStatus(
         settings.runTarget === "repl"
@@ -69,12 +98,18 @@ export function registerExecutionCommands(
         || editor.document.lineAt(editor.selection.active.line).text;
       const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
       const runtimePythonPaths = resolveRuntimePythonPaths(
-        dependencies.workspaceFolderPaths(),
+        workspacePathsForDocument(editor.document, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
         settings.extraPaths,
         editor.document.uri.fsPath,
       );
-      const terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths }, selection);
+      let terminal: vscode.Terminal;
+      try {
+        terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths }, selection);
+      } catch (error) {
+        await showTerminalLaunchError("send the selection to the Sage REPL", error);
+        return;
+      }
       terminal.show(true);
       dependencies.showExecutionStatus("Sage: sent selection to REPL", {
         selectionLength: selection.length,
@@ -98,12 +133,18 @@ export function registerExecutionCommands(
       }
       const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
       const runtimePythonPaths = resolveRuntimePythonPaths(
-        dependencies.workspaceFolderPaths(),
+        workspacePathsForDocument(editor.document, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
         settings.extraPaths,
         editor.document.uri.scheme === "file" ? editor.document.uri.fsPath : undefined,
       );
-      const terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths }, cell.text);
+      let terminal: vscode.Terminal;
+      try {
+        terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths }, cell.text);
+      } catch (error) {
+        await showTerminalLaunchError("send the current cell to the Sage REPL", error);
+        return;
+      }
       terminal.show(true);
       dependencies.showExecutionStatus("Sage: sent current cell to REPL", {
         startLine: cell.startLine,
@@ -116,14 +157,43 @@ export function registerExecutionCommands(
       if (!(await dependencies.ensureWorkspaceRuntimeAvailable("Starting the Sage REPL"))) {
         return;
       }
-      const settings = readSettings(vscode.workspace.workspaceFolders?.[0]);
-      const terminal = dependencies.terminalManager.startRepl(settings);
+      const activeDocument = vscode.window.activeTextEditor?.document;
+      const settings = readSettings(
+        activeDocument
+          ? vscode.workspace.getWorkspaceFolder(activeDocument.uri)
+          : vscode.workspace.workspaceFolders?.[0],
+      );
+      let terminal: vscode.Terminal;
+      try {
+        terminal = dependencies.terminalManager.startRepl(settings);
+      } catch (error) {
+        await showTerminalLaunchError("start the Sage REPL", error);
+        return;
+      }
       terminal.show(true);
       dependencies.showExecutionStatus("Sage: REPL ready or starting", {
         interpreterPath: settings.interpreterPath,
       });
     }),
   ];
+}
+
+function workspacePathsForDocument(
+  document: vscode.TextDocument,
+  fallback: string[],
+): string[] {
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+  return workspaceFolder ? [workspaceFolder.uri.fsPath] : fallback;
+}
+
+async function showTerminalLaunchError(action: string, error: unknown): Promise<void> {
+  const selectedAction = await vscode.window.showErrorMessage(
+    `Sage could not ${action}: ${String(error)}`,
+    "Select Interpreter",
+  );
+  if (selectedAction === "Select Interpreter") {
+    await vscode.commands.executeCommand("sage.selectInterpreter");
+  }
 }
 
 async function editorForCellExecution(target?: RunCurrentCellTarget): Promise<vscode.TextEditor | undefined> {

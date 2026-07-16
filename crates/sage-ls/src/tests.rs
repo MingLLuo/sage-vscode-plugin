@@ -1,4 +1,5 @@
 use super::*;
+use crate::call_hierarchy::call_ranges_in_range;
 
 #[test]
 fn background_index_results_require_latest_job_and_unchanged_index() {
@@ -103,6 +104,7 @@ fn reference_candidates_are_scoped_to_the_resolved_definition() {
         definition_ranges: vec![definition.range.clone()],
         definition,
         declaration: None,
+        local_import_alias: None,
     };
     let usage_range = |path: &Path, source: &str| {
         sage_index::references_in_source(path, source, "target")
@@ -178,6 +180,340 @@ fn reference_candidates_are_scoped_to_the_resolved_definition() {
     ));
 
     std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn parameter_reference_candidates_do_not_cross_function_or_file_bindings() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "sage-ls-parameter-reference-scope-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let global_path = root.join("global.py");
+    let consumer_path = root.join("consumer.py");
+    let global_source = "value = 'unrelated global'\n";
+    let consumer_source =
+        "def first(value):\n    return value\n\ndef second(value):\n    return value\n";
+    std::fs::write(&global_path, global_source).unwrap();
+    std::fs::write(&consumer_path, consumer_source).unwrap();
+
+    let root = root.canonicalize().unwrap();
+    let global_path = global_path.canonicalize().unwrap();
+    let consumer_path = consumer_path.canonicalize().unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join("cache"),
+        enable_pyx: true,
+    });
+    index.preload_indexed_files(vec![parse_source("global", &global_path, global_source)]);
+
+    let definition = index
+        .query_source_at_navigation(
+            &consumer_path,
+            consumer_source,
+            QueryPosition {
+                line: 1,
+                character: 12,
+            },
+        )
+        .definition
+        .expect("first parameter should resolve locally");
+    let target = ResolvedReferenceTarget {
+        word: "value".to_string(),
+        range: Range::default(),
+        definition_ranges: vec![definition.range.clone()],
+        definition,
+        declaration: None,
+        local_import_alias: None,
+    };
+    let references = sage_index::references_in_source(&consumer_path, consumer_source, "value");
+    for line in [0, 1] {
+        let reference = references
+            .iter()
+            .find(|reference| reference.range.start_line == line)
+            .unwrap();
+        assert!(reference_candidate_matches_target(
+            &index,
+            &consumer_path,
+            consumer_source,
+            &reference.range,
+            &target,
+        ));
+    }
+    for line in [3, 4] {
+        let reference = references
+            .iter()
+            .find(|reference| reference.range.start_line == line)
+            .unwrap();
+        assert!(!reference_candidate_matches_target(
+            &index,
+            &consumer_path,
+            consumer_source,
+            &reference.range,
+            &target,
+        ));
+    }
+    let global_reference = sage_index::references_in_source(&global_path, global_source, "value")
+        .into_iter()
+        .next()
+        .unwrap();
+    assert!(!reference_candidate_matches_target(
+        &index,
+        &global_path,
+        global_source,
+        &global_reference.range,
+        &target,
+    ));
+
+    std::fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn import_alias_rename_target_uses_local_binding_instead_of_source_definition() {
+    let path = PathBuf::from("/workspace/consumer.py");
+    let uri = Url::from_file_path(&path).unwrap();
+    let source = "from provider import target as alias\nvalue = alias()\n";
+    let usage_range = Range::new(Position::new(1, 8), Position::new(1, 13));
+    let target = local_import_alias_rename_target(&uri, &path, source, "alias", usage_range)
+        .expect("explicit alias should have a local rename target");
+
+    assert_eq!(target.word, "alias");
+    assert_eq!(target.range, usage_range);
+    assert_eq!(target.declaration.uri, uri);
+    assert_eq!(
+        target.declaration.range,
+        Range::new(Position::new(0, 31), Position::new(0, 36))
+    );
+    assert_eq!(target.definition.path, path);
+    assert_eq!(target.definition.range.start_character, 31);
+    assert_eq!(
+        target
+            .local_import_alias
+            .as_ref()
+            .and_then(|alias| alias.import_from.as_deref()),
+        Some("provider::target")
+    );
+
+    let unaliased = "from provider import target\nvalue = target()\n";
+    assert!(local_import_alias_rename_target(
+        &uri,
+        &path,
+        unaliased,
+        "target",
+        Range::new(Position::new(1, 8), Position::new(1, 14)),
+    )
+    .is_none());
+
+    let module_alias = "import pkg.mod as module_alias\nvalue = module_alias.Factory()\n";
+    let module_target = local_import_alias_rename_target(
+        &uri,
+        &path,
+        module_alias,
+        "module_alias",
+        Range::new(Position::new(1, 8), Position::new(1, 20)),
+    )
+    .expect("plain import alias should have a local rename target");
+    assert_eq!(
+        module_target
+            .local_import_alias
+            .as_ref()
+            .and_then(|alias| alias.import_from.as_deref()),
+        Some("pkg.mod::mod")
+    );
+}
+
+#[test]
+fn import_alias_rename_and_references_stop_at_visible_rebindings() {
+    let path = PathBuf::from("/workspace/consumer.py");
+    let uri = Url::from_file_path(&path).unwrap();
+    let source = [
+        "from provider import target as alias",
+        "before = alias()",
+        "alias = replacement",
+        "after = alias()",
+    ]
+    .join("\n");
+    let rename = local_import_alias_rename_target(
+        &uri,
+        &path,
+        &source,
+        "alias",
+        Range::new(Position::new(1, 9), Position::new(1, 14)),
+    )
+    .expect("the alias should be renameable before it is rebound");
+    assert!(local_import_alias_rename_target(
+        &uri,
+        &path,
+        &source,
+        "alias",
+        Range::new(Position::new(3, 8), Position::new(3, 13)),
+    )
+    .is_none());
+
+    let target = ResolvedReferenceTarget {
+        word: rename.word,
+        range: rename.range,
+        definition: rename.definition,
+        definition_ranges: rename.definition_ranges,
+        declaration: Some(rename.declaration),
+        local_import_alias: rename.local_import_alias,
+    };
+    let references = sage_index::references_in_source(&path, &source, "alias");
+    let before = references
+        .iter()
+        .find(|reference| reference.range.start_line == 1)
+        .unwrap();
+    let after = references
+        .iter()
+        .find(|reference| reference.range.start_line == 3)
+        .unwrap();
+    assert!(reference_candidate_matches_target(
+        &WorkspaceIndex::default(),
+        &path,
+        &source,
+        &before.range,
+        &target,
+    ));
+    assert!(!reference_candidate_matches_target(
+        &WorkspaceIndex::default(),
+        &path,
+        &source,
+        &after.range,
+        &target,
+    ));
+
+    let parameter_source = [
+        "from provider import target as alias",
+        "def consume(alias):",
+        "    return alias()",
+    ]
+    .join("\n");
+    assert!(local_import_alias_rename_target(
+        &uri,
+        &path,
+        &parameter_source,
+        "alias",
+        Range::new(Position::new(2, 11), Position::new(2, 16)),
+    )
+    .is_none());
+}
+
+#[test]
+fn nested_relative_import_alias_rename_keeps_the_workspace_module_identity() {
+    let path = PathBuf::from("/workspace/pkg/sub/consumer.py");
+    let uri = Url::from_file_path(&path).unwrap();
+    let source = "from .provider import target as alias\nvalue = alias()\n";
+    let symbols = parse_source("pkg.sub.consumer", &path, source).symbols;
+    let usage_range = Range::new(Position::new(1, 8), Position::new(1, 13));
+    let rename =
+        local_import_alias_rename_target_with_symbols(&uri, source, "alias", usage_range, &symbols)
+            .expect("nested relative alias should have a local rename target");
+    assert_eq!(rename.definition.module, "pkg.sub.consumer");
+    assert_eq!(
+        rename
+            .local_import_alias
+            .as_ref()
+            .and_then(|alias| alias.import_from.as_deref()),
+        Some(".provider::target")
+    );
+
+    let target = ResolvedReferenceTarget {
+        word: rename.word,
+        range: rename.range,
+        definition: rename.definition,
+        definition_ranges: rename.definition_ranges,
+        declaration: Some(rename.declaration),
+        local_import_alias: rename.local_import_alias,
+    };
+    let reference = sage_index::references_in_source(&path, source, "alias")
+        .into_iter()
+        .find(|reference| reference.range.start_line == 1)
+        .unwrap();
+    assert!(reference_candidate_matches_target_with_symbols(
+        &WorkspaceIndex::default(),
+        &path,
+        source,
+        &reference.range,
+        &target,
+        Some(&symbols),
+    ));
+}
+
+#[test]
+fn import_alias_rename_candidates_stay_in_the_alias_binding_scope() {
+    let path = PathBuf::from("/workspace/consumer.py");
+    let uri = Url::from_file_path(&path).unwrap();
+    let source = [
+        "def first():",
+        "    from provider import target as alias",
+        "    return alias()",
+        "",
+        "def second():",
+        "    return alias()",
+    ]
+    .join("\n");
+    let rename = local_import_alias_rename_target(
+        &uri,
+        &path,
+        &source,
+        "alias",
+        Range::new(Position::new(2, 11), Position::new(2, 16)),
+    )
+    .expect("function-local alias should be renameable");
+    let target = ResolvedReferenceTarget {
+        word: rename.word,
+        range: rename.range,
+        definition: rename.definition,
+        definition_ranges: rename.definition_ranges,
+        declaration: Some(rename.declaration),
+        local_import_alias: rename.local_import_alias,
+    };
+    let index = WorkspaceIndex::default();
+    let references = sage_index::references_in_source(&path, &source, "alias");
+    for line in [1, 2] {
+        let reference = references
+            .iter()
+            .find(|reference| reference.range.start_line == line)
+            .unwrap();
+        assert!(reference_candidate_matches_target(
+            &index,
+            &path,
+            &source,
+            &reference.range,
+            &target,
+        ));
+    }
+    let unrelated_function = references
+        .iter()
+        .find(|reference| reference.range.start_line == 5)
+        .unwrap();
+    assert!(!reference_candidate_matches_target(
+        &index,
+        &path,
+        &source,
+        &unrelated_function.range,
+        &target,
+    ));
+
+    let other_path = PathBuf::from("/workspace/other.py");
+    let other_source = "from provider import target as alias\nvalue = alias()\n";
+    let other_reference = sage_index::references_in_source(&other_path, other_source, "alias")
+        .into_iter()
+        .last()
+        .unwrap();
+    assert!(!reference_candidate_matches_target(
+        &index,
+        &other_path,
+        other_source,
+        &other_reference.range,
+        &target,
+    ));
 }
 
 #[test]
@@ -532,6 +868,37 @@ fn initialization_options_parse_diagnostics_switch() {
     assert!(defaults.analysis.enable_diagnostics);
     assert!(defaults.analysis.enable_runtime_introspection);
     assert!(defaults.analysis.enable_pyx_parsing);
+}
+
+#[test]
+fn initialization_options_parse_and_validate_analysis_mode_independently() {
+    for (configured, expected, limit) in [
+        ("light", AnalysisMode::Light, 50),
+        ("default", AnalysisMode::Default, 200),
+        ("full", AnalysisMode::Full, 1_000),
+    ] {
+        let options = parse_initialization_options(Some(json!({
+            "analysis": { "mode": configured }
+        })));
+        assert_eq!(options.analysis.mode.effective(), expected);
+        assert_eq!(
+            options.analysis.mode.effective().workspace_symbol_limit(),
+            limit
+        );
+        assert!(options.analysis.mode.invalid_value().is_none());
+    }
+
+    let invalid = parse_initialization_options(Some(json!({
+        "analysis": {
+            "mode": "maximum",
+            "enableDiagnostics": false,
+            "sourceRoots": ["/configured/source"]
+        }
+    })));
+    assert_eq!(invalid.analysis.mode.effective(), AnalysisMode::Default);
+    assert_eq!(invalid.analysis.mode.invalid_value(), Some("maximum"));
+    assert!(!invalid.analysis.enable_diagnostics);
+    assert_eq!(invalid.analysis.source_roots, vec!["/configured/source"]);
 }
 
 #[test]
@@ -1075,7 +1442,7 @@ fn semantic_tokens_use_utf16_columns_after_astral_characters() {
 }
 
 #[test]
-fn call_hierarchy_scanner_skips_declarations_methods_strings_and_comments() {
+fn call_hierarchy_scanner_includes_members_and_skips_non_code_calls() {
     let source = [
         "def main(A):",
         "    helper(A)",
@@ -1095,7 +1462,10 @@ fn call_hierarchy_scanner_skips_declarations_methods_strings_and_comments() {
         .iter()
         .map(|(name, _)| name.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(names, vec!["helper", "PolynomialRing", "zero_matrix"]);
+    assert_eq!(
+        names,
+        vec!["helper", "rank", "PolynomialRing", "zero_matrix"]
+    );
 }
 
 #[test]
@@ -1320,6 +1690,29 @@ fn open_document_definition_range_reparses_live_unicode_text() {
     assert_eq!(live.start_line, 2);
     assert_eq!(lsp_range_for_text(text, &live).start, Position::new(2, 4));
     assert!(live_definition_range(&definition, "value = 1\n").is_none());
+}
+
+#[test]
+fn open_document_definition_range_preserves_verified_live_parameter() {
+    let path = PathBuf::from("/workspace/live_parameter.py");
+    let definition = QueryDefinition {
+        name: "value".to_string(),
+        path,
+        range: sage_index::SourceRange {
+            start_line: 0,
+            start_character: 11,
+            end_line: 0,
+            end_character: 16,
+        },
+        detail: "Local parameter value".to_string(),
+        module: "live_parameter".to_string(),
+    };
+    let text = "def caller(value):\n    return value\n";
+    assert_eq!(
+        live_definition_range(&definition, text),
+        Some(definition.range.clone())
+    );
+    assert!(live_definition_range(&definition, "def caller(other):\n    return other\n").is_none());
 }
 
 #[test]

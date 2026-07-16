@@ -36,7 +36,7 @@ export function definitionTargetFromQuery(
   if (!definition?.path) {
     return null;
   }
-  if (query?.resolutionConfidence === "low") {
+  if (query?.resolutionConfidence !== "high") {
     return null;
   }
   if (!exists(definition.path)) {

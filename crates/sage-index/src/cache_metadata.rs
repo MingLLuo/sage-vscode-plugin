@@ -217,6 +217,18 @@ pub(super) fn seed_shared_roots_from_attached_peer(
     connection: &mut Connection,
     roots: &[PathBuf],
 ) -> Result<usize> {
+    if !schema_table_has_column(connection, "peer_seed.", "files", "identifier_filter")? {
+        return Ok(0);
+    }
+    let invalid_filter_count = connection.query_row(
+        "select count(*) from peer_seed.files
+         where coalesce(length(identifier_filter), 0) != ?1",
+        params![IDENTIFIER_FILTER_BYTES],
+        |row| row.get::<_, usize>(0),
+    )?;
+    if invalid_filter_count > 0 {
+        return Ok(0);
+    }
     let tx = connection.transaction()?;
     let mut imported = 0usize;
     for root in roots {
@@ -321,8 +333,8 @@ pub(super) fn copy_root_from_attached_peer(connection: &Connection, root: &Path)
     )?;
 
     connection.execute(
-        "insert into files(path, module, fingerprint)
-         select path, module, fingerprint from peer_seed.files
+        "insert into files(path, module, fingerprint, identifier_filter)
+         select path, module, fingerprint, identifier_filter from peer_seed.files
          where path = ?1 or path like ?2 escape '~'",
         params![root_text.as_str(), child_pattern.as_str()],
     )?;

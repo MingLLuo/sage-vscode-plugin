@@ -168,6 +168,10 @@ async function createExternalSageSourceRoot(tempRoot: string): Promise<string> {
   await fs.writeFile(path.join(sagePackage, "__init__.py"), "\n");
   await fs.writeFile(path.join(combinatPackage, "__init__.py"), "\n");
   await fs.writeFile(
+    path.join(combinatPackage, "linked.sage"),
+    "linked_external_source_value = 1\n",
+  );
+  await fs.writeFile(
     path.join(sagePackage, "all.py"),
     [
       "\"\"\"Minimal Sage public export surface used by the extension-host smoke.\"\"\"",
@@ -184,13 +188,23 @@ async function createExternalSageSourceRoot(tempRoot: string): Promise<string> {
     [
       "\"\"\"Minimal external Sage source fixture used outside the workspace.\"\"\"",
       "",
+      "load(\"linked.sage\")",
+      "",
       "def Combinations(n, k=None):",
       "    \"\"\"Return combinations of ``n`` objects, optionally of length ``k``.\"\"\"",
       "    return []",
       "",
+      "def ExternalSmokeLeaf(value):",
+      "    \"\"\"Return the external leaf value used by call hierarchy smoke tests.\"\"\"",
+      "    return value",
+      "",
       "def ExternalSmokeCombinations(n, k=None):",
       "    \"\"\"Unique external symbol used to verify read-only navigation bridges.\"\"\"",
-      "    return []",
+      "    return ExternalSmokeLeaf(n)",
+      "",
+      "def ExternalSmokeCaller():",
+      "    \"\"\"Call the external combination helper for hierarchy and signature tests.\"\"\"",
+      "    return ExternalSmokeCombinations([1, 2, 3], 2)",
       "",
     ].join("\n"),
   );

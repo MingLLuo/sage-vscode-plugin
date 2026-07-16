@@ -120,6 +120,54 @@ test("resolveInterpreterConfigurationUpdates prompts for custom paths", async ()
   );
 });
 
+test("resolveInterpreterConfigurationUpdates trims custom paths and skips no-op updates", async () => {
+  assert.deepEqual(
+    await resolveInterpreterConfigurationUpdates(
+      { label: "Current", selectionTarget: "languageServerAuto" },
+      { interpreterPath: "sage", languageServerPythonPath: "auto" },
+      unusedPrompts(),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    await resolveInterpreterConfigurationUpdates(
+      { label: "Custom Sage", selectionTarget: "runtimeCustom" },
+      { interpreterPath: "sage", languageServerPythonPath: "auto" },
+      {
+        ...unusedPrompts(),
+        runtimePath: async () => "  /opt/sage/bin/sage  ",
+      },
+    ),
+    [{ section: "interpreter.path", value: "/opt/sage/bin/sage" }],
+  );
+  assert.equal(
+    await resolveInterpreterConfigurationUpdates(
+      { label: "Blank", selectionTarget: "runtimeCustom" },
+      { interpreterPath: "sage", languageServerPythonPath: "auto" },
+      {
+        ...unusedPrompts(),
+        runtimePath: async () => "   ",
+      },
+    ),
+    undefined,
+  );
+  assert.deepEqual(
+    await resolveInterpreterConfigurationUpdates(
+      {
+        label: "Current environment",
+        selectionTarget: "environment",
+        updates: [
+          { section: "interpreter.path", value: "sage" },
+          { section: "languageServer.pythonPath", value: "/usr/bin/python3" },
+        ],
+      },
+      { interpreterPath: "sage", languageServerPythonPath: "auto" },
+      unusedPrompts(),
+    ),
+    [{ section: "languageServer.pythonPath", value: "/usr/bin/python3" }],
+  );
+});
+
 function unusedPrompts() {
   return {
     runtimePath: async () => {

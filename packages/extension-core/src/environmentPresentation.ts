@@ -22,6 +22,7 @@ export interface EnvironmentPresentationInput {
   pythonFilesEnabled?: boolean;
   workspaceRuntimeState?: WorkspaceRuntimeState;
   languageServerStarting?: boolean;
+  languageServerAvailable?: boolean;
 }
 
 export interface IndexStatusSummary {
@@ -89,6 +90,9 @@ export function formatStatusBarText(input: EnvironmentPresentationInput): string
   if (input.languageServerStarting) {
     return "$(sync~spin) Sage: starting LSP";
   }
+  if (input.languageServerAvailable === false) {
+    return "$(warning) Sage: LSP unavailable";
+  }
   if (input.indexStatus?.last_error) {
     return "$(error) Sage: index error";
   }
@@ -109,10 +113,15 @@ export function formatStatusBarText(input: EnvironmentPresentationInput): string
 }
 
 export function formatStatusBarTooltip(input: EnvironmentPresentationInput): string {
+  const languageServerState = input.languageServerStarting
+    ? "starting"
+    : input.languageServerAvailable === false
+      ? "unavailable"
+      : "ready";
   const lines = [
     `Interpreter: ${input.interpreterPath}`,
     `Language server: ${input.languageServerEngine ?? "rust-v2"}${input.languageServerPath ? ` (${input.languageServerPath})` : ""}`,
-    `Language server state: ${input.languageServerStarting ? "starting" : "ready or idle"}`,
+    `Language server state: ${languageServerState}`,
     `Analysis mode: ${input.analysisMode}`,
     `Indexed source roots: ${input.sourceRoots.length}`,
     `Extra paths: ${input.extraPaths?.length ?? 0}`,
@@ -137,12 +146,17 @@ export function formatStatusBarTooltip(input: EnvironmentPresentationInput): str
 }
 
 export function formatEnvironmentDetails(input: EnvironmentPresentationInput): string {
+  const languageServerState = input.languageServerStarting
+    ? "starting"
+    : input.languageServerAvailable === false
+      ? "unavailable"
+      : "ready";
   const roots = input.sourceRoots.length > 0 ? input.sourceRoots.join(", ") : "none";
   const extraPaths = input.extraPaths && input.extraPaths.length > 0 ? input.extraPaths.join(", ") : "none";
   return [
     `Interpreter: ${input.interpreterPath}`,
     `Language server: ${input.languageServerEngine ?? "rust-v2"}${input.languageServerPath ? ` (${input.languageServerPath})` : ""}`,
-    `Language server state: ${input.languageServerStarting ? "starting" : "ready or idle"}`,
+    `Language server state: ${languageServerState}`,
     `Analysis: ${input.analysisMode}`,
     `Source roots: ${roots}`,
     `Extra paths: ${extraPaths}`,

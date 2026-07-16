@@ -642,6 +642,64 @@ fn query_resolves_symbols_from_sage_load_spyx_targets() {
 }
 
 #[test]
+fn query_resolves_the_visible_import_binding_at_each_position() {
+    let root = test_root("scoped-import-navigation");
+    let top = root.join("top.py");
+    let first = root.join("first_provider.py");
+    let second = root.join("second_provider.py");
+    let consumer = root.join("consumer.py");
+    fs::write(&top, "def target():\n    return 'top'\n").unwrap();
+    fs::write(&first, "def target():\n    return 'first'\n").unwrap();
+    fs::write(&second, "def target():\n    return 'second'\n").unwrap();
+    let source = [
+        "from top import target",
+        "",
+        "def first():",
+        "    from first_provider import target",
+        "    before = target()",
+        "    from second_provider import target",
+        "    after = target()",
+        "",
+        "def second():",
+        "    from second_provider import target",
+        "    return target()",
+        "",
+        "def third():",
+        "    return target()",
+    ]
+    .join("\n");
+    fs::write(&consumer, &source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    for (line, expected) in [(4, &first), (6, &second), (10, &second), (13, &top)] {
+        let character = source
+            .lines()
+            .nth(line as usize)
+            .and_then(|source_line| source_line.find("target"))
+            .unwrap() as u32;
+        let query =
+            index.query_source_at_navigation(&consumer, &source, QueryPosition { line, character });
+        assert_eq!(
+            query
+                .definition
+                .as_ref()
+                .map(|definition| definition.path.clone()),
+            Some(normalize_path(expected.clone())),
+            "wrong import target at line {line}: {query:?}",
+        );
+    }
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn query_prefers_documented_python_constructor_over_pxd_declaration() {
     let root = test_root("python-constructor-over-pxd");
     let package = root.join("sage/rings/number_field");

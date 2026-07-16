@@ -7,6 +7,9 @@ mod symbols;
 mod syntax;
 
 pub use calls::function_call_at_position;
+pub use completion::{
+    local_import_alias_symbol_from_source, local_import_alias_symbol_from_symbols,
+};
 pub use sage_types::sage_prewarm_modules_for_source;
 
 pub(super) use calls::*;

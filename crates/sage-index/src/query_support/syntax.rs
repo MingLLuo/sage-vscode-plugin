@@ -40,13 +40,22 @@ pub(crate) fn word_at_source_position(
 }
 
 pub(crate) fn range_for_first_symbol(source: &str, symbol: &str) -> Option<SourceRange> {
+    if symbol.is_empty() {
+        return None;
+    }
     for (line_index, line) in source.lines().enumerate() {
-        if let Some(start) = line.find(symbol) {
+        for (start, _) in line.match_indices(symbol) {
+            let end = start + symbol.len();
+            let starts_at_boundary = start == 0 || !is_word_byte(line.as_bytes()[start - 1]);
+            let ends_at_boundary = end == line.len() || !is_word_byte(line.as_bytes()[end]);
+            if !starts_at_boundary || !ends_at_boundary {
+                continue;
+            }
             return Some(SourceRange {
                 start_line: line_index as u32,
                 start_character: start as u32,
                 end_line: line_index as u32,
-                end_character: (start + symbol.len()) as u32,
+                end_character: end as u32,
             });
         }
     }

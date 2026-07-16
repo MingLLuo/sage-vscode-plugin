@@ -29,6 +29,16 @@ impl WorkspaceIndex {
         Some(file)
     }
 
+    pub fn fresh_file_for_query(&self, path: &Path) -> Option<IndexedFile> {
+        let path = normalize_path(path.to_path_buf());
+        if !path_is_under_roots(&path, &self.options.roots) {
+            return None;
+        }
+        load_fresh_file_for_query_from_db(&self.db_path, &path)
+            .ok()
+            .flatten()
+    }
+
     pub fn source_path_for_module(&self, module: &str) -> Option<PathBuf> {
         module_source_path_from_roots(module, &self.options.roots, self.options.enable_pyx)
     }
@@ -43,11 +53,18 @@ impl WorkspaceIndex {
 
     pub fn editable_references(&self, name: &str) -> Vec<ReferenceRecord> {
         if self.options.editable_roots.is_empty() {
-            return self.references_matching(name, |path| self.is_editable_path(path));
+            return self.references(name);
         }
-        if let Ok(cache) = self.reference_lookup_cache.lock() {
-            if let Some(references) = cache.get(name) {
-                return references.clone();
+        let pending_paths: BTreeSet<_> = self
+            .pending_refresh_path_snapshot()
+            .into_iter()
+            .filter(|path| self.is_editable_path(path))
+            .collect();
+        if pending_paths.is_empty() {
+            if let Ok(cache) = self.reference_lookup_cache.lock() {
+                if let Some(references) = cache.get(name) {
+                    return references.clone();
+                }
             }
         }
         let mut results = Vec::new();
@@ -57,7 +74,11 @@ impl WorkspaceIndex {
                 load_reference_spans_from_db(&self.db_path, name, &self.options.editable_roots)
             {
                 loaded_from_db = true;
-                results.extend(cached);
+                results.extend(
+                    cached
+                        .into_iter()
+                        .filter(|reference| !pending_paths.contains(&reference.path)),
+                );
             }
         }
         if !loaded_from_db {
@@ -70,38 +91,57 @@ impl WorkspaceIndex {
                 }
             }
         }
+        for path in &pending_paths {
+            if let Ok(source) = fs::read_to_string(path) {
+                results.extend(references_in_source(path, &source, name));
+            }
+        }
         let results = dedupe_reference_records(results);
-        if let Ok(mut cache) = self.reference_lookup_cache.lock() {
-            cache.insert(name.to_string(), results.clone());
+        if pending_paths.is_empty() {
+            if let Ok(mut cache) = self.reference_lookup_cache.lock() {
+                cache.insert(name.to_string(), results.clone());
+            }
         }
         results
     }
 
     fn references_matching<F>(&self, name: &str, include_path: F) -> Vec<ReferenceRecord>
     where
-        F: Fn(&Path) -> bool,
+        F: Fn(&Path) -> bool + Sync,
     {
-        let mut results = Vec::new();
+        let mut paths = BTreeSet::new();
+        let mut persisted_paths = BTreeSet::new();
         if self.cached_file_count > 0 {
-            if let Ok(paths) = load_file_paths_from_db(&self.db_path, &self.options.roots) {
-                for path in paths {
-                    if !include_path(&path) {
-                        continue;
-                    }
-                    if let Ok(source) = fs::read_to_string(&path) {
-                        results.extend(references_in_source(&path, &source, name));
-                    }
-                }
+            if let Ok(cached_paths) = load_file_paths_from_db(&self.db_path, &self.options.roots) {
+                persisted_paths.extend(cached_paths);
+            }
+            match load_filtered_file_paths_from_db(&self.db_path, &self.options.roots, name) {
+                Ok(Some(filtered_paths)) => paths.extend(filtered_paths),
+                _ => paths.extend(persisted_paths.iter().cloned()),
             }
         }
-        for file in self.files.values() {
-            if !include_path(&file.path) {
-                continue;
-            }
-            if let Ok(source) = fs::read_to_string(&file.path) {
-                results.extend(references_in_source(&file.path, &source, name));
-            }
-        }
+        // A filesystem event is marked before the replacement index is prepared. Keep those few
+        // paths in the live scan until their refreshed filters have been persisted and installed.
+        paths.extend(self.pending_refresh_path_snapshot());
+        paths.extend(
+            self.files
+                .values()
+                .filter(|file| !persisted_paths.contains(&file.path))
+                .map(|file| file.path.clone()),
+        );
+        let results = paths
+            .into_iter()
+            .collect::<Vec<_>>()
+            .par_iter()
+            .filter(|path| include_path(path))
+            .filter_map(|path| {
+                let source = fs::read_to_string(path).ok()?;
+                source
+                    .contains(name)
+                    .then(|| references_in_source(path, &source, name))
+            })
+            .flatten()
+            .collect();
         dedupe_reference_records(results)
     }
 

@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 anyhow.workspace = true
 notify.workspace = true
+rayon.workspace = true
 regex.workspace = true
 sage-index = { path = "../sage-index" }
 serde.workspace = true

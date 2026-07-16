@@ -28,6 +28,11 @@ export interface WorkspaceConfigurationInput {
   workspaceFolders: readonly string[];
   discoveredSourceRoots: readonly string[];
   configuredExtraPaths?: readonly string[];
+  configuredPythonExtraPaths?: readonly string[];
+  configuredPythonDiagnosticSeverityOverrides?: unknown;
+  configuredPythonExclude?: readonly string[];
+  configuredPythonIgnore?: readonly string[];
+  configuredRuffExclude?: readonly string[];
   configuredRuffConfiguration?: unknown;
   profile: WorkspaceConfigurationProfile;
 }
@@ -111,6 +116,7 @@ export function buildWorkspaceConfigurationUpdates(
     [
       ...input.discoveredSourceRoots,
       ...resolveWorkspaceSettingPaths(input.workspaceFolders, input.configuredExtraPaths ?? []),
+      ...resolveWorkspaceSettingPaths(input.workspaceFolders, input.configuredPythonExtraPaths ?? []),
     ].filter((candidate) => !isSamePathAsAny(candidate, externalSourceRootPaths)),
   );
   const externalSourceRoots = externalSourceRootPaths.length > 0
@@ -127,6 +133,7 @@ export function buildWorkspaceConfigurationUpdates(
       namespace: "python",
       section: "analysis.diagnosticSeverityOverrides",
       value: {
+        ...plainObjectOrEmpty(input.configuredPythonDiagnosticSeverityOverrides),
         reportMissingImports: "none",
         reportMissingModuleSource: "none",
       },
@@ -141,9 +148,21 @@ export function buildWorkspaceConfigurationUpdates(
 
   if (externalSourceRoots.length > 0) {
     updates.push(
-      { namespace: "python", section: "analysis.exclude", value: externalSourceRoots },
-      { namespace: "python", section: "analysis.ignore", value: externalSourceRoots },
-      { namespace: "ruff", section: "exclude", value: externalSourceRoots },
+      {
+        namespace: "python",
+        section: "analysis.exclude",
+        value: mergeStringArrays(input.configuredPythonExclude ?? [], externalSourceRoots),
+      },
+      {
+        namespace: "python",
+        section: "analysis.ignore",
+        value: mergeStringArrays(input.configuredPythonIgnore ?? [], externalSourceRoots),
+      },
+      {
+        namespace: "ruff",
+        section: "exclude",
+        value: mergeStringArrays(input.configuredRuffExclude ?? [], externalSourceRoots),
+      },
     );
     const ruffConfiguration = mergeRuffExternalSourceExcludes(
       input.configuredRuffConfiguration,
@@ -202,6 +221,10 @@ function normalizePathForComparison(value: string): string {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function plainObjectOrEmpty(value: unknown): Record<string, unknown> {
+  return isPlainObject(value) ? value : {};
 }
 
 function compactWorkspacePaths(workspaceFolders: readonly string[], targetPaths: readonly string[]): string[] {

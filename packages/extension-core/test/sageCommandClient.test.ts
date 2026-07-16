@@ -5,8 +5,10 @@ import { CancellationToken, ExecuteCommandRequest } from "vscode-languageserver-
 
 import {
   executeSageCommand,
+  executeSageCommandWithTimeout,
   type SageCommandClient,
 } from "../src/sageCommandClient";
+import { OperationTimeoutError } from "../src/boundedOperation";
 
 test("executeSageCommand uses the typed by-name request and preserves cancellation", async () => {
   const calls: Array<{ type: unknown; params: unknown; token: unknown }> = [];
@@ -33,4 +35,22 @@ test("executeSageCommand uses the typed by-name request and preserves cancellati
   });
   assert.equal(calls[0]?.token, CancellationToken.None);
   assert.equal(ExecuteCommandRequest.type.method, "workspace/executeCommand");
+});
+
+test("executeSageCommandWithTimeout releases a hung user command", async () => {
+  let timedOut = false;
+  const client: SageCommandClient = {
+    sendRequest: () => new Promise<unknown>(() => undefined),
+  };
+
+  await assert.rejects(
+    executeSageCommandWithTimeout(client, "sage.__rust.docsStatus", [], {
+      timeoutMs: 10,
+      label: "Sage docs status",
+      onTimeout: () => { timedOut = true; },
+    }),
+    (error: unknown) => error instanceof OperationTimeoutError
+      && error.operation === "Sage docs status",
+  );
+  assert.equal(timedOut, true);
 });

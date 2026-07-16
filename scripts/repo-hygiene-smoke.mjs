@@ -2,7 +2,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertPinnedNodeVersion, pinnedNodeVersion } from "./package-toolchain.mjs";
+import {
+  assertPinnedNodeVersion,
+  assertPinnedNpmVersion,
+  pinnedNodeVersion,
+  pinnedNpmVersion,
+} from "./package-toolchain.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
@@ -36,6 +41,21 @@ for (const relativePath of requiredFiles) {
 const packageJson = readJson("package.json");
 const scripts = packageJson.scripts ?? {};
 pushCheck("Node package manager is pinned", packageJson.packageManager === "npm@11.17.0", packageJson.packageManager);
+const expectedNpmVersion = pinnedNpmVersion(repositoryRoot);
+let rejectsMismatchedNpm = false;
+try {
+  assertPinnedNpmVersion(repositoryRoot, "0.0.0");
+} catch (error) {
+  rejectsMismatchedNpm = String(error).includes(`requires npm ${expectedNpmVersion}`);
+}
+pushCheck("packaging rejects a mismatched npm runtime", rejectsMismatchedNpm, expectedNpmVersion);
+let acceptsPinnedNpm = true;
+try {
+  assertPinnedNpmVersion(repositoryRoot, expectedNpmVersion);
+} catch {
+  acceptsPinnedNpm = false;
+}
+pushCheck("packaging accepts the exact pinned npm runtime", acceptsPinnedNpm, expectedNpmVersion);
 const expectedNodeVersion = pinnedNodeVersion(repositoryRoot);
 pushCheck("Node runtime is pinned", expectedNodeVersion === "22.23.1", expectedNodeVersion);
 let rejectsMismatchedNode = false;

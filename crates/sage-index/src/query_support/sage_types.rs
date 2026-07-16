@@ -233,7 +233,26 @@ pub(crate) fn infer_owner_type_before(
     member: &str,
     max_line: u32,
 ) -> Option<SageOwnerType> {
-    let local_function_returns = infer_local_function_return_types(source);
+    infer_owner_type_before_with_hints(source, owner, member, max_line, true)
+}
+
+pub(crate) fn infer_owner_type_before_strict(
+    source: &str,
+    owner: &str,
+    member: &str,
+    max_line: u32,
+) -> Option<SageOwnerType> {
+    infer_owner_type_before_with_hints(source, owner, member, max_line, false)
+}
+
+fn infer_owner_type_before_with_hints(
+    source: &str,
+    owner: &str,
+    member: &str,
+    max_line: u32,
+    allow_name_hints: bool,
+) -> Option<SageOwnerType> {
+    let local_function_returns = infer_local_function_return_types(source, allow_name_hints);
     let mut known_types: HashMap<String, SageOwnerType> = HashMap::new();
     let owner_base = owner_base_identifier(owner);
     for (line_index, line) in source.lines().enumerate() {
@@ -247,14 +266,23 @@ pub(crate) fn infer_owner_type_before(
         let Some((name, rhs)) = parse_simple_assignment(trimmed) else {
             continue;
         };
-        if let Some(owner_type) = infer_type_from_rhs(rhs, &known_types, &local_function_returns)
-            .or_else(|| infer_owner_type_from_name(name))
+        if let Some(owner_type) =
+            infer_type_from_rhs(rhs, &known_types, &local_function_returns, allow_name_hints)
+                .or_else(|| {
+                    allow_name_hints
+                        .then(|| infer_owner_type_from_name(name))
+                        .flatten()
+                })
         {
             known_types.insert(name.to_string(), owner_type);
         }
     }
     let exact_owner_type = known_types.get(owner).copied();
-    let expression_owner_type = infer_owner_type_from_owner_expression(owner, member);
+    let expression_owner_type = if allow_name_hints {
+        infer_owner_type_from_owner_expression(owner, member)
+    } else {
+        infer_owner_type_from_explicit_expression(owner, member)
+    };
     let base_owner_type = owner_base.and_then(|name| known_types.get(name).copied());
     exact_owner_type
         .or_else(|| {
@@ -264,8 +292,18 @@ pub(crate) fn infer_owner_type_before(
         })
         .or(base_owner_type)
         .or(expression_owner_type)
-        .or_else(|| owner_base.and_then(|name| infer_owner_type_from_name_for_member(name, member)))
-        .or_else(|| infer_owner_type_from_name_for_member(owner, member))
+        .or_else(|| {
+            allow_name_hints
+                .then(|| {
+                    owner_base.and_then(|name| infer_owner_type_from_name_for_member(name, member))
+                })
+                .flatten()
+        })
+        .or_else(|| {
+            allow_name_hints
+                .then(|| infer_owner_type_from_name_for_member(owner, member))
+                .flatten()
+        })
 }
 
 pub(super) fn owner_base_identifier(owner: &str) -> Option<&str> {
@@ -404,7 +442,30 @@ pub(super) fn infer_owner_type_from_owner_expression(
     None
 }
 
-fn infer_local_function_return_types(source: &str) -> HashMap<String, SageOwnerType> {
+fn infer_owner_type_from_explicit_expression(owner: &str, member: &str) -> Option<SageOwnerType> {
+    let compact: String = owner.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let has_explicit_type_evidence = [
+        "Graph(",
+        "DiGraph(",
+        "PetersenGraph(",
+        "CompleteGraph(",
+        "CycleGraph(",
+        "EllipticCurve(",
+        "NumberField(",
+        "CyclotomicField(",
+        "QuadraticField(",
+    ]
+    .iter()
+    .any(|evidence| compact.contains(evidence));
+    has_explicit_type_evidence
+        .then(|| infer_owner_type_from_owner_expression(owner, member))
+        .flatten()
+}
+
+fn infer_local_function_return_types(
+    source: &str,
+    allow_name_hints: bool,
+) -> HashMap<String, SageOwnerType> {
     let mut returns = HashMap::new();
     let lines: Vec<&str> = source.lines().collect();
     for (line_index, line) in lines.iter().enumerate() {
@@ -427,14 +488,22 @@ fn infer_local_function_return_types(source: &str) -> HashMap<String, SageOwnerT
                 break;
             }
             if let Some((assigned, rhs)) = parse_simple_assignment(body_trimmed) {
-                if let Some(owner_type) = infer_type_from_rhs(rhs, &known_types, &returns)
-                    .or_else(|| infer_owner_type_from_name(assigned))
+                if let Some(owner_type) =
+                    infer_type_from_rhs(rhs, &known_types, &returns, allow_name_hints).or_else(
+                        || {
+                            allow_name_hints
+                                .then(|| infer_owner_type_from_name(assigned))
+                                .flatten()
+                        },
+                    )
                 {
                     known_types.insert(assigned.to_string(), owner_type);
                 }
             }
             if let Some(return_expr) = body_trimmed.strip_prefix("return ") {
-                if let Some(owner_type) = infer_type_from_rhs(return_expr, &known_types, &returns) {
+                if let Some(owner_type) =
+                    infer_type_from_rhs(return_expr, &known_types, &returns, allow_name_hints)
+                {
                     returns.insert(name.to_string(), owner_type);
                     break;
                 }
@@ -455,21 +524,22 @@ fn infer_type_from_rhs(
     rhs: &str,
     known_types: &HashMap<String, SageOwnerType>,
     local_function_returns: &HashMap<String, SageOwnerType>,
+    allow_name_hints: bool,
 ) -> Option<SageOwnerType> {
     let value = rhs.trim();
     if value.is_empty() {
         return None;
     }
-    if value.contains(".ideal(") {
+    if allow_name_hints && value.contains(".ideal(") {
         return Some(SageOwnerType::Ideal);
     }
-    if value.contains("[\"R\"]") || value.contains("['R']") {
+    if allow_name_hints && (value.contains("[\"R\"]") || value.contains("['R']")) {
         return Some(SageOwnerType::PolynomialRing);
     }
-    if value.contains("[\"Q\"]") || value.contains("['Q']") {
+    if allow_name_hints && (value.contains("[\"Q\"]") || value.contains("['Q']")) {
         return Some(SageOwnerType::PolynomialElement);
     }
-    if let Some(product_type) = infer_product_type_from_rhs(value, known_types) {
+    if let Some(product_type) = infer_product_type_from_rhs(value, known_types, allow_name_hints) {
         return Some(product_type);
     }
     let callee = assignment_call_re()
@@ -493,10 +563,11 @@ fn infer_type_from_rhs(
         if let Some(owner_type) = known_types.get(callee).copied() {
             return Some(owner_type);
         }
-        if callee.contains('.') {
-            let member = callee.rsplit('.').next().unwrap_or(callee);
-            if let Some(owner_type) = sage_method_return_type(member) {
-                return Some(owner_type);
+        if let Some((receiver, member)) = callee.rsplit_once('.') {
+            if allow_name_hints || known_types.contains_key(receiver) {
+                if let Some(owner_type) = sage_method_return_type(member) {
+                    return Some(owner_type);
+                }
             }
         }
     }
@@ -509,6 +580,7 @@ fn infer_type_from_rhs(
 fn infer_product_type_from_rhs(
     value: &str,
     known_types: &HashMap<String, SageOwnerType>,
+    allow_name_hints: bool,
 ) -> Option<SageOwnerType> {
     if !value.contains('*') {
         return None;
@@ -519,10 +591,11 @@ fn infer_product_type_from_rhs(
         let Some(name) = captures.name("name").map(|name| name.as_str()) else {
             continue;
         };
-        let owner_type = known_types
-            .get(name)
-            .copied()
-            .or_else(|| infer_owner_type_from_name(name));
+        let owner_type = known_types.get(name).copied().or_else(|| {
+            allow_name_hints
+                .then(|| infer_owner_type_from_name(name))
+                .flatten()
+        });
         match owner_type {
             Some(SageOwnerType::Matrix) => saw_matrix = true,
             Some(SageOwnerType::Vector) => saw_vector = true,
@@ -543,7 +616,7 @@ fn sage_constructor_return_type(name: &str) -> Option<SageOwnerType> {
             Some(SageOwnerType::Matrix)
         }
         "vector" | "zero_vector" => Some(SageOwnerType::Vector),
-        "GF" | "FiniteField" | "QQ" | "ZZ" | "RR" => Some(SageOwnerType::Field),
+        "GF" | "FiniteField" => Some(SageOwnerType::Field),
         "Graph" | "DiGraph" | "PetersenGraph" | "CompleteGraph" | "CycleGraph" => {
             Some(SageOwnerType::Graph)
         }
@@ -559,24 +632,42 @@ fn sage_constructor_return_type(name: &str) -> Option<SageOwnerType> {
     }
 }
 
-pub(crate) fn type_symbol_for_constructor(constructor: &str) -> Option<&'static str> {
-    let short = constructor.rsplit('.').next().unwrap_or(constructor);
-    match short {
-        "Graph" | "DiGraph" | "PetersenGraph" | "CompleteGraph" | "CycleGraph" => Some("Graph"),
-        "EllipticCurve" | "EllipticCurve_from_j" | "EllipticCurve_from_c4c6" => {
-            Some("EllipticCurve")
-        }
-        "NumberField" | "CyclotomicField" | "QuadraticField" => Some("NumberField"),
-        "PolynomialRing"
-        | "LaurentPolynomialRing"
-        | "PowerSeriesRing"
-        | "BooleanPolynomialRing" => Some("PolynomialRing"),
-        "GF" | "FiniteField" => Some("GF"),
-        "matrix" | "zero_matrix" | "identity_matrix" | "random_matrix" | "block_matrix" => {
-            Some("matrix")
-        }
-        "vector" | "zero_vector" => Some("vector"),
-        _ => None,
+pub(crate) fn sage_constructor_names_for_owner_type(
+    owner_type: SageOwnerType,
+) -> &'static [&'static str] {
+    match owner_type {
+        SageOwnerType::MatrixConstructor | SageOwnerType::Matrix => &[
+            "matrix",
+            "zero_matrix",
+            "identity_matrix",
+            "random_matrix",
+            "block_matrix",
+        ],
+        SageOwnerType::Vector => &["vector", "zero_vector"],
+        SageOwnerType::Field => &["GF", "FiniteField"],
+        SageOwnerType::Graph => &[
+            "Graph",
+            "DiGraph",
+            "PetersenGraph",
+            "CompleteGraph",
+            "CycleGraph",
+        ],
+        SageOwnerType::EllipticCurve => &[
+            "EllipticCurve",
+            "EllipticCurve_from_j",
+            "EllipticCurve_from_c4c6",
+        ],
+        SageOwnerType::NumberField => &["NumberField", "CyclotomicField", "QuadraticField"],
+        SageOwnerType::PolynomialRing => &[
+            "PolynomialRing",
+            "LaurentPolynomialRing",
+            "PowerSeriesRing",
+            "BooleanPolynomialRing",
+        ],
+        SageOwnerType::FreeModule
+        | SageOwnerType::PolynomialElement
+        | SageOwnerType::Ideal
+        | SageOwnerType::FieldElement => &[],
     }
 }
 
@@ -597,7 +688,7 @@ pub(crate) fn type_symbol_for_owner_type(owner_type: SageOwnerType) -> Option<&'
     }
 }
 
-fn sage_method_return_type(member: &str) -> Option<SageOwnerType> {
+pub(crate) fn sage_method_return_type(member: &str) -> Option<SageOwnerType> {
     match member {
         "ideal" => Some(SageOwnerType::Ideal),
         "adjugate"

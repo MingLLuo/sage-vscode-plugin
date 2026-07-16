@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Definition navigation now opens a single target only for unique, high-confidence type/import/scope evidence; ambiguous
+  members return ordered definition candidates for VS Code's multi-target preview, while references and rename stay disabled.
+- Made definition, references, rename, and call hierarchy navigation scope-aware for parameters, import aliases,
+  receiver members, and same-name imports, including read-only indexed Sage source roots.
+- Added hover, signature help, document links, and call hierarchy support for `sage-source` documents while preserving
+  the virtual URI in editor results.
+- Improved run, REPL, interpreter, status, configuration, and language-server lifecycle feedback, including dirty-file
+  save handling, bounded operations, actionable recovery choices, and active-workspace behavior in multi-root windows.
+- Split language-server initialization and extension-side workspace, external-source, run preparation, and lifecycle
+  concerns into focused modules with regression coverage.
+- Hardened reproducible VSIX packaging with explicit content and dependency allowlists, executable-mode preservation,
+  exact Node/npm checks, and VS Code 1.97 API type compatibility.
+
 ## 0.1.0 - 2026-05-24
 
 Initial preview release surface for the Sage VS Code Plugin.

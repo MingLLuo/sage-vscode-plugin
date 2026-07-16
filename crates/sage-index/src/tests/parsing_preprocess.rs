@@ -227,6 +227,37 @@ def local():
 }
 
 #[test]
+fn parser_tracks_each_same_line_import_binding_token_exactly() {
+    let source = "from pkg import target as t, t\nimport alpha as a, another as b\n";
+    let file = parse_source("consumer", Path::new("consumer.py"), source);
+    let mut imports = file
+        .symbols
+        .iter()
+        .filter(|symbol| symbol.kind == SymbolKind::Import)
+        .filter(|symbol| matches!(symbol.name.as_str(), "t" | "a" | "b"))
+        .map(|symbol| {
+            (
+                symbol.name.as_str(),
+                symbol.import_from.as_deref().unwrap_or_default(),
+                symbol.range.start_line,
+                symbol.range.start_character,
+            )
+        })
+        .collect::<Vec<_>>();
+    imports.sort();
+
+    assert_eq!(
+        imports,
+        vec![
+            ("a", "alpha::alpha", 1, 16),
+            ("b", "another::another", 1, 30),
+            ("t", "pkg::t", 0, 29),
+            ("t", "pkg::target", 0, 29 - 3),
+        ]
+    );
+}
+
+#[test]
 fn parser_extracts_class_method_aliases_without_local_assignments() {
     let source = r#"
 class MatrixFuture:

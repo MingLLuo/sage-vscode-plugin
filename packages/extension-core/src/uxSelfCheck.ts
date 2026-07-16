@@ -51,6 +51,19 @@ export interface QueryResponse {
     path?: string;
     range?: unknown;
   };
+  definitionCandidates?: Array<{
+    definition?: {
+      name?: string;
+      module?: string;
+      detail?: string;
+      path?: string;
+      range?: unknown;
+    };
+    confidence?: string;
+    reason?: string;
+    signature?: string | null;
+    summary?: string | null;
+  }>;
   completions?: Array<{
     label?: string;
     kind?: string;

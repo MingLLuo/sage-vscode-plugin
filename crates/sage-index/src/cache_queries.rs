@@ -12,6 +12,36 @@ pub(super) fn load_file_paths_from_db(db_path: &Path, roots: &[PathBuf]) -> Resu
     Ok(paths)
 }
 
+pub(super) fn load_filtered_file_paths_from_db(
+    db_path: &Path,
+    roots: &[PathBuf],
+    name: &str,
+) -> Result<Option<Vec<PathBuf>>> {
+    let connection = Connection::open(db_path)?;
+    let mut statement =
+        connection.prepare("select path, identifier_filter from files order by path")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            PathBuf::from(row.get::<_, String>(0)?),
+            row.get::<_, Vec<u8>>(1)?,
+        ))
+    })?;
+    let mut paths = Vec::new();
+    // The lifecycle refreshes filters together with each indexed file snapshot. A malformed or
+    // legacy filter fails open; live editor overlays and pending filesystem refreshes are scanned
+    // separately by the query layer.
+    for row in rows {
+        let (path, filter) = row?;
+        if path_is_under_roots(&path, roots)
+            && (filter.len() != IDENTIFIER_FILTER_BYTES
+                || identifier_filter_might_contain(&filter, name))
+        {
+            paths.push(path);
+        }
+    }
+    Ok(Some(paths))
+}
+
 pub(super) fn load_reference_spans_from_db(
     db_path: &Path,
     name: &str,
@@ -52,11 +82,11 @@ pub(super) fn load_reference_spans_from_db(
 pub(super) fn load_file_from_db(db_path: &Path, path: &Path) -> Result<IndexedFile> {
     let connection = Connection::open(db_path)?;
     let path_text = path.display().to_string();
-    let module = connection
+    let (module, identifier_filter) = connection
         .query_row(
-            "select module from files where path = ?1",
+            "select module, identifier_filter from files where path = ?1",
             params![path_text],
-            |row| row.get::<_, String>(0),
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Vec<u8>>(1)?)),
         )
         .optional()?
         .with_context(|| format!("indexed file not found {}", path.display()))?;
@@ -65,7 +95,46 @@ pub(super) fn load_file_from_db(db_path: &Path, path: &Path) -> Result<IndexedFi
         path: path.to_path_buf(),
         symbols: Vec::new(),
         module_docstring: None,
+        identifier_filter,
     })
+}
+
+pub(super) fn load_fresh_file_for_query_from_db(
+    db_path: &Path,
+    path: &Path,
+) -> Result<Option<IndexedFile>> {
+    let connection = Connection::open(db_path)?;
+    let path_text = path.display().to_string();
+    let Some((module, fingerprint, identifier_filter)) = connection
+        .query_row(
+            "select module, fingerprint, identifier_filter from files where path = ?1",
+            params![path_text],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Vec<u8>>(2)?,
+                ))
+            },
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    if !file_fingerprint(path).is_ok_and(|current| current == fingerprint) {
+        return Ok(None);
+    }
+    let mut statement = connection.prepare(
+        "select name, kind, module, path, start_line, start_character, end_line, end_character, detail, import_from, signature from symbols where path = ?1 order by start_line, start_character",
+    )?;
+    let symbols = collect_symbol_rows(statement.query_map(params![path_text], symbol_from_row)?)?;
+    Ok(Some(IndexedFile {
+        module,
+        path: path.to_path_buf(),
+        symbols,
+        module_docstring: None,
+        identifier_filter,
+    }))
 }
 
 pub(super) fn load_symbols_by_name_from_db(

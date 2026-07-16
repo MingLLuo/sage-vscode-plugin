@@ -239,6 +239,108 @@ fn query_rename_preview_filters_to_editable_roots() {
 }
 
 #[test]
+fn references_fail_open_when_identifier_filter_lags_external_edit() {
+    let root = test_root("stale-identifier-filter");
+    let source_path = root.join("demo.py");
+    fs::write(&source_path, "existing = 1\n").unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+    assert!(index.editable_references("external_target").is_empty());
+
+    // Simulate an external edit observed before the asynchronous index refresh is installed.
+    fs::write(
+        &source_path,
+        "existing = 1\nexternal_target = 2\nvalue = external_target\n",
+    )
+    .unwrap();
+    index.mark_paths_pending_refresh(std::slice::from_ref(&source_path), &[]);
+
+    let references = index.references("external_target");
+    assert_eq!(references.len(), 2);
+    assert!(references
+        .iter()
+        .all(|reference| reference.path == normalize_path(source_path.clone())));
+    assert_eq!(index.editable_references("external_target").len(), 2);
+
+    index
+        .refresh_paths(std::slice::from_ref(&source_path), &[])
+        .unwrap();
+    assert!(index.pending_refresh_path_snapshot().is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn discarded_background_refresh_result_preserves_pending_path() {
+    let root = test_root("discarded-background-refresh");
+    let source_path = root.join("demo.py");
+    fs::write(&source_path, "value = 1\n").unwrap();
+    let mut current = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    current.rebuild().unwrap();
+    fs::write(&source_path, "value = pending_target\n").unwrap();
+    current.mark_paths_pending_refresh(std::slice::from_ref(&source_path), &[]);
+
+    let mut background = current.clone_for_background_work();
+    background
+        .refresh_paths(std::slice::from_ref(&source_path), &[])
+        .unwrap();
+
+    // A failed worker or generation mismatch discards `background` without installing it.
+    assert_eq!(current.pending_refresh_path_snapshot().len(), 1);
+    assert_eq!(background.pending_refresh_path_snapshot().len(), 1);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn background_refresh_install_clears_only_its_captured_event_version() {
+    let root = test_root("versioned-background-refresh");
+    let source_path = root.join("demo.py");
+    fs::write(&source_path, "value = 1\n").unwrap();
+    let mut current = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    current.rebuild().unwrap();
+    fs::write(&source_path, "value = first_event\n").unwrap();
+    current.mark_paths_pending_refresh(std::slice::from_ref(&source_path), &[]);
+
+    let mut first_refresh = current.clone_for_background_work();
+    first_refresh
+        .refresh_paths(std::slice::from_ref(&source_path), &[])
+        .unwrap();
+
+    fs::write(&source_path, "value = second_event\n").unwrap();
+    current.mark_paths_pending_refresh(std::slice::from_ref(&source_path), &[]);
+    first_refresh.finalize_pending_refresh_install(&current);
+    assert_eq!(first_refresh.pending_refresh_path_snapshot().len(), 1);
+
+    let mut second_refresh = first_refresh.clone_for_background_work();
+    second_refresh
+        .refresh_paths(std::slice::from_ref(&source_path), &[])
+        .unwrap();
+    second_refresh.finalize_pending_refresh_install(&first_refresh);
+    assert!(second_refresh.pending_refresh_path_snapshot().is_empty());
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn query_skips_reference_scan_for_read_only_definitions() {
     let root = test_root("read-only-query-target");
     let workspace = root.join("workspace");
@@ -329,7 +431,7 @@ fn query_keeps_hover_compact_while_preserving_full_docs() {
 }
 
 #[test]
-fn query_resolves_instance_method_from_constructor_assignment() {
+fn query_does_not_guess_instance_owner_from_factory_source_path() {
     let root = test_root("method-resolution");
     let consumer = root.join("consumer.sage");
     let provider = root.join("provider.py");
@@ -355,19 +457,12 @@ fn query_resolves_instance_method_from_constructor_assignment() {
 
     let query = index.query_source_symbol(&consumer, &source, "rank", None, None, Vec::new());
 
+    assert!(query.definition.is_none());
+    assert_eq!(query.resolution_confidence.as_deref(), Some("ambiguous"));
+    assert_eq!(query.definition_candidates.len(), 1);
     assert_eq!(
-        query
-            .definition
-            .as_ref()
-            .map(|definition| definition.path.as_path()),
-        Some(normalize_path(provider.clone()).as_path())
-    );
-    assert_eq!(
-        query
-            .documentation
-            .as_ref()
-            .map(|documentation| documentation.summary.as_str()),
-        Some("Return the ring rank.")
+        query.definition_candidates[0].definition.path,
+        normalize_path(provider.clone())
     );
     fs::remove_dir_all(root).ok();
 }
@@ -402,6 +497,42 @@ fn navigation_uses_constructor_class_for_same_file_method_candidates() {
             end_character: 14,
         }
     );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn navigation_uses_enclosing_class_for_self_and_cls_members() {
+    let root = test_root("receiver-member-owner");
+    let source_path = root.join("receivers.py");
+    let source = "class First:\n    def target(self):\n        return 'first'\n\n    def call(self):\n        return self.target()\n\nclass Second:\n    @classmethod\n    def target(cls):\n        return 'second'\n\n    @classmethod\n    def call(cls):\n        return cls.target()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    for (occurrence, expected_detail, expected_line) in [
+        (0, "Method First.target", 1),
+        (1, "Method Second.target", 9),
+    ] {
+        let (line, character) = nth_member_position(source, "target", occurrence);
+        let query = index.query_source_at_navigation(
+            &source_path,
+            source,
+            QueryPosition { line, character },
+        );
+        let definition = query
+            .definition
+            .unwrap_or_else(|| panic!("receiver occurrence {occurrence} should resolve"));
+        assert_eq!(definition.detail, expected_detail);
+        assert_eq!(definition.range.start_line, expected_line);
+        assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+    }
+
     fs::remove_dir_all(root).ok();
 }
 
@@ -462,4 +593,343 @@ fn navigation_resolves_unindexed_local_symbols_with_lexical_scope() {
         "class namespace bindings are not lexical locals inside methods"
     );
     fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn parameter_navigation_references_and_rename_stay_in_the_owning_function() {
+    let root = test_root("parameter-binding-scope");
+    let global_path = root.join("global.py");
+    let source_path = root.join("consumer.py");
+    let source = "def first(value):\n    return value\n\ndef second(value):\n    return value\n";
+    fs::write(&global_path, "value = 'unrelated global'\n").unwrap();
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    let first = index.query_source_at(
+        &source_path,
+        source,
+        QueryPosition {
+            line: 1,
+            character: 12,
+        },
+        Some("renamed_value"),
+    );
+    let first_definition = first.definition.as_ref().expect("first parameter resolves");
+    assert_eq!(first_definition.path, normalize_path(source_path.clone()));
+    assert_eq!(first_definition.detail, "Local parameter value");
+    assert_eq!(
+        first_definition.range,
+        SourceRange {
+            start_line: 0,
+            start_character: 10,
+            end_line: 0,
+            end_character: 15,
+        }
+    );
+    assert_eq!(
+        first
+            .references
+            .iter()
+            .map(|reference| (
+                reference.path.clone(),
+                reference.range.start_line,
+                reference.range.start_character,
+            ))
+            .collect::<Vec<_>>(),
+        vec![
+            (normalize_path(source_path.clone()), 0, 10),
+            (normalize_path(source_path.clone()), 1, 11),
+        ]
+    );
+    assert_eq!(first.rename_preview.len(), 2);
+    assert!(first
+        .rename_preview
+        .iter()
+        .all(|edit| edit.path == normalize_path(source_path.clone())
+            && edit.new_text == "renamed_value"));
+
+    let declaration = index.query_source_at_navigation(
+        &source_path,
+        source,
+        QueryPosition {
+            line: 0,
+            character: 11,
+        },
+    );
+    assert_eq!(
+        declaration.definition.map(|definition| definition.range),
+        Some(first_definition.range.clone())
+    );
+
+    let second = index.query_source_at(
+        &source_path,
+        source,
+        QueryPosition {
+            line: 4,
+            character: 12,
+        },
+        Some("other_value"),
+    );
+    assert_eq!(
+        second
+            .definition
+            .as_ref()
+            .map(|definition| definition.range.start_line),
+        Some(3)
+    );
+    assert_eq!(
+        second
+            .references
+            .iter()
+            .map(|reference| reference.range.start_line)
+            .collect::<Vec<_>>(),
+        vec![3, 4]
+    );
+    assert_eq!(second.rename_preview.len(), 2);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn parameter_navigation_honors_nested_function_shadowing_and_closures() {
+    let root = test_root("nested-parameter-binding");
+    let source_path = root.join("live.py");
+    let index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+
+    let closure_source =
+        "def outer(value):\n    def inner():\n        return value\n    return inner()\n";
+    let closure = index.query_source_at_navigation(
+        &source_path,
+        closure_source,
+        QueryPosition {
+            line: 2,
+            character: 16,
+        },
+    );
+    assert_eq!(
+        closure.definition.map(|definition| definition.range),
+        Some(SourceRange {
+            start_line: 0,
+            start_character: 10,
+            end_line: 0,
+            end_character: 15,
+        })
+    );
+
+    let shadow_source =
+        "def outer(value):\n    def inner(value):\n        return value\n    return inner(value)\n";
+    let inner = index.query_source_at_navigation(
+        &source_path,
+        shadow_source,
+        QueryPosition {
+            line: 2,
+            character: 16,
+        },
+    );
+    assert_eq!(
+        inner.definition.map(|definition| definition.range),
+        Some(SourceRange {
+            start_line: 1,
+            start_character: 14,
+            end_line: 1,
+            end_character: 19,
+        })
+    );
+
+    let receiver_source = "class Example:\n    def read(self):\n        return self\n";
+    let receiver = index.query_source_at_navigation(
+        &source_path,
+        receiver_source,
+        QueryPosition {
+            line: 2,
+            character: 16,
+        },
+    );
+    assert_eq!(
+        receiver.definition.map(|definition| definition.range),
+        Some(SourceRange {
+            start_line: 1,
+            start_character: 13,
+            end_line: 1,
+            end_character: 17,
+        })
+    );
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn local_import_alias_binding_uses_exact_range_and_lexical_scope() {
+    let path = PathBuf::from("/workspace/consumer.py");
+    let source = [
+        "from package.target_mod import target as t",
+        "top = t()",
+        "",
+        "def first():",
+        "    from other import target as t",
+        "    return t()",
+        "",
+        "def second():",
+        "    return t()",
+    ]
+    .join("\n");
+    let top = local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        &source,
+        "t",
+        &SourceRange {
+            start_line: 1,
+            start_character: 6,
+            end_line: 1,
+            end_character: 7,
+        },
+    )
+    .expect("top-level alias should resolve");
+    assert_eq!(top.range.start_line, 0);
+    assert_eq!(top.range.start_character, 41);
+    assert_eq!(
+        top.import_from.as_deref(),
+        Some("package.target_mod::target")
+    );
+
+    let inner = local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        &source,
+        "t",
+        &SourceRange {
+            start_line: 5,
+            start_character: 11,
+            end_line: 5,
+            end_character: 12,
+        },
+    )
+    .expect("function-local alias should shadow the module alias");
+    assert_eq!(inner.range.start_line, 4);
+    assert_eq!(inner.range.start_character, 32);
+    assert_eq!(inner.import_from.as_deref(), Some("other::target"));
+
+    let second = local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        &source,
+        "t",
+        &SourceRange {
+            start_line: 8,
+            start_character: 11,
+            end_line: 8,
+            end_character: 12,
+        },
+    )
+    .expect("another function must see the module alias, not first()'s alias");
+    assert_eq!(second.range.start_line, 0);
+
+    assert!(local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        "from package.target_mod import target\nvalue = target()\n",
+        "target",
+        &SourceRange {
+            start_line: 1,
+            start_character: 8,
+            end_line: 1,
+            end_character: 14,
+        },
+    )
+    .is_none());
+}
+
+#[test]
+fn local_import_alias_binding_rejects_visible_rebindings() {
+    let path = PathBuf::from("/workspace/consumer.py");
+    let usage = |line, character| SourceRange {
+        start_line: line,
+        start_character: character,
+        end_line: line,
+        end_character: character + 5,
+    };
+
+    let reassigned = [
+        "from provider import target as alias",
+        "before = alias()",
+        "alias = replacement",
+        "after = alias()",
+    ]
+    .join("\n");
+    assert!(local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        &reassigned,
+        "alias",
+        &usage(1, 9),
+    )
+    .is_some());
+    assert!(local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        &reassigned,
+        "alias",
+        &usage(3, 8),
+    )
+    .is_none());
+
+    let parameter = [
+        "from provider import target as alias",
+        "def consume(alias):",
+        "    return alias()",
+    ]
+    .join("\n");
+    assert!(local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        &parameter,
+        "alias",
+        &usage(2, 11),
+    )
+    .is_none());
+
+    let unrelated_parameter = [
+        "from provider import target as alias",
+        "def consume(value):",
+        "    return alias(value)",
+    ]
+    .join("\n");
+    assert!(local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        &unrelated_parameter,
+        "alias",
+        &usage(2, 11),
+    )
+    .is_some());
+
+    let rebound_before_import = [
+        "alias = replacement",
+        "from provider import target as alias",
+        "value = alias()",
+    ]
+    .join("\n");
+    let resolved = local_import_alias_symbol_from_source(
+        "consumer",
+        &path,
+        &rebound_before_import,
+        "alias",
+        &usage(2, 8),
+    )
+    .expect("the later import should replace an earlier binding in the same scope");
+    assert_eq!(resolved.range.start_line, 1);
 }

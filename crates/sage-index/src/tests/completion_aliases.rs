@@ -502,13 +502,13 @@ fn ambiguous_dotted_member_returns_explainable_docs_without_wrong_definition() {
     assert!(query
         .fallback_reason
         .as_deref()
-        .is_some_and(|reason| reason.contains("did not match constructor module")));
+        .is_some_and(|reason| reason.contains("no exact owner match")));
     let docs = query
         .documentation
         .as_ref()
         .expect("ambiguous member should provide explainable documentation");
     assert_eq!(docs.kind, "AmbiguousMember");
-    assert!(docs.summary.contains("no definition jump"));
+    assert!(docs.summary.contains("multiple-definition preview"));
     assert!(docs.markers.iter().any(|marker| marker == "ambiguous"));
     assert_eq!(docs.sections.len(), 2);
     assert!(query

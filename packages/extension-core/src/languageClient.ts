@@ -24,8 +24,17 @@ import { shouldAutoRestartOnLanguageServerClose } from "./serverRestart";
 import { workspaceAliasedSourcePath } from "./sourceRootPaths";
 import { buildWorkspaceInitializationData, resolveConfiguredPaths } from "./workspaceDiscovery";
 import { logToChannel } from "./extensionLogger";
+import {
+  executeSageCommand,
+  executeSageCommandWithTimeout,
+} from "./sageCommandClient";
 
-export { executeSageCommand } from "./sageCommandClient";
+export {
+  executeSageCommand,
+  executeSageCommandWithTimeout,
+};
+
+const DOCUMENTATION_REQUEST_TIMEOUT_MS = 10_000;
 
 export const RUST_LSP_COMMANDS = {
   indexStatus: "sage.__rust.indexStatus",
@@ -198,19 +207,19 @@ function rewriteDefinitionEntry(
   if (isDefinitionLink(definition)) {
     return {
       ...definition,
-      targetUri: rewriteExternalDefinitionUri(definition.targetUri, workspaceFolders),
+      targetUri: rewriteExternalSourceUri(definition.targetUri, workspaceFolders),
     };
   }
   if (isLocationLike(definition)) {
     return new vscode.Location(
-      rewriteExternalDefinitionUri(definition.uri, workspaceFolders),
+      rewriteExternalSourceUri(definition.uri, workspaceFolders),
       definition.range,
     );
   }
   return definition;
 }
 
-function rewriteExternalDefinitionUri(
+export function rewriteExternalSourceUri(
   uri: vscode.Uri,
   workspaceFolders: readonly string[],
 ): vscode.Uri {
@@ -296,11 +305,13 @@ export async function requestDocumentation(
   character: number,
   symbol?: string,
 ): Promise<DocumentationResult | null> {
-  const response = await client.sendRequest<DocumentationResponse | null>(
-    "workspace/executeCommand",
+  const response = await executeSageCommandWithTimeout<DocumentationResponse>(
+    client,
+    RUST_LSP_COMMANDS.getDocumentation,
+    [buildDocumentationRequestPayload(documentUri, line, character, symbol)],
     {
-      command: RUST_LSP_COMMANDS.getDocumentation,
-      arguments: [buildDocumentationRequestPayload(documentUri, line, character, symbol)],
+      timeoutMs: DOCUMENTATION_REQUEST_TIMEOUT_MS,
+      label: "Sage documentation request",
     },
   );
   return normalizeDocumentationResponse(response);

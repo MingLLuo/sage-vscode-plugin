@@ -150,11 +150,22 @@ test("formatStatusBarText surfaces background language-server startup", () => {
   );
 });
 
+test("formatStatusBarText does not report ready after language-server failure", () => {
+  assert.equal(
+    formatStatusBarText({ ...sample, languageServerAvailable: false }),
+    "$(warning) Sage: LSP unavailable",
+  );
+  assert.match(
+    formatStatusBarTooltip({ ...sample, languageServerAvailable: false }),
+    /Language server state: unavailable/,
+  );
+});
+
 test("formatStatusBarTooltip includes indexing and docs context", () => {
   const tooltip = formatStatusBarTooltip(sample);
   assert.match(tooltip, /Interpreter: \/opt\/sage\/bin\/sage/);
   assert.match(tooltip, /Language server: rust-v2/);
-  assert.match(tooltip, /Language server state: ready or idle/);
+  assert.match(tooltip, /Language server state: ready/);
   assert.match(tooltip, /Indexed source roots: 2/);
   assert.match(tooltip, /Extra paths: 1/);
   assert.match(tooltip, /Workspace mode: trusted local workspace/);
@@ -170,7 +181,7 @@ test("formatEnvironmentDetails expands the configured source roots", () => {
   assert.match(detail, /^Interpreter: /);
   assert.match(detail, /Source roots: \/workspace\/src, \/workspace\/vendor\/src/);
   assert.match(detail, /Language server: rust-v2/);
-  assert.match(detail, /Language server state: ready or idle/);
+  assert.match(detail, /Language server state: ready/);
   assert.match(detail, /Extra paths: vendor/);
   assert.match(detail, /Workspace mode: trusted local workspace/);
   assert.match(detail, /Index mode: deferred Sage roots with eager workspace roots/);

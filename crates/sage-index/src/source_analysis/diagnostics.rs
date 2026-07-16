@@ -147,12 +147,30 @@ fn is_caret_operand_start(byte: u8) -> bool {
 }
 
 pub fn references_in_source(path: &Path, source: &str, name: &str) -> Vec<ReferenceRecord> {
-    if name.is_empty() {
+    if name.is_empty() || !source.contains(name) {
         return Vec::new();
     }
-    reference_spans_in_source(path, source)
-        .into_iter()
-        .filter_map(|(candidate, reference)| (candidate == name).then_some(reference))
+    let code_map = CodeMap::new(source);
+    source
+        .match_indices(name)
+        .filter_map(|(start, _)| {
+            let end = start + name.len();
+            let starts_at_boundary = start == 0 || !is_word_byte(source.as_bytes()[start - 1]);
+            let ends_at_boundary = end == source.len() || !is_word_byte(source.as_bytes()[end]);
+            if !starts_at_boundary || !ends_at_boundary || !code_map.is_code_offset(start) {
+                return None;
+            }
+            let (line, character) = code_map.line_col(start);
+            Some(ReferenceRecord {
+                path: path.to_path_buf(),
+                range: SourceRange {
+                    start_line: line,
+                    start_character: character,
+                    end_line: line,
+                    end_character: character + name.len() as u32,
+                },
+            })
+        })
         .collect()
 }
 

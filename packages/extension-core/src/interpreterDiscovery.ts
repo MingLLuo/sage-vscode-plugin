@@ -168,11 +168,13 @@ export async function resolveInterpreterConfigurationUpdates(
   prompts: InterpreterSelectionPrompts,
 ): Promise<InterpreterConfigurationUpdate[] | undefined> {
   if (picked.selectionTarget === "languageServerAuto") {
-    return [{ section: "languageServer.pythonPath", value: "auto" }];
+    return settings.languageServerPythonPath === "auto"
+      ? []
+      : [{ section: "languageServer.pythonPath", value: "auto" }];
   }
 
   if (picked.selectionTarget === "runtimeCustom") {
-    const selection = await prompts.runtimePath(settings.interpreterPath);
+    const selection = (await prompts.runtimePath(settings.interpreterPath))?.trim();
     if (!selection) {
       return undefined;
     }
@@ -181,7 +183,7 @@ export async function resolveInterpreterConfigurationUpdates(
 
   if (picked.selectionTarget === "languageServerCustom") {
     const initialValue = settings.languageServerPythonPath === "auto" ? "" : settings.languageServerPythonPath;
-    const selection = await prompts.languageServerPythonPath(initialValue);
+    const selection = (await prompts.languageServerPythonPath(initialValue))?.trim();
     if (!selection) {
       return undefined;
     }
@@ -189,14 +191,26 @@ export async function resolveInterpreterConfigurationUpdates(
   }
 
   if (picked.updates && picked.updates.length > 0) {
-    return picked.updates;
+    return picked.updates.filter((update) => currentSettingValue(settings, update.section) !== update.value);
   }
 
   if (!picked.interpreterPath) {
     return undefined;
   }
 
-  return [{ section: "interpreter.path", value: picked.interpreterPath }];
+  const interpreterPath = picked.interpreterPath.trim();
+  return interpreterPath && interpreterPath !== settings.interpreterPath
+    ? [{ section: "interpreter.path", value: interpreterPath }]
+    : [];
+}
+
+function currentSettingValue(
+  settings: InterpreterSelectionSettings,
+  section: InterpreterConfigurationUpdate["section"],
+): string {
+  return section === "interpreter.path"
+    ? settings.interpreterPath
+    : settings.languageServerPythonPath;
 }
 
 function dedupeProfiles(profiles: EnvironmentProfile[]): EnvironmentProfile[] {

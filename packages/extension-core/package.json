@@ -99,7 +99,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
-    "@types/vscode": "^1.97.0",
+    "@types/vscode": "1.97.0",
     "@vscode/test-electron": "^2.5.2",
     "typescript": "^5.8.2"
   },
@@ -423,7 +423,7 @@
             "default",
             "full"
           ],
-          "markdownDescription": "Analysis depth used by the Sage language server."
+          "markdownDescription": "Workspace-wide analysis breadth. `light` returns up to 50 workspace-symbol matches, `default` up to 200, and `full` up to 1000. Navigation semantics stay identical, while diagnostics, runtime introspection, and Cython indexing remain controlled by their dedicated settings. Restart the language server after changing this setting."
         },
         "sage.analysis.extraPaths": {
           "type": "array",

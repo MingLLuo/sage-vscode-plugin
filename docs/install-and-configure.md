@@ -172,7 +172,11 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
 - `sage.languageServer.pythonPath`: legacy Python LSP runtime path retained for older workspaces and migration tests.
 - `sage.languageServer.rustPath`: Rust `sage-ls` path; leave it as `auto` for local development.
 - `sage.languageServer.pythonArgs`: extra arguments passed to the legacy Python language server.
-- `sage.analysis.mode`: analysis depth, one of `light`, `default`, or `full`.
+- `sage.analysis.mode`: workspace-wide analysis breadth. `light`, `default`, and `full` return at most 50, 200, and
+  1000 workspace-symbol matches respectively. The modes do not change definition/reference resolution semantics or
+  override the dedicated diagnostics, runtime-introspection, and Cython-indexing switches. Changing the mode restarts
+  the language server. The Rust index-status payload (and copied support bundle) reports the effective mode and limit as
+  `analysis_mode` and `workspace_symbol_limit`.
 - `sage.analysis.extraPaths`: additional import paths supplied to the language server.
 - `sage.analysis.sourceRoots`: explicit source roots to index before discovered workspace and runtime roots.
 - `sage.analysis.enableDiagnostics`: enable or suppress language-server diagnostics.

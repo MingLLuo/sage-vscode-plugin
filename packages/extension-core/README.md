@@ -13,6 +13,8 @@ The extension identifier is `sage-vscode.sage-vscode-extension`.
 - Fast SQLite-backed indexing for Sage, Python, and Cython source roots.
 - Static Sage API resolution for common `sage.all` constructors, matrix/vector/polynomial/free-module/finite-field
   methods, and real Sage source navigation.
+- Accuracy-first navigation: unique high-confidence matches jump directly; uncertain members show multiple ordered source
+  candidates when available and never enable an unsafe rename or reference result.
 - Runtime-backed documentation fallback when a configured Sage runtime is available.
 - Run current file, run selection, run cell/region, and managed Sage REPL commands.
 - Status, environment, index, docs, support bundle, and UX self-check commands for troubleshooting.
@@ -47,6 +49,7 @@ are intentionally limited.
 
 - `sage.interpreter.path`: Sage executable for run commands, REPL, and runtime documentation fallback.
 - `sage.languageServer.rustPath`: Rust language-server binary path; `auto` prefers packaged or local binaries.
+- `sage.analysis.mode`: Workspace-symbol search breadth: `light` (50), `default` (200), or `full` (1000); navigation semantics and the dedicated analysis switches are unchanged.
 - `sage.analysis.sourceRoots`: Sage or project source roots to index.
 - `sage.analysis.extraPaths`: Extra import/search roots.
 - `sage.analysis.enablePythonFiles`: Attach Sage LSP features to ordinary `.py` files.

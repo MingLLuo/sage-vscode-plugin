@@ -949,7 +949,8 @@ fn hydrate_resolves_source_derived_class_method_aliases() {
         )
         .unwrap();
     let consumer = root.join("consumer.py");
-    let source = "mat = matrix([])\nvalue = mat.trace_alias()\nmat.trace_\n";
+    let source =
+        "from sage.all import matrix\nmat = matrix([])\nvalue = mat.trace_alias()\nmat.trace_\n";
     fs::write(&consumer, source).unwrap();
     let options = IndexOptions {
         roots: vec![root.clone()],

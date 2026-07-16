@@ -71,7 +71,11 @@ pub(super) fn capture_imports(
             parse_from_import(trimmed, false).or_else(|| parse_from_import(trimmed, true))
         {
             for binding in import.bindings {
-                if let Some(relative) = line.find(&binding.binding) {
+                if let Some(relative) = import_binding_offset(
+                    line,
+                    &binding.binding,
+                    binding.binding != binding.source_name,
+                ) {
                     push_import_symbol(
                         symbols,
                         module,
@@ -98,8 +102,14 @@ pub(super) fn capture_imports(
             continue;
         }
         if let Some(names) = parse_plain_import(trimmed) {
-            for (name, import_from) in names {
-                if let Some(relative) = line.find(&name) {
+            for (name, import_from, explicitly_aliased) in names {
+                if let Some(relative) = import_binding_offset(line, &name, explicitly_aliased) {
+                    let import_target = if explicitly_aliased {
+                        let source_name = import_from.rsplit('.').next().unwrap_or(&import_from);
+                        format!("{import_from}::{source_name}")
+                    } else {
+                        import_from
+                    };
                     push_import_symbol(
                         symbols,
                         module,
@@ -107,7 +117,7 @@ pub(super) fn capture_imports(
                         &name,
                         code_map,
                         line_start + relative,
-                        &import_from,
+                        &import_target,
                     );
                 }
             }
@@ -485,6 +495,11 @@ fn deprecated_alias_import_target(
 
 fn imported_module_path(import_from: &str, fallback_name: &str, importer_module: &str) -> String {
     if import_from.contains("::") {
+        if let Some((source_module, source_name)) = import_from.rsplit_once("::") {
+            if source_module.rsplit('.').next() == Some(source_name) {
+                return resolve_relative_module(source_module, importer_module);
+            }
+        }
         let (source_module, source_name) =
             import_target_in_context(import_from, fallback_name, importer_module);
         format!("{source_module}.{source_name}")

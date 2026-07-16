@@ -56,17 +56,19 @@ test("definitionTargetFromQuery suppresses missing installed Sage package target
   assert.equal(definitionTargetFromQuery(query, () => false), null);
 });
 
-test("definitionTargetFromQuery suppresses low confidence ambiguous method targets", () => {
-  const query: QueryResponse = {
-    definition: {
-      name: "rank",
-      module: "sage.misc",
-      path: "/repo/sage/src/sage/misc/functional.py",
-    },
-    resolutionConfidence: "low",
-  };
+test("definitionTargetFromQuery suppresses every non-high confidence target", () => {
+  for (const resolutionConfidence of ["low", "medium", "ambiguous"]) {
+    const query: QueryResponse = {
+      definition: {
+        name: "rank",
+        module: "sage.misc",
+        path: "/repo/sage/src/sage/misc/functional.py",
+      },
+      resolutionConfidence,
+    };
 
-  assert.equal(definitionTargetFromQuery(query, () => true), null);
+    assert.equal(definitionTargetFromQuery(query, () => true), null);
+  }
 });
 
 test("sourceRangeFromUnknown validates Rust query range payloads", () => {

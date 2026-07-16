@@ -66,19 +66,172 @@ pub(crate) fn local_shadow_symbol_from_source(
     name: &str,
     target_range: &SourceRange,
 ) -> Option<SymbolRecord> {
+    let symbols = parse_source(module, path, source).symbols;
+    local_shadow_symbol_from_symbols(module, path, source, &symbols, name, target_range)
+}
+
+pub(crate) fn local_shadow_symbol_from_symbols(
+    module: &str,
+    path: &Path,
+    source: &str,
+    symbols: &[SymbolRecord],
+    name: &str,
+    target_range: &SourceRange,
+) -> Option<SymbolRecord> {
     let target_scope = definition_scope_at_line(source, target_range.start_line);
-    parse_source(module, path, source)
-        .symbols
-        .into_iter()
+    let mut candidates: Vec<_> = symbols
+        .iter()
+        // Scope discovery walks source up to the declaration line. Filter first so
+        // reference validation does not repeat that walk for every unrelated symbol
+        // in a large module.
         .filter(|record| {
             record.name == name
                 && record.kind != SymbolKind::Import
                 && is_local_shadow_before_or_at_target(record, target_range)
-                && scope_is_visible_from(
-                    &definition_scope_at_line(source, record.range.start_line),
-                    &target_scope,
+        })
+        .cloned()
+        .map(|record| ScopedLocalCandidate {
+            binding_scope: definition_scope_at_line(source, record.range.start_line),
+            record,
+            is_parameter: false,
+        })
+        .collect();
+    candidates.extend(parameter_candidates_for_target(
+        module,
+        path,
+        source,
+        target_range,
+        &target_scope,
+    ));
+    candidates
+        .into_iter()
+        .filter(|candidate| {
+            candidate.record.name == name
+                && candidate.record.kind != SymbolKind::Import
+                && (candidate.record.range == *target_range
+                    || scope_is_visible_from(&candidate.binding_scope, &target_scope))
+        })
+        .min_by_key(|candidate| {
+            (
+                usize::MAX - candidate.binding_scope.len(),
+                u8::from(!candidate.is_parameter),
+                target_range
+                    .start_line
+                    .saturating_sub(candidate.record.range.start_line),
+                symbol_choice_key(&candidate.record),
+            )
+        })
+        .map(|candidate| candidate.record)
+}
+
+pub(crate) fn local_receiver_member_symbol_from_symbols(
+    source: &str,
+    symbols: &[SymbolRecord],
+    owner: &str,
+    name: &str,
+    target_range: &SourceRange,
+) -> Option<SymbolRecord> {
+    if !matches!(owner.trim(), "self" | "cls") {
+        return None;
+    }
+    let class_scope = definition_scope_at_line(source, target_range.start_line)
+        .into_iter()
+        .rev()
+        .find(|scope| scope.kind == DefinitionScopeKind::Class)?;
+    let class_name = symbols
+        .iter()
+        .find(|record| {
+            record.kind == SymbolKind::Class && record.range.start_line == class_scope.line
+        })?
+        .name
+        .clone();
+    let expected_detail = format!("Method {class_name}.{name}");
+    symbols
+        .iter()
+        .find(|record| {
+            record.name == name
+                && record.detail == expected_detail
+                && matches!(
+                    record.kind,
+                    SymbolKind::Function | SymbolKind::CythonDeclaration
                 )
         })
+        .cloned()
+}
+
+pub(crate) fn is_local_parameter_symbol(record: &SymbolRecord) -> bool {
+    record.kind == SymbolKind::Variable && record.detail.starts_with("Local parameter ")
+}
+
+pub(crate) fn local_parameter_reference_matches(
+    module: &str,
+    path: &Path,
+    source: &str,
+    reference_range: &SourceRange,
+    target: &SymbolRecord,
+) -> bool {
+    is_local_parameter_symbol(target)
+        && local_shadow_symbol_from_source(module, path, source, &target.name, reference_range)
+            .is_some_and(|candidate| {
+                candidate.name == target.name
+                    && candidate.module == target.module
+                    && candidate.path == target.path
+                    && candidate.range == target.range
+                    && candidate.detail == target.detail
+            })
+}
+
+pub fn local_import_alias_symbol_from_source(
+    module: &str,
+    path: &Path,
+    source: &str,
+    name: &str,
+    target_range: &SourceRange,
+) -> Option<SymbolRecord> {
+    let symbols = parse_source(module, path, source).symbols;
+    local_import_alias_symbol_from_symbols(source, &symbols, name, target_range)
+}
+
+pub fn local_import_alias_symbol_from_symbols(
+    source: &str,
+    symbols: &[SymbolRecord],
+    name: &str,
+    target_range: &SourceRange,
+) -> Option<SymbolRecord> {
+    let record = local_import_symbol_from_symbols(source, symbols, name, target_range)?;
+    is_explicit_import_alias_symbol(&record).then_some(record)
+}
+
+pub(crate) fn local_import_symbol_from_source(
+    module: &str,
+    path: &Path,
+    source: &str,
+    name: &str,
+    target_range: &SourceRange,
+) -> Option<SymbolRecord> {
+    let symbols = parse_source(module, path, source).symbols;
+    local_import_symbol_from_symbols(source, &symbols, name, target_range)
+}
+
+pub(crate) fn local_import_symbol_from_symbols(
+    source: &str,
+    symbols: &[SymbolRecord],
+    name: &str,
+    target_range: &SourceRange,
+) -> Option<SymbolRecord> {
+    let target_scope = definition_scope_at_line(source, target_range.start_line);
+    let mut record = symbols
+        .iter()
+        .filter(|record| record.kind == SymbolKind::Import && record.name == name)
+        .filter(|record| {
+            source_range_starts_before_or_at(&record.range, target_range)
+                && (record.range == *target_range
+                    || scope_is_visible_from(
+                        &definition_scope_at_line(source, record.range.start_line),
+                        &target_scope,
+                    ))
+        })
+        .cloned()
         .min_by_key(|record| {
             let scope_depth = definition_scope_at_line(source, record.range.start_line).len();
             (
@@ -86,9 +239,147 @@ pub(crate) fn local_shadow_symbol_from_source(
                 target_range
                     .start_line
                     .saturating_sub(record.range.start_line),
-                symbol_choice_key(record),
+                target_range
+                    .start_character
+                    .saturating_sub(record.range.start_character),
             )
+        })?;
+    if let Some(import_from) = source_import_from_at_range(source, &record.name, &record.range) {
+        record.detail = format!("Import {} from {import_from}", record.name);
+        record.import_from = Some(import_from);
+    }
+    if local_binding_shadows_import(source, symbols, name, target_range, &target_scope, &record) {
+        return None;
+    }
+    Some(record)
+}
+
+fn local_binding_shadows_import(
+    source: &str,
+    symbols: &[SymbolRecord],
+    name: &str,
+    target_range: &SourceRange,
+    target_scope: &[DefinitionScope],
+    import: &SymbolRecord,
+) -> bool {
+    let import_scope = definition_scope_at_line(source, import.range.start_line);
+    let mut candidates: Vec<_> = symbols
+        .iter()
+        .filter(|record| {
+            record.name == name
+                && record.kind != SymbolKind::Import
+                && is_local_shadow_before_or_at_target(record, target_range)
         })
+        .cloned()
+        .map(|record| ScopedLocalCandidate {
+            binding_scope: definition_scope_at_line(source, record.range.start_line),
+            record,
+            is_parameter: false,
+        })
+        .collect();
+    candidates.extend(parameter_candidates_for_target(
+        &import.module,
+        &import.path,
+        source,
+        target_range,
+        target_scope,
+    ));
+
+    candidates.into_iter().any(|candidate| {
+        if candidate.record.name != name
+            || !scope_is_visible_from(&candidate.binding_scope, target_scope)
+            || candidate.binding_scope.len() < import_scope.len()
+        {
+            return false;
+        }
+        if candidate.binding_scope.len() > import_scope.len() {
+            return true;
+        }
+        candidate.binding_scope == import_scope
+            && source_range_starts_before_or_at(&import.range, &candidate.record.range)
+            && import.range != candidate.record.range
+    })
+}
+
+fn is_explicit_import_alias_symbol(record: &SymbolRecord) -> bool {
+    if record.kind != SymbolKind::Import {
+        return false;
+    }
+    record
+        .import_from
+        .as_deref()
+        .and_then(|import_from| import_from.rsplit_once("::"))
+        .is_some_and(|(_, source_name)| {
+            source_name != record.name && is_valid_identifier(source_name)
+        })
+}
+
+fn source_range_starts_before_or_at(left: &SourceRange, right: &SourceRange) -> bool {
+    left.start_line < right.start_line
+        || (left.start_line == right.start_line && left.start_character <= right.start_character)
+}
+
+#[derive(Clone, Debug)]
+struct ScopedLocalCandidate {
+    record: SymbolRecord,
+    binding_scope: Vec<DefinitionScope>,
+    is_parameter: bool,
+}
+
+fn parameter_candidates_for_target(
+    module: &str,
+    path: &Path,
+    source: &str,
+    target_range: &SourceRange,
+    target_scope: &[DefinitionScope],
+) -> Vec<ScopedLocalCandidate> {
+    let mut function_scopes: Vec<_> = target_scope
+        .iter()
+        .copied()
+        .filter(|scope| scope.kind == DefinitionScopeKind::Function)
+        .collect();
+    if source
+        .lines()
+        .nth(target_range.start_line as usize)
+        .map(str::trim_start)
+        .and_then(definition_scope_kind)
+        == Some(DefinitionScopeKind::Function)
+    {
+        function_scopes.push(DefinitionScope {
+            line: target_range.start_line,
+            kind: DefinitionScopeKind::Function,
+        });
+    }
+    function_scopes.sort_by_key(|scope| scope.line);
+    function_scopes.dedup();
+
+    if function_scopes.is_empty() {
+        return Vec::new();
+    }
+
+    let code_map = CodeMap::new(source);
+    let mut candidates = Vec::new();
+    for function_scope in function_scopes {
+        let mut binding_scope = definition_scope_at_line(source, function_scope.line);
+        binding_scope.push(function_scope);
+        candidates.extend(
+            parameter_symbols_for_function(
+                module,
+                path,
+                source,
+                &code_map,
+                function_scope.line,
+                true,
+            )
+            .into_iter()
+            .map(|record| ScopedLocalCandidate {
+                record,
+                binding_scope: binding_scope.clone(),
+                is_parameter: true,
+            }),
+        );
+    }
+    candidates
 }
 
 fn definition_scope_at_line(source: &str, target_line: u32) -> Vec<DefinitionScope> {
@@ -247,6 +538,24 @@ fn parameter_symbols_for_scope(
     let Some((scope_line, _)) = scope else {
         return Vec::new();
     };
+    parameter_symbols_for_function(
+        "document",
+        Path::new("document.py"),
+        source,
+        code_map,
+        scope_line,
+        false,
+    )
+}
+
+fn parameter_symbols_for_function(
+    module: &str,
+    path: &Path,
+    source: &str,
+    code_map: &CodeMap,
+    scope_line: u32,
+    include_receivers: bool,
+) -> Vec<SymbolRecord> {
     let Some((line_start, line)) = line_offsets(source).into_iter().nth(scope_line as usize) else {
         return Vec::new();
     };
@@ -263,7 +572,7 @@ fn parameter_symbols_for_scope(
         let Some(name) = parameter_name(raw) else {
             continue;
         };
-        if matches!(name, "self" | "cls") {
+        if !include_receivers && matches!(name, "self" | "cls") {
             continue;
         }
         let Some(name_relative) = raw.find(name) else {
@@ -274,8 +583,8 @@ fn parameter_symbols_for_scope(
         symbols.push(SymbolRecord {
             name: name.to_string(),
             kind: SymbolKind::Variable,
-            module: "document".to_string(),
-            path: PathBuf::from("document.py"),
+            module: module.to_string(),
+            path: path.to_path_buf(),
             range: SourceRange {
                 start_line: line,
                 start_character: character,

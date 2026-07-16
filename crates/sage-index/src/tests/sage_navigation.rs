@@ -457,7 +457,7 @@ fn query_resolves_sage_method_owners_and_suppresses_wrong_global_fallback() {
         )
         .unwrap();
     let consumer = root.join("consumer.py");
-    let source = "from sage.all import GF, PolynomialRing, matrix\nfield = GF(7)\nring = PolynomialRing(field, names=[\"x\"])\nmat = matrix(field, 2, 2)\neqs = []\nrank_value = mat.rank()\nqs_field = Qs[0].base_ring()\nkernel = A.right_kernel()\njac = matrix(ring, 1, 1, lambda i, j: eqs[i].derivative(ring.gen(0)))\nideal = ring.ideal(eqs)\nroots = ideal.variety()\nno_jump = mat.append(1)\nencoded = json.dumps({})\n";
+    let source = "from sage.all import GF, PolynomialRing, matrix\nfield = GF(7)\nring = PolynomialRing(field, names=[\"x\"])\nmat = matrix(field, 2, 2)\nQ = matrix(field, 2, 2)\nA = matrix(field, 2, 2)\npoly = ring.gen(0)\nrank_value = mat.rank()\nqs_field = Q.base_ring()\nkernel = A.right_kernel()\njac = matrix(ring, 1, 1, lambda i, j: poly.derivative(ring.gen(0)))\nideal = ring.ideal([poly])\nroots = ideal.variety()\nno_jump = mat.append(1)\nencoded = json.dumps({})\n";
     fs::write(&consumer, source).unwrap();
     let mut index = WorkspaceIndex::new(IndexOptions {
         roots: vec![root.clone()],
@@ -851,7 +851,7 @@ fn query_resolves_research_helper_sage_methods() {
     });
     index.rebuild().unwrap();
 
-    for (needle, expected_owner, expected_path, expected_doc) in [
+    for (needle, _expected_owner, expected_path, expected_doc) in [
         (
             "basis",
             "FreeModule",
@@ -958,25 +958,17 @@ fn query_resolves_research_helper_sage_methods() {
         let (line, character) = member_position(source, needle);
         let query =
             index.query_source_at(&consumer, source, QueryPosition { line, character }, None);
-        assert_eq!(query.owner_type.as_deref(), Some(expected_owner));
-        assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
-        assert_eq!(
-            query
-                .definition
-                .as_ref()
-                .map(|definition| definition.path.as_path()),
-            Some(normalize_path(expected_path).as_path()),
-            "wrong helper method target for {needle}: {:?}",
-            query.definition
-        );
-        assert_eq!(
-            query
-                .documentation
-                .as_ref()
-                .map(|documentation| documentation.summary.as_str()),
-            Some(expected_doc),
-            "wrong helper method docs for {needle}: {:?}",
-            query.documentation
+        assert_eq!(query.owner_type, None);
+        assert_eq!(query.resolution_confidence.as_deref(), Some("ambiguous"));
+        assert!(query.definition.is_none());
+        let expected_path = normalize_path(expected_path);
+        assert!(
+            query.definition_candidates.iter().any(|candidate| {
+                candidate.definition.path == expected_path
+                    && candidate.summary.as_deref() == Some(expected_doc)
+            }),
+            "missing expected helper-method candidate for {needle}: {:?}",
+            query.definition_candidates
         );
     }
 

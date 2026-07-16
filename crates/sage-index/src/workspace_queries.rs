@@ -1,4 +1,11 @@
 use super::*;
+use crate::symbol_resolution::MemberResolutionContext;
+
+#[derive(Clone, Copy, Default)]
+struct PreparedQueryContext<'a> {
+    local_symbols: Option<&'a [SymbolRecord]>,
+    source_map: Option<&'a CodeMap>,
+}
 
 impl WorkspaceIndex {
     pub fn documentation_for_symbol(&self, name: &str) -> Option<DocumentationRecord> {
@@ -123,21 +130,69 @@ impl WorkspaceIndex {
         )
     }
 
+    pub fn query_source_at_navigation_with_symbols(
+        &self,
+        path: &Path,
+        source: &str,
+        position: QueryPosition,
+        local_symbols: &[SymbolRecord],
+    ) -> QueryResult {
+        self.query_source_at_with_features_and_symbols(
+            path,
+            source,
+            position,
+            None,
+            QueryFeatures::navigation(),
+            Some(local_symbols),
+        )
+    }
+
+    pub fn query_source_definition_with_symbols(
+        &self,
+        path: &Path,
+        source: &str,
+        position: QueryPosition,
+        local_symbols: &[SymbolRecord],
+    ) -> QueryResult {
+        self.query_source_at_with_features_and_symbols(
+            path,
+            source,
+            position,
+            None,
+            QueryFeatures::definition_only(),
+            Some(local_symbols),
+        )
+    }
+
+    pub fn parse_source_for_query(&self, path: &Path, source: &str) -> IndexedFile {
+        let query_path = normalize_path(path.to_path_buf());
+        let module = self
+            .module_hint_for_query_path(&query_path)
+            .unwrap_or_else(|| "document".to_string());
+        parse_source(&module, &query_path, source)
+    }
+
     pub fn type_definition_at_source(
         &self,
-        _path: &Path,
+        path: &Path,
         source: &str,
         position: QueryPosition,
     ) -> Option<QueryDefinition> {
-        let (word, _range) = word_at_source_position(source, position.line, position.character)?;
-        let constructor = assignment_constructor_before_line(source, &word, position.line);
-        let type_symbol = constructor
-            .as_deref()
-            .and_then(type_symbol_for_constructor)
-            .or_else(|| {
-                infer_owner_type_before(source, &word, "", position.line)
-                    .and_then(type_symbol_for_owner_type)
-            })?;
+        let query_path = normalize_path(path.to_path_buf());
+        let (word, range) = word_at_source_position(source, position.line, position.character)?;
+        let owner_type = infer_owner_type_before_strict(source, &word, "", position.line)?;
+        let parsed = self.parse_source_for_query(&query_path, source);
+        if !self.owner_type_has_reliable_sage_binding(
+            source,
+            &word,
+            &query_path,
+            &range,
+            &parsed.symbols,
+            owner_type,
+        ) {
+            return None;
+        }
+        let type_symbol = type_symbol_for_owner_type(owner_type)?;
         self.type_definition_for_symbol(type_symbol)
     }
 
@@ -169,6 +224,20 @@ impl WorkspaceIndex {
         rename_to: Option<&str>,
         features: QueryFeatures,
     ) -> QueryResult {
+        self.query_source_at_with_features_and_symbols(
+            path, source, position, rename_to, features, None,
+        )
+    }
+
+    fn query_source_at_with_features_and_symbols(
+        &self,
+        path: &Path,
+        source: &str,
+        position: QueryPosition,
+        rename_to: Option<&str>,
+        features: QueryFeatures,
+        local_symbols: Option<&[SymbolRecord]>,
+    ) -> QueryResult {
         let diagnostics = if features.diagnostics {
             self.diagnostics_for_source(path, source)
         } else {
@@ -183,7 +252,7 @@ impl WorkspaceIndex {
                 ..QueryResult::default()
             };
         };
-        self.query_source_symbol_with_options(
+        self.query_source_symbol_with_options_and_symbols(
             path,
             source,
             &word,
@@ -192,6 +261,10 @@ impl WorkspaceIndex {
                 rename_to,
                 diagnostics,
                 features,
+            },
+            PreparedQueryContext {
+                local_symbols,
+                source_map: None,
             },
         )
     }
@@ -226,6 +299,56 @@ impl WorkspaceIndex {
         known_range: Option<SourceRange>,
         options: QueryExecutionOptions<'_>,
     ) -> QueryResult {
+        self.query_source_symbol_with_options_and_symbols(
+            path,
+            source,
+            symbol,
+            known_range,
+            options,
+            PreparedQueryContext::default(),
+        )
+    }
+
+    pub fn query_source_definitions_for_ranges_with_symbols(
+        &self,
+        path: &Path,
+        source: &str,
+        symbol: &str,
+        ranges: &[SourceRange],
+        local_symbols: &[SymbolRecord],
+    ) -> Vec<QueryResult> {
+        let source_map = CodeMap::new(source);
+        ranges
+            .iter()
+            .map(|range| {
+                self.query_source_symbol_with_options_and_symbols(
+                    path,
+                    source,
+                    symbol,
+                    Some(range.clone()),
+                    QueryExecutionOptions {
+                        rename_to: None,
+                        diagnostics: Vec::new(),
+                        features: QueryFeatures::definition_only(),
+                    },
+                    PreparedQueryContext {
+                        local_symbols: Some(local_symbols),
+                        source_map: Some(&source_map),
+                    },
+                )
+            })
+            .collect()
+    }
+
+    fn query_source_symbol_with_options_and_symbols(
+        &self,
+        path: &Path,
+        source: &str,
+        symbol: &str,
+        known_range: Option<SourceRange>,
+        options: QueryExecutionOptions<'_>,
+        context: PreparedQueryContext<'_>,
+    ) -> QueryResult {
         let QueryExecutionOptions {
             rename_to,
             diagnostics,
@@ -235,7 +358,13 @@ impl WorkspaceIndex {
         let target_range = known_range
             .or_else(|| range_for_first_symbol(source, symbol))
             .unwrap_or_default();
-        let source_map = CodeMap::new(source);
+        let owned_source_map;
+        let source_map = if let Some(source_map) = context.source_map {
+            source_map
+        } else {
+            owned_source_map = CodeMap::new(source);
+            &owned_source_map
+        };
         let target_is_code = source_map
             .offset(target_range.start_line, target_range.start_character)
             .is_some_and(|offset| source_map.is_code_offset(offset));
@@ -245,28 +374,69 @@ impl WorkspaceIndex {
             .and_then(|value| value.rsplit('.').next())
             .filter(|value| !value.is_empty())
             .unwrap_or(symbol);
-        let module_hint = self
-            .file_for_path(&query_path)
-            .map(|file| file.module)
-            .or_else(|| {
-                self.options
-                    .roots
-                    .iter()
-                    .find(|root| query_path.strip_prefix(root).is_ok())
-                    .map(|root| module_name_from_path(root, &query_path))
-            });
+        let module_hint = context
+            .local_symbols
+            .and_then(|symbols| symbols.first())
+            .map(|symbol| symbol.module.clone())
+            .or_else(|| self.module_hint_for_query_path(&query_path));
+        let local_module = module_hint.as_deref().unwrap_or("document");
+        let parsed_local_symbols;
+        let local_symbols = if let Some(symbols) = context.local_symbols {
+            symbols
+        } else {
+            parsed_local_symbols = parse_source(local_module, &query_path, source).symbols;
+            &parsed_local_symbols
+        };
         let dotted_owner_member = dotted_symbol.as_deref().and_then(dotted_owner_member);
-        let source_import_lookup = source_explicit_import_lookup(source, lookup_name);
-        let sage_all_export_lookup = source_imported_sage_all_lookup(source, lookup_name);
+        let local_import =
+            local_import_symbol_from_symbols(source, local_symbols, lookup_name, &target_range);
+        let source_import_lookup = local_import.as_ref().and_then(|record| {
+            let (import_module, source_name) = record.import_from.as_deref()?.rsplit_once("::")?;
+            Some(SourceImportLookup {
+                import_module: import_module.to_string(),
+                source_name: source_name.to_string(),
+            })
+        });
+        let sage_all_export_lookup = source_import_lookup
+            .as_ref()
+            .filter(|lookup| module_is_sage_all_export_module(&lookup.import_module))
+            .map(|lookup| SourceImportLookup {
+                import_module: lookup.import_module.clone(),
+                source_name: lookup.source_name.clone(),
+            })
+            .or_else(|| source_imported_sage_all_star_lookup(source, lookup_name));
         let implicit_sage_all_lookup =
             is_sage_source_path(&query_path) && dotted_symbol.is_none() && target_is_code;
         let member_resolution = dotted_owner_member.map(|(owner, member)| {
+            if let Some(record) = local_receiver_member_symbol_from_symbols(
+                source,
+                local_symbols,
+                owner,
+                member,
+                &target_range,
+            ) {
+                return MemberResolution {
+                    record: Some(record),
+                    candidates: Vec::new(),
+                    owner_type: None,
+                    confidence: "high",
+                    reason: format!(
+                        "resolved local receiver member `{owner}.{member}` in the enclosing class"
+                    ),
+                    candidate_count: 1,
+                    suppress_global_fallback: true,
+                };
+            }
             self.resolve_member_symbol(
                 source,
                 owner,
                 member,
-                module_hint.as_deref(),
-                target_range.start_line,
+                MemberResolutionContext {
+                    module_hint: module_hint.as_deref(),
+                    query_path: &query_path,
+                    target_range: &target_range,
+                    local_symbols,
+                },
             )
         });
         let mut suppress_global_fallback = member_resolution
@@ -289,6 +459,11 @@ impl WorkspaceIndex {
         let mut resolved = member_resolution
             .as_ref()
             .and_then(|resolution| resolution.record.clone());
+        let mut navigation_candidates = member_resolution
+            .as_ref()
+            .filter(|resolution| resolution.record.is_none())
+            .map(|resolution| resolution.candidates.clone())
+            .unwrap_or_default();
         if resolved.is_none()
             && !suppress_global_fallback
             && dotted_symbol.is_none()
@@ -297,11 +472,11 @@ impl WorkspaceIndex {
                 || sage_all_export_lookup.is_some()
                 || source_import_lookup.is_some())
         {
-            let local_module = module_hint.as_deref().unwrap_or("document");
-            if let Some(local_symbol) = local_shadow_symbol_from_source(
+            if let Some(local_symbol) = local_shadow_symbol_from_symbols(
                 local_module,
                 &query_path,
                 source,
+                local_symbols,
                 lookup_name,
                 &target_range,
             ) {
@@ -355,39 +530,57 @@ impl WorkspaceIndex {
                     .map(|module| resolve_relative_module(&import_lookup.import_module, module))
                     .unwrap_or_else(|| import_lookup.import_module.clone());
                 let mut seen = BTreeSet::new();
-                if let Some(record) = self
-                    .symbol_candidates(&import_lookup.source_name)
-                    .into_iter()
-                    .filter(|candidate| {
-                        import_target_definition_matches(
-                            candidate,
-                            &import_module,
-                            &import_lookup.source_name,
-                        )
-                    })
-                    .min_by_key(symbol_choice_key)
-                    .or_else(|| {
-                        self.resolve_module_symbol_from_roots(
-                            &import_module,
-                            &import_lookup.source_name,
-                            0,
-                            &mut seen,
-                        )
-                    })
-                {
-                    resolution_confidence = Some("high".to_string());
-                    resolution_reason = Some(format!(
-                        "resolved `{lookup_name}` from explicit import target {}",
-                        import_module
-                    ));
-                    resolved = Some(record);
-                } else {
-                    suppress_global_fallback = true;
-                    resolution_confidence = Some("ambiguous".to_string());
-                    resolution_reason = Some(format!(
-                        "`{lookup_name}` is explicitly imported from {} but the target module is not indexed or resolvable",
-                        import_module
-                    ));
+                let mut import_candidates = dedupe_symbol_records(
+                    self.symbol_candidates(&import_lookup.source_name)
+                        .into_iter()
+                        .filter(|candidate| {
+                            import_target_definition_matches(
+                                candidate,
+                                &import_module,
+                                &import_lookup.source_name,
+                            )
+                        })
+                        .collect(),
+                );
+                if import_candidates.is_empty() {
+                    if let Some(record) = self.resolve_module_symbol_from_roots(
+                        &import_module,
+                        &import_lookup.source_name,
+                        0,
+                        &mut seen,
+                    ) {
+                        import_candidates.push(record);
+                    }
+                }
+                import_candidates.sort_by_key(symbol_choice_key);
+                match import_candidates.len() {
+                    1 => {
+                        resolution_confidence = Some("high".to_string());
+                        resolution_reason = Some(format!(
+                            "resolved `{lookup_name}` from explicit import target {}",
+                            import_module
+                        ));
+                        candidate_count = 1;
+                        resolved = import_candidates.pop();
+                    }
+                    0 => {
+                        suppress_global_fallback = true;
+                        resolution_confidence = Some("ambiguous".to_string());
+                        resolution_reason = Some(format!(
+                            "`{lookup_name}` is explicitly imported from {} but the target module is not indexed or resolvable",
+                            import_module
+                        ));
+                    }
+                    count => {
+                        suppress_global_fallback = true;
+                        resolution_confidence = Some("ambiguous".to_string());
+                        resolution_reason = Some(format!(
+                            "`{lookup_name}` has {count} indexed definitions in explicit import target {}",
+                            import_module
+                        ));
+                        candidate_count = count;
+                        navigation_candidates = import_candidates;
+                    }
                 }
             }
         }
@@ -415,11 +608,11 @@ impl WorkspaceIndex {
             && dotted_symbol.is_none()
             && target_is_code
         {
-            let local_module = module_hint.as_deref().unwrap_or("document");
-            if let Some(local_symbol) = local_shadow_symbol_from_source(
+            if let Some(local_symbol) = local_shadow_symbol_from_symbols(
                 local_module,
                 &query_path,
                 source,
+                local_symbols,
                 lookup_name,
                 &target_range,
             ) {
@@ -432,11 +625,40 @@ impl WorkspaceIndex {
             }
         }
         if resolved.is_none() && !suppress_global_fallback {
-            resolved = self
-                .resolve_symbol(lookup_name, module_hint.as_deref())
-                .or_else(|| self.resolve_symbol(symbol, module_hint.as_deref()))
-                .or_else(|| builtin_symbol_record(dotted_symbol.as_deref().unwrap_or(symbol)))
-                .or_else(|| builtin_symbol_record(lookup_name));
+            let mut global_candidates = self.symbol_candidates(lookup_name);
+            if lookup_name != symbol {
+                global_candidates.extend(self.symbol_candidates(symbol));
+            }
+            let global_candidates = dedupe_symbol_records(
+                global_candidates
+                    .into_iter()
+                    .map(|candidate| {
+                        if candidate.kind == SymbolKind::Import {
+                            self.resolve_import_record(&candidate).unwrap_or(candidate)
+                        } else {
+                            candidate
+                        }
+                    })
+                    .collect(),
+            );
+            match global_candidates.len() {
+                0 => {
+                    resolved = builtin_symbol_record(dotted_symbol.as_deref().unwrap_or(symbol))
+                        .or_else(|| builtin_symbol_record(lookup_name));
+                }
+                1 => {
+                    resolved = global_candidates.into_iter().next();
+                }
+                count => {
+                    candidate_count = count;
+                    resolution_confidence = Some("ambiguous".to_string());
+                    resolution_reason = Some(format!(
+                        "`{lookup_name}` has {count} indexed definitions and no reliable binding; explicit selection is required"
+                    ));
+                    navigation_candidates = global_candidates;
+                    navigation_candidates.sort_by_key(symbol_choice_key);
+                }
+            }
         }
         if resolved.is_some() && resolution_confidence.is_none() {
             resolution_confidence = Some("medium".to_string());
@@ -456,28 +678,51 @@ impl WorkspaceIndex {
                 || reason.contains("load/attach target")
                 || reason.contains("resolved Sage ")
         });
-        if !precise_lookup {
+        if features.presentation && !precise_lookup {
             if let Some(record) = &resolved {
                 candidate_count = candidate_count.max(self.symbol_candidates(&record.name).len());
             }
         }
-        let mut documentation = resolved
-            .as_ref()
-            .map(|record| self.documentation_for_resolved_symbol(record));
-        let mut hover = resolved.as_ref().map(|record| QueryHover {
-            markdown: hover_markdown_for_symbol(record, documentation.as_ref()),
-            range: target_range.clone(),
-        });
-        if resolved.is_none() {
-            if let Some(ambiguous_documentation) =
-                member_resolution.as_ref().and_then(|resolution| {
-                    self.ambiguous_member_documentation(
-                        lookup_name,
-                        &resolution.reason,
-                        resolution.candidate_count,
-                    )
+        let definition_candidates: Vec<_> = navigation_candidates
+            .iter()
+            .take(5)
+            .filter_map(|candidate| {
+                Some(QueryDefinitionCandidate {
+                    definition: query_definition_from_record(candidate)?,
+                    confidence: "candidate".to_string(),
+                    reason: resolution_reason.clone().unwrap_or_default(),
+                    signature: candidate.signature.clone(),
+                    summary: candidate
+                        .docstring
+                        .as_deref()
+                        .and_then(documentation_summary),
                 })
-            {
+            })
+            .collect();
+        let mut documentation = if features.presentation {
+            resolved
+                .as_ref()
+                .map(|record| self.documentation_for_resolved_symbol(record))
+        } else {
+            None
+        };
+        let mut hover = if features.presentation {
+            resolved.as_ref().map(|record| QueryHover {
+                markdown: hover_markdown_for_symbol(record, documentation.as_ref()),
+                range: target_range.clone(),
+            })
+        } else {
+            None
+        };
+        if features.presentation && resolved.is_none() {
+            if let Some(ambiguous_documentation) = resolution_reason.as_deref().and_then(|reason| {
+                self.ambiguous_member_documentation(
+                    lookup_name,
+                    reason,
+                    candidate_count,
+                    &navigation_candidates,
+                )
+            }) {
                 hover = Some(QueryHover {
                     markdown: hover_markdown_for_ambiguous_member(&ambiguous_documentation),
                     range: target_range.clone(),
@@ -500,10 +745,15 @@ impl WorkspaceIndex {
             Vec::new()
         };
         let should_collect_references = features.references || features.rename_preview;
+        let has_unique_high_confidence_definition =
+            resolved.is_some() && resolution_confidence.as_deref() == Some("high");
         let read_only_definition = resolved.as_ref().is_some_and(|record| {
             !record.path.as_os_str().is_empty() && !self.is_editable_path(&record.path)
         });
-        let references = if should_collect_references && !read_only_definition {
+        let mut references = if should_collect_references
+            && has_unique_high_confidence_definition
+            && !read_only_definition
+        {
             scope_references_for_resolved_symbol(
                 self.editable_references(lookup_name),
                 resolved.as_ref(),
@@ -512,6 +762,22 @@ impl WorkspaceIndex {
         } else {
             Vec::new()
         };
+        if let Some(parameter) = resolved
+            .as_ref()
+            .filter(|record| is_local_parameter_symbol(record))
+        {
+            let local_module = module_hint.as_deref().unwrap_or("document");
+            references.retain(|reference| {
+                normalize_path(reference.path.clone()) == query_path
+                    && local_parameter_reference_matches(
+                        local_module,
+                        &query_path,
+                        source,
+                        &reference.range,
+                        parameter,
+                    )
+            });
+        }
         let rename_preview = if features.rename_preview {
             rename_to
                 .filter(|new_name| is_valid_identifier(new_name))
@@ -530,36 +796,47 @@ impl WorkspaceIndex {
             Vec::new()
         };
         let signature = if features.signature {
-            target_is_code
+            let ambiguous_member = member_resolution
+                .as_ref()
+                .is_some_and(|resolution| resolution.record.is_none());
+            (!ambiguous_member)
                 .then(|| {
-                    function_call_at_position_with_code_map(
-                        source,
-                        target_range.start_line,
-                        target_range.start_character,
-                        &source_map,
-                    )
-                })
-                .flatten()
-                .and_then(|(name, active_parameter)| {
-                    self.resolve_symbol(&name, module_hint.as_deref())
-                        .or_else(|| builtin_symbol_record(&name))
-                        .and_then(|record| {
-                            record.signature.clone().map(|label| QuerySignature {
-                                label,
-                                active_parameter,
-                                documentation: record.docstring,
+                    target_is_code
+                        .then(|| {
+                            function_call_at_position_with_code_map(
+                                source,
+                                target_range.start_line,
+                                target_range.start_character,
+                                source_map,
+                            )
+                        })
+                        .flatten()
+                        .and_then(|(name, active_parameter)| {
+                            resolved
+                                .as_ref()
+                                .filter(|record| record.name == name)
+                                .cloned()
+                                .or_else(|| self.resolve_symbol(&name, module_hint.as_deref()))
+                                .or_else(|| builtin_symbol_record(&name))
+                                .and_then(|record| {
+                                    record.signature.clone().map(|label| QuerySignature {
+                                        label,
+                                        active_parameter,
+                                        documentation: record.docstring,
+                                    })
+                                })
+                        })
+                        .or_else(|| {
+                            resolved.as_ref().and_then(|record| {
+                                record.signature.clone().map(|label| QuerySignature {
+                                    label,
+                                    active_parameter: 0,
+                                    documentation: record.docstring.clone(),
+                                })
                             })
                         })
                 })
-                .or_else(|| {
-                    resolved.as_ref().and_then(|record| {
-                        record.signature.clone().map(|label| QuerySignature {
-                            label,
-                            active_parameter: 0,
-                            documentation: record.docstring.clone(),
-                        })
-                    })
-                })
+                .flatten()
         } else {
             None
         };
@@ -582,6 +859,7 @@ impl WorkspaceIndex {
             hover,
             documentation,
             definition,
+            definition_candidates,
             completions,
             references,
             rename_preview,
@@ -599,28 +877,29 @@ impl WorkspaceIndex {
         self.files.values().cloned().collect()
     }
 
+    fn module_hint_for_query_path(&self, query_path: &Path) -> Option<String> {
+        self.file_for_path(query_path)
+            .map(|file| file.module)
+            .or_else(|| {
+                self.options
+                    .roots
+                    .iter()
+                    .find(|root| query_path.strip_prefix(root).is_ok())
+                    .map(|root| module_name_from_path(root, query_path))
+            })
+    }
+
     fn ambiguous_member_documentation(
         &self,
         member: &str,
         reason: &str,
         candidate_count: usize,
+        candidates: &[SymbolRecord],
     ) -> Option<DocumentationRecord> {
-        let mut candidates: Vec<_> = self
-            .symbol_candidates(member)
-            .into_iter()
-            .filter(|symbol| symbol.kind != SymbolKind::Import)
-            .filter(|symbol| symbol.signature.is_some() || symbol.docstring.is_some())
-            .collect();
+        let candidates = dedupe_symbol_records(candidates.to_vec());
         if candidates.is_empty() {
             return None;
         }
-        candidates.sort_by_key(symbol_choice_key);
-        candidates.dedup_by(|left, right| {
-            left.name == right.name
-                && left.module == right.module
-                && left.path == right.path
-                && left.range == right.range
-        });
         let sections = candidates
             .iter()
             .take(5)
@@ -641,7 +920,7 @@ impl WorkspaceIndex {
                     body.push(format!("Source: `{}`", candidate.path.display()));
                 }
                 DocumentationSection {
-                    title: candidate.detail.clone(),
+                    title: format!("{} — {}", candidate.detail, candidate.module),
                     body: body.join("\n\n"),
                 }
             })
@@ -652,10 +931,10 @@ impl WorkspaceIndex {
             kind: "AmbiguousMember".to_string(),
             detail: format!("Ambiguous Sage member `{member}`"),
             summary: format!(
-                "Ambiguous Sage member `{member}` has {candidate_count} indexed candidates; no definition jump was returned to avoid a wrong target."
+                "Ambiguous Sage member `{member}` has {candidate_count} ranked candidates; a multiple-definition preview is available when at least two targets remain."
             ),
             docstring: Some(format!(
-                "Reason: {reason}\n\nUse completion or refine the receiver type to choose a specific implementation."
+                "Reason: {reason}\n\nRefine the receiver type to obtain a single definition, reference set, or rename target."
             )),
             uri: None,
             markers: vec![

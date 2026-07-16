@@ -22,6 +22,10 @@ interface ExtensionManifest {
   preview?: boolean;
   qna?: boolean | string;
   extensionKind?: string[];
+  engines?: {
+    vscode?: string;
+  };
+  devDependencies?: Record<string, string>;
   capabilities?: {
     untrustedWorkspaces?: {
       supported?: boolean | "limited";
@@ -131,6 +135,12 @@ test("extension package metadata and ignore rules are release-oriented", () => {
   assert.deepEqual(manifest.extensionKind, ["workspace"]);
   assert.equal(manifest.license, "MIT");
   assert.notEqual(manifest.private, true);
+  assert.equal(manifest.engines?.vscode, "^1.97.0");
+  assert.equal(
+    manifest.devDependencies?.["@types/vscode"],
+    manifest.engines?.vscode?.slice(1),
+    "VS Code API types must stay pinned to the declared minimum runtime version",
+  );
 
   const packagedLicense = fs.readFileSync(path.join(packageRoot, "LICENSE"), "utf-8");
   assert.match(packagedLicense, /MIT License/);
@@ -238,6 +248,12 @@ test("VSIX packaging enforces a reproducible toolchain, modes, and private-path 
   const toolchainCheck = readRepositoryFile("scripts/package-toolchain.mjs");
   assert.match(toolchainCheck, /process\.versions\.node/);
   assert.match(toolchainCheck, /actual !== expected/);
+  assert.match(toolchainCheck, /packageManager/);
+  assert.match(toolchainCheck, /requires npm/);
+
+  const toolchainCommand = readRepositoryFile("scripts/check-package-toolchain.mjs");
+  assert.match(toolchainCommand, /npmCommand/);
+  assert.match(toolchainCommand, /assertPinnedNpmVersion/);
 
   const packager = readRepositoryFile("scripts/package-vsix.mjs");
   assert.match(packager, /assertPinnedNodeVersion\(repositoryRoot\)/);
@@ -404,6 +420,10 @@ test("user commands are grouped, iconed, and exposed through contextual menus", 
 test("extension scopes direct navigation bridges to read-only external Sage sources", () => {
   const extensionSource = fs.readFileSync(path.join(packageRoot, "src", "extension.ts"), "utf8");
   const navigationSource = fs.readFileSync(path.join(packageRoot, "src", "externalSourceNavigation.ts"), "utf8");
+  const languageFeaturesSource = fs.readFileSync(
+    path.join(packageRoot, "src", "externalSourceLanguageFeatures.ts"),
+    "utf8",
+  );
   const clientSource = fs.readFileSync(path.join(packageRoot, "src", "languageClient.ts"), "utf8");
 
   assert.match(
@@ -454,6 +474,54 @@ test("extension scopes direct navigation bridges to read-only external Sage sour
     "the LSP request must use the backing file URI rather than the read-only view URI",
   );
   assert.match(navigationSource, /rewriteExternalDefinitionUris/);
+  for (const provider of [
+    "registerHoverProvider",
+    "registerSignatureHelpProvider",
+    "registerDocumentLinkProvider",
+    "registerCallHierarchyProvider",
+  ]) {
+    assert.match(
+      languageFeaturesSource,
+      new RegExp(`${provider}\\(\\s*selector`),
+      `${provider} should bridge the read-only external source view`,
+    );
+  }
+  assert.match(
+    languageFeaturesSource,
+    /const selector: vscode\.DocumentSelector = \[\{ scheme: SAGE_SOURCE_SCHEME \}\]/,
+    "follow-up language providers must stay scoped to sage-source documents",
+  );
+  assert.doesNotMatch(
+    languageFeaturesSource,
+    /openTextDocument/,
+    "follow-up language requests must not open a hidden backing file document",
+  );
+  assert.match(languageFeaturesSource, /HoverRequest\.method/);
+  assert.match(languageFeaturesSource, /SignatureHelpRequest\.method/);
+  assert.match(languageFeaturesSource, /DocumentLinkRequest\.method/);
+  assert.match(languageFeaturesSource, /CallHierarchyPrepareRequest\.method/);
+  assert.match(languageFeaturesSource, /CallHierarchyIncomingCallsRequest\.method/);
+  assert.match(languageFeaturesSource, /CallHierarchyOutgoingCallsRequest\.method/);
+  assert.match(
+    languageFeaturesSource,
+    /textIsCurrent\(document, sourceUri\)/,
+    "external follow-up requests should reject positions from stale visible text",
+  );
+  assert.match(
+    languageFeaturesSource,
+    /protocolItemWithUri\(converted, backingUri\.toString\(\)\)/,
+    "call hierarchy expansion must restore sage-source items to backing file URIs",
+  );
+  assert.match(
+    languageFeaturesSource,
+    /rewriteCallHierarchyItems/,
+    "call hierarchy results should map external file items back to sage-source",
+  );
+  assert.match(
+    languageFeaturesSource,
+    /link\.target = rewriteExternalSourceUri/,
+    "external document-link targets should keep the read-only URI identity",
+  );
   assert.match(extensionSource, /effectiveSourceRootPaths/);
   assert.match(extensionSource, /source_root_fingerprints/);
   assert.match(
@@ -487,8 +555,8 @@ test("extension activation stays a compact orchestrator with focused feature mod
   );
   assert.match(
     extensionSource,
-    /shouldAutoRestartOnClose: \(\) => !languageClientManagedShutdown && !extensionDeactivating/,
-    "language clients must not auto-restart while extension deactivation is in progress",
+    /client === nextClient[\s\S]*!languageClientManagedShutdown[\s\S]*!extensionDeactivating/,
+    "only the installed language client may auto-restart outside managed shutdown",
   );
   for (const moduleName of [
     "executionCommands.ts",
@@ -497,6 +565,7 @@ test("extension activation stays a compact orchestrator with focused feature mod
     "sourceRootPaths.ts",
     "statusCommands.ts",
     "statusRefreshController.ts",
+    "workspaceScope.ts",
   ]) {
     assert.equal(
       fs.existsSync(path.join(packageRoot, "src", moduleName)),

@@ -209,15 +209,18 @@ const uxScenarios = [
   },
   {
     id: "sage-heavy-python-polynomial-derivative",
-    title: "Sage-heavy Python indexed polynomial method resolution",
+    title: "Sage-heavy Python ambiguous polynomial derivative recommendations",
     file: "10_sage_heavy_python.py",
     line: 109,
     character: 18,
     expects: {
       noDiagnostics: true,
-      definitionPathIncludes: "sage/src/sage/rings/polynomial/multi_polynomial.pyx",
-      ownerType: "PolynomialElement",
-      resolutionConfidence: "high",
+      noDefinition: true,
+      minDefinitionCandidates: 2,
+      definitionCandidatePathIncludes: "sage/src/sage/rings/polynomial/multi_polynomial.pyx",
+      resolutionConfidence: "ambiguous",
+      resolutionReasonIncludes: "explicit selection is required",
+      allowFallbackReason: true,
     },
   },
   {
@@ -248,15 +251,18 @@ const uxScenarios = [
   },
   {
     id: "sage-heavy-python-resultant",
-    title: "Sage-heavy Python polynomial resultant resolution",
+    title: "Sage-heavy Python ambiguous polynomial resultant recommendations",
     file: "10_sage_heavy_python.py",
     line: 105,
     character: 33,
     expects: {
       noDiagnostics: true,
-      definitionPathIncludes: "sage/src/sage/rings/polynomial/multi_polynomial_element.py",
-      ownerType: "PolynomialElement",
-      resolutionConfidence: "high",
+      noDefinition: true,
+      minDefinitionCandidates: 2,
+      definitionCandidatePathIncludes: "sage/src/sage/rings/polynomial/multi_polynomial_element.py",
+      resolutionConfidence: "ambiguous",
+      resolutionReasonIncludes: "explicit selection is required",
+      allowFallbackReason: true,
     },
   },
   {
@@ -589,6 +595,7 @@ function evaluateUxScenario(scenario, inspection, query) {
     query?.documentation?.uri,
   ].filter(Boolean).join("\n");
   const definitionPath = query?.definition?.path ?? "";
+  const definitionCandidates = query?.definitionCandidates ?? [];
   const signatureLabel = query?.signature?.label ?? "";
   const completionLabels = new Set((query?.completions ?? []).map((item) => item.label));
   const grammarScopes = new Set((inspection.grammarMatches ?? []).map((match) => match.scope));
@@ -607,6 +614,33 @@ function evaluateUxScenario(scenario, inspection, query) {
       `definition path includes ${expect.definitionPathIncludes}`,
       normalizePathText(definitionPath).includes(expect.definitionPathIncludes),
       definitionPath || "none",
+    );
+  }
+  if (expect.noDefinition) {
+    pushCheck(
+      checks,
+      "no forced single definition",
+      !query?.definition,
+      definitionPath || "none",
+    );
+  }
+  if (expect.minDefinitionCandidates !== undefined) {
+    pushCheck(
+      checks,
+      `definition candidates >= ${expect.minDefinitionCandidates}`,
+      definitionCandidates.length >= expect.minDefinitionCandidates,
+      definitionCandidates.length,
+    );
+  }
+  if (expect.definitionCandidatePathIncludes) {
+    const candidatePaths = definitionCandidates.map((candidate) => candidate?.definition?.path ?? "");
+    pushCheck(
+      checks,
+      `definition candidates include ${expect.definitionCandidatePathIncludes}`,
+      candidatePaths.some((candidatePath) =>
+        normalizePathText(candidatePath).includes(expect.definitionCandidatePathIncludes)
+      ),
+      candidatePaths.length > 0 ? candidatePaths.join(", ") : "none",
     );
   }
   if (expect.signatureIncludes) {

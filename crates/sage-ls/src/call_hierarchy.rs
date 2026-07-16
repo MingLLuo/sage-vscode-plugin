@@ -6,11 +6,11 @@ use super::{
         is_call_hierarchy_symbol, module_name_for_path, symbol_body_range, symbol_kind,
     },
     text_positions::{
-        byte_offset_to_utf16_character, is_word_byte, lsp_range_for_path, lsp_range_for_text,
-        query_position_from_lsp, utf16_character_to_byte_offset, word_at_position,
+        byte_offset_to_utf16_character, is_word_byte, lsp_range_for_text, query_position_from_lsp,
+        utf16_character_to_byte_offset, word_at_position,
     },
 };
-use sage_index::{parse_source, QueryDefinition, SymbolRecord};
+use sage_index::{parse_source, QueryDefinition, QueryResult, SymbolRecord, WorkspaceIndex};
 use std::path::Path;
 use tower_lsp::lsp_types::{
     CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall, FoldingRange,
@@ -59,23 +59,7 @@ pub(super) fn call_hierarchy_item_from_definition(
     }
 }
 
-pub(super) fn call_hierarchy_item_from_symbol_record(
-    symbol: &SymbolRecord,
-) -> Option<CallHierarchyItem> {
-    let uri = Url::from_file_path(&symbol.path).ok()?;
-    let range = lsp_range_for_path(&symbol.path, &symbol.range);
-    Some(CallHierarchyItem {
-        name: symbol.name.clone(),
-        kind: symbol_kind(&symbol.kind),
-        tags: None,
-        detail: symbol_detail(symbol),
-        uri,
-        range,
-        selection_range: range,
-        data: None,
-    })
-}
-
+#[cfg(test)]
 pub(super) fn call_hierarchy_item_for_live_index_symbol(
     uri: &Url,
     path: &Path,
@@ -271,6 +255,42 @@ pub(super) fn call_ranges_in_range(text: &str, range: Range) -> Vec<(String, Ran
     calls
 }
 
+pub(super) struct ResolvedOutgoingCall {
+    pub(super) definition: QueryDefinition,
+    pub(super) from_range: Range,
+}
+
+pub(super) fn high_confidence_call_hierarchy_definition(
+    query: &QueryResult,
+) -> Option<&QueryDefinition> {
+    (query.resolution_confidence.as_deref() == Some("high"))
+        .then_some(query.definition.as_ref())
+        .flatten()
+}
+
+pub(super) fn resolve_outgoing_calls(
+    index: &WorkspaceIndex,
+    path: &Path,
+    text: &str,
+    range: Range,
+    caller_name: &str,
+) -> Vec<ResolvedOutgoingCall> {
+    call_ranges_in_range(text, range)
+        .into_iter()
+        .filter(|(name, _)| name != caller_name)
+        .filter_map(|(_, from_range)| {
+            let position = query_position_from_lsp(text, from_range.start)?;
+            let query = index.query_source_at_navigation(path, text, position);
+            high_confidence_call_hierarchy_definition(&query)
+                .cloned()
+                .map(|definition| ResolvedOutgoingCall {
+                    definition,
+                    from_range,
+                })
+        })
+        .collect()
+}
+
 fn call_ranges_in_line(
     line: &str,
     line_number: u32,
@@ -327,7 +347,6 @@ fn call_ranges_in_line(
                 && bytes[cursor] == b'('
                 && !is_call_hierarchy_keyword(name)
                 && !is_declaration_identifier(line, start)
-                && previous_non_whitespace_byte(line, start) != Some(b'.')
             {
                 calls.push((
                     name.to_string(),
@@ -353,15 +372,6 @@ fn call_ranges_in_line(
 
 pub(super) fn is_identifier_start(byte: u8) -> bool {
     byte == b'_' || byte.is_ascii_alphabetic()
-}
-
-fn previous_non_whitespace_byte(line: &str, start: usize) -> Option<u8> {
-    line.as_bytes()
-        .get(..start)?
-        .iter()
-        .rev()
-        .find(|byte| !byte.is_ascii_whitespace())
-        .copied()
 }
 
 fn is_declaration_identifier(line: &str, start: usize) -> bool {
@@ -421,7 +431,10 @@ fn symbol_detail(symbol: &SymbolRecord) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sage_index::IndexOptions;
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn indexed_call_target_is_reparsed_from_live_alias_text() {
@@ -442,5 +455,114 @@ mod tests {
         assert_eq!(item.uri, uri);
         assert_eq!(item.selection_range.start, Position::new(2, 4));
         assert_eq!(item.range.end, Position::new(3, 16));
+    }
+
+    #[test]
+    fn outgoing_calls_follow_explicit_imports_instead_of_global_homonyms() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sage-ls-outgoing-import-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let intended = root.join("intended.py");
+        let decoy = root.join("aaa_decoy.py");
+        let consumer = root.join("consumer.py");
+        fs::write(&intended, "def target():\n    return 'intended'\n").unwrap();
+        fs::write(&decoy, "def target():\n    return 'decoy'\n").unwrap();
+        let source = "from intended import target\n\ndef caller():\n    return target()\n";
+        fs::write(&consumer, source).unwrap();
+
+        let mut index = WorkspaceIndex::new(IndexOptions {
+            roots: vec![root.clone()],
+            editable_roots: vec![root.clone()],
+            exclude_globs: Vec::new(),
+            cache_dir: root.join(".cache"),
+            enable_pyx: true,
+        });
+        index.rebuild().unwrap();
+        let calls = resolve_outgoing_calls(
+            &index,
+            &consumer,
+            source,
+            Range::new(Position::new(2, 0), Position::new(3, 19)),
+            "caller",
+        );
+
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].definition.path, intended.canonicalize().unwrap());
+        assert_eq!(calls[0].definition.name, "target");
+        assert_eq!(calls[0].from_range.start, Position::new(3, 11));
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn call_hierarchy_definitions_require_high_confidence() {
+        let definition = QueryDefinition {
+            name: "target".to_string(),
+            path: PathBuf::from("/workspace/target.py"),
+            range: sage_index::SourceRange::default(),
+            detail: "Function target".to_string(),
+            module: "target".to_string(),
+        };
+        let mut query = QueryResult {
+            definition: Some(definition.clone()),
+            resolution_confidence: Some("medium".to_string()),
+            ..QueryResult::default()
+        };
+        assert!(high_confidence_call_hierarchy_definition(&query).is_none());
+
+        query.resolution_confidence = Some("ambiguous".to_string());
+        assert!(high_confidence_call_hierarchy_definition(&query).is_none());
+
+        query.resolution_confidence = Some("high".to_string());
+        assert_eq!(
+            high_confidence_call_hierarchy_definition(&query).map(|value| &value.name),
+            Some(&definition.name)
+        );
+    }
+
+    #[test]
+    fn outgoing_calls_ignore_unique_but_unbound_global_matches() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sage-ls-outgoing-unbound-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let target = root.join("provider.py");
+        let consumer = root.join("consumer.py");
+        fs::write(&target, "def external_target():\n    return 1\n").unwrap();
+        let source = "def caller():\n    return external_target()\n";
+        fs::write(&consumer, source).unwrap();
+
+        let mut index = WorkspaceIndex::new(IndexOptions {
+            roots: vec![root.clone()],
+            editable_roots: vec![root.clone()],
+            exclude_globs: Vec::new(),
+            cache_dir: root.join(".cache"),
+            enable_pyx: true,
+        });
+        index.rebuild().unwrap();
+        let query = index.query_source_at_navigation(
+            &consumer,
+            source,
+            sage_index::QueryPosition {
+                line: 1,
+                character: 11,
+            },
+        );
+        assert_eq!(query.resolution_confidence.as_deref(), Some("medium"));
+        assert!(query.definition.is_some());
+
+        let calls = resolve_outgoing_calls(
+            &index,
+            &consumer,
+            source,
+            Range::new(Position::new(0, 0), Position::new(1, 28)),
+            "caller",
+        );
+        assert!(calls.is_empty());
+        fs::remove_dir_all(root).ok();
     }
 }

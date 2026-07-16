@@ -20,6 +20,77 @@ impl WorkspaceIndex {
         &self.options
     }
 
+    pub fn mark_paths_pending_refresh(&self, changed: &[PathBuf], deleted: &[PathBuf]) {
+        let paths = normalize_paths(changed.iter().chain(deleted).cloned().collect());
+        let mut pending = self
+            .pending_refresh_paths
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for path in paths
+            .into_iter()
+            .filter(|path| path_is_under_roots(path, &self.options.roots))
+        {
+            let version = pending.entry(path).or_default();
+            *version = version.wrapping_add(1).max(1);
+        }
+    }
+
+    pub(super) fn pending_refresh_path_snapshot(&self) -> Vec<PathBuf> {
+        self.pending_refresh_paths
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .keys()
+            .cloned()
+            .collect()
+    }
+
+    fn pending_refresh_versions_for(
+        &self,
+        changed: &[PathBuf],
+        deleted: &[PathBuf],
+    ) -> BTreeMap<PathBuf, u64> {
+        let paths: BTreeSet<_> = changed.iter().chain(deleted).cloned().collect();
+        self.pending_refresh_paths
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .iter()
+            .filter(|(path, _)| paths.contains(*path))
+            .map(|(path, version)| (path.clone(), *version))
+            .collect()
+    }
+
+    fn clear_pending_refresh_versions(&self, refreshed: &BTreeMap<PathBuf, u64>) {
+        let mut pending = self
+            .pending_refresh_paths
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        for (path, refreshed_version) in refreshed {
+            if pending.get(path) == Some(refreshed_version) {
+                pending.remove(path);
+            }
+        }
+    }
+
+    fn complete_pending_refresh(&mut self, refreshed: BTreeMap<PathBuf, u64>) {
+        if self.defer_pending_refresh_clear {
+            self.completed_pending_refresh_versions = refreshed;
+        } else {
+            self.clear_pending_refresh_versions(&refreshed);
+        }
+    }
+
+    pub fn finalize_pending_refresh_install(&mut self, current: &Self) {
+        let pending = current
+            .pending_refresh_paths
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        self.pending_refresh_paths = Arc::new(Mutex::new(pending));
+        let completed = std::mem::take(&mut self.completed_pending_refresh_versions);
+        self.clear_pending_refresh_versions(&completed);
+        self.defer_pending_refresh_clear = false;
+    }
+
     pub fn ensure_generation_after(&mut self, previous_generation: u64) {
         self.generation = self.generation.max(previous_generation.saturating_add(1));
     }
@@ -50,6 +121,14 @@ impl WorkspaceIndex {
                 .map(|cache| cache.clone())
                 .unwrap_or_default(),
         ));
+        clone.pending_refresh_paths = Arc::new(Mutex::new(
+            self.pending_refresh_paths
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .clone(),
+        ));
+        clone.completed_pending_refresh_versions.clear();
+        clone.defer_pending_refresh_clear = true;
         clone
     }
 
@@ -320,8 +399,12 @@ impl WorkspaceIndex {
     ) -> Result<IndexStatus> {
         let started = Instant::now();
         self.reset_operation_timings("refresh");
+        self.completed_pending_refresh_versions.clear();
         let mut changed_files = Vec::new();
         let mut dirty_lookup_names = BTreeSet::new();
+        let changed = normalize_existing_paths(changed.to_vec());
+        let deleted = normalize_paths(deleted.to_vec());
+        let mut pending_refresh_versions = self.pending_refresh_versions_for(&changed, &deleted);
         let cache_backed =
             self.cached_file_count > 0 || self.cached_symbol_count > 0 || self.cached_doc_count > 0;
         let mut lookup_cache_read_failed = false;
@@ -333,10 +416,10 @@ impl WorkspaceIndex {
                     self.cached_doc_count,
                 ))
         {
-            return self.rebuild();
+            let status = self.rebuild()?;
+            self.complete_pending_refresh(pending_refresh_versions);
+            return Ok(status);
         }
-        let changed = normalize_existing_paths(changed.to_vec());
-        let deleted = normalize_paths(deleted.to_vec());
         let deleted_set: BTreeSet<_> = deleted.iter().cloned().collect();
         if cache_backed {
             let affected_paths: BTreeSet<_> = changed.iter().chain(&deleted).cloned().collect();
@@ -346,7 +429,9 @@ impl WorkspaceIndex {
             }
         }
         if lookup_cache_read_failed {
-            return self.rebuild();
+            let status = self.rebuild()?;
+            self.complete_pending_refresh(pending_refresh_versions);
+            return Ok(status);
         }
         for path in &deleted {
             if let Some(file) = self.files.remove(path) {
@@ -377,6 +462,12 @@ impl WorkspaceIndex {
                 }
             }
         }
+        let successfully_refreshed_paths: BTreeSet<_> = changed_files
+            .iter()
+            .map(|file| file.path.clone())
+            .chain(deleted.iter().cloned())
+            .collect();
+        pending_refresh_versions.retain(|path, _| successfully_refreshed_paths.contains(path));
         let refresh_materialized =
             paths_need_materialized_cache_refresh(&changed_files, &deleted, &self.options.roots);
         self.rebuild_symbol_map();
@@ -414,6 +505,9 @@ impl WorkspaceIndex {
                 self.cached_symbol_count = symbol_count;
                 self.cached_doc_count = doc_count;
             }
+        }
+        if persisted {
+            self.complete_pending_refresh(pending_refresh_versions);
         }
         self.cached_root_fingerprint_mismatches.clear();
         let hot_started = Instant::now();
@@ -560,8 +654,9 @@ impl WorkspaceIndex {
         let tx = connection.transaction()?;
         delete_roots_from_db(&tx, &self.options.roots)?;
         {
-            let mut file_statement =
-                tx.prepare("insert into files(path, module, fingerprint) values(?1, ?2, ?3)")?;
+            let mut file_statement = tx.prepare(
+                "insert into files(path, module, fingerprint, identifier_filter) values(?1, ?2, ?3, ?4)",
+            )?;
             let mut symbol_statement = tx.prepare(
                 "insert into symbols(name, kind, module, path, start_line, start_character, end_line, end_character, detail, import_from, signature) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             )?;

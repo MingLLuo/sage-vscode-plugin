@@ -57,6 +57,7 @@ pub fn parse_source(module: &str, path: &Path, source: &str) -> IndexedFile {
         path: path.to_path_buf(),
         symbols,
         module_docstring,
+        identifier_filter: identifier_filter_for_source(source),
     }
 }
 
@@ -106,18 +107,19 @@ pub(super) fn scope_references_for_resolved_symbol(
     diagnostics::scope_references_for_resolved_symbol(references, resolved, query_path)
 }
 
-pub(super) fn source_explicit_import_lookup(
+pub(super) fn source_imported_sage_all_star_lookup(
     source: &str,
     binding_name: &str,
 ) -> Option<SourceImportLookup> {
-    source_imports::source_explicit_import_lookup(source, binding_name)
+    source_imports::source_imported_sage_all_star_lookup(source, binding_name)
 }
 
-pub(super) fn source_imported_sage_all_lookup(
+pub(super) fn source_import_from_at_range(
     source: &str,
     binding_name: &str,
-) -> Option<SourceImportLookup> {
-    source_imports::source_imported_sage_all_lookup(source, binding_name)
+    range: &SourceRange,
+) -> Option<String> {
+    source_imports::source_import_from_at_range(source, binding_name, range)
 }
 
 pub(super) fn is_sage_source_path(path: &Path) -> bool {

@@ -19,6 +19,32 @@ const ARCHIVE_TIMESTAMP = archiveTimestampDate();
 const ZIP_METHOD_STORE = 0;
 const ZIP_METHOD_DEFLATE = 8;
 const MAX_VSIX_BYTES = 6 * 1024 * 1024;
+const EXTENSION_PACKAGE_FILES = new Set([
+  "CHANGELOG.md",
+  "LICENSE",
+  "README.md",
+  "package.json",
+  "resources/bin/README.md",
+]);
+const EXTENSION_PACKAGE_PATTERNS = [
+  /^out\/src\/[^/]+\.js$/,
+  /^resources\/bin\/darwin-(?:arm64|x64)\/(?:sage-ls|sage-ls\.meta\.json|sage-ls\.sha256)$/,
+  /^resources\/branding\/[^/]+\.(?:png|svg)$/,
+  /^resources\/generated\/syntax\/language-configuration\.json$/,
+  /^resources\/generated\/syntax\/(?:snippets|syntaxes)\/[^/]+\.json$/,
+  /^resources\/walkthrough\/[^/]+\.md$/,
+];
+const DEPENDENCY_RUNTIME_EXTENSIONS = new Set([
+  ".cjs",
+  ".js",
+  ".json",
+  ".mjs",
+  ".node",
+  ".wasm",
+]);
+const DEPENDENCY_RUNTIME_HELPERS = new Set([
+  "lib/node/terminateProcess.sh",
+]);
 
 fs.mkdirSync(outDir, { recursive: true });
 
@@ -91,8 +117,19 @@ function argumentValue(name) {
 function collectExtensionFiles(root) {
   const files = [];
   walk(root, "", (absolutePath, relativePath) => {
+    if (relativePath !== ".vscodeignore" && hasHiddenPathSegment(relativePath)) {
+      throw new Error(
+        `Refusing to package unknown hidden extension file: ${relativePath}. `
+        + "Add an explicit runtime allowlist entry only after reviewing its contents.",
+      );
+    }
     if (isIgnoredExtensionFile(relativePath)) {
       return;
+    }
+    if (!isAllowedExtensionFile(relativePath)) {
+      throw new Error(
+        `Refusing to package extension file outside the runtime allowlist: ${relativePath}`,
+      );
     }
     files.push({ absolutePath, relativePath });
   });
@@ -105,11 +142,7 @@ function collectDependencyFiles(root) {
   }
   const files = [];
   walk(root, "", (absolutePath, relativePath) => {
-    if (
-      relativePath === ".package-lock.json"
-      || relativePath.startsWith(".bin/")
-      || relativePath.endsWith(".map")
-    ) {
+    if (!isAllowedDependencyFile(relativePath)) {
       return;
     }
     files.push({ absolutePath, relativePath });
@@ -131,7 +164,8 @@ function walk(root, prefix, onFile) {
 }
 
 function isIgnoredExtensionFile(relativePath) {
-  return relativePath === "tsconfig.json"
+  return relativePath === ".vscodeignore"
+    || relativePath === "tsconfig.json"
     || relativePath.endsWith(".tsbuildinfo")
     || relativePath.endsWith(".map")
     || relativePath.startsWith("src/")
@@ -140,6 +174,46 @@ function isIgnoredExtensionFile(relativePath) {
     || relativePath.startsWith("out/test/")
     || relativePath.startsWith("out/test-host/")
     || relativePath.startsWith("node_modules/");
+}
+
+function isAllowedExtensionFile(relativePath) {
+  return EXTENSION_PACKAGE_FILES.has(relativePath)
+    || EXTENSION_PACKAGE_PATTERNS.some((pattern) => pattern.test(relativePath));
+}
+
+function isAllowedDependencyFile(relativePath) {
+  if (isDependencyReleaseResidue(relativePath)) {
+    return false;
+  }
+  if (relativePath === "package.json" || DEPENDENCY_RUNTIME_HELPERS.has(relativePath)) {
+    return true;
+  }
+  const baseName = path.posix.basename(relativePath);
+  if (/^(?:copying|licen[cs]e|notice|third[-_]?party[-_]?notices?)(?:[._-].*)?$/i.test(baseName)) {
+    return true;
+  }
+  return DEPENDENCY_RUNTIME_EXTENSIONS.has(path.posix.extname(relativePath).toLowerCase());
+}
+
+function isDependencyReleaseResidue(relativePath) {
+  const segments = relativePath.split("/");
+  const baseName = segments.at(-1) ?? "";
+  return relativePath === ".package-lock.json"
+    || relativePath.startsWith(".bin/")
+    || segments.some((segment) => [
+      ".cache",
+      ".github",
+      ".nyc_output",
+      ".tap",
+      "coverage",
+      "processinfo",
+    ].includes(segment.toLowerCase()))
+    || /^(?:advisory[-_])?cve[-_]/i.test(baseName)
+    || baseName.endsWith(".map");
+}
+
+function hasHiddenPathSegment(relativePath) {
+  return relativePath.split("/").some((segment) => segment.startsWith("."));
 }
 
 function productionDependencyClosure(extensionManifest) {
@@ -164,13 +238,17 @@ function productionDependencyClosure(extensionManifest) {
 }
 
 function archiveMode(entryPath) {
-  return isPackagedSageBinary(entryPath)
+  return isPackagedSageBinary(entryPath) || isExecutableDependencyHelper(entryPath)
     ? 0o100755
     : 0o100644;
 }
 
 function isPackagedSageBinary(entryPath) {
   return /^extension\/resources\/bin\/[^/]+\/sage-ls$/.test(entryPath);
+}
+
+function isExecutableDependencyHelper(entryPath) {
+  return entryPath === "extension/node_modules/vscode-languageclient/lib/node/terminateProcess.sh";
 }
 
 function assertNoBuildMachinePaths(binary, entryPath) {

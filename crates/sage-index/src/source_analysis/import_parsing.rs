@@ -309,7 +309,11 @@ pub(super) fn capture_multiline_import_names(
         let Some(binding) = parse_imported_binding(entry) else {
             continue;
         };
-        if let Some(relative) = capture.original_line.find(&binding.binding) {
+        if let Some(relative) = import_binding_offset(
+            capture.original_line,
+            &binding.binding,
+            binding.binding != binding.source_name,
+        ) {
             push_import_symbol(
                 symbols,
                 module,
@@ -323,7 +327,56 @@ pub(super) fn capture_multiline_import_names(
     }
 }
 
-pub(super) fn parse_plain_import(line: &str) -> Option<Vec<(String, String)>> {
+pub(super) fn import_binding_offset(
+    line: &str,
+    binding: &str,
+    explicitly_aliased: bool,
+) -> Option<usize> {
+    let code = line.split('#').next().unwrap_or(line);
+    let tokens = import_identifier_tokens(code);
+    let import_token = tokens
+        .iter()
+        .position(|(token, _)| matches!(*token, "import" | "cimport"));
+    tokens
+        .iter()
+        .enumerate()
+        .find(|(index, (token, _))| {
+            if *token != binding {
+                return false;
+            }
+            let preceded_by_as = index
+                .checked_sub(1)
+                .and_then(|previous| tokens.get(previous))
+                .is_some_and(|(previous, _)| *previous == "as");
+            if explicitly_aliased {
+                preceded_by_as
+            } else {
+                !preceded_by_as && import_token.is_none_or(|import| *index > import)
+            }
+        })
+        .map(|(_, (_, start))| *start)
+}
+
+fn import_identifier_tokens(line: &str) -> Vec<(&str, usize)> {
+    let bytes = line.as_bytes();
+    let mut tokens = Vec::new();
+    let mut index = 0usize;
+    while index < bytes.len() {
+        if bytes[index] != b'_' && !bytes[index].is_ascii_alphabetic() {
+            index += 1;
+            continue;
+        }
+        let start = index;
+        index += 1;
+        while index < bytes.len() && is_word_byte(bytes[index]) {
+            index += 1;
+        }
+        tokens.push((&line[start..index], start));
+    }
+    tokens
+}
+
+pub(super) fn parse_plain_import(line: &str) -> Option<Vec<(String, String, bool)>> {
     let rest = line
         .strip_prefix("import ")
         .or_else(|| line.strip_prefix("cimport "))?;
@@ -331,13 +384,15 @@ pub(super) fn parse_plain_import(line: &str) -> Option<Vec<(String, String)>> {
         rest.split(',')
             .filter_map(|entry| {
                 let module = entry.split_whitespace().next()?.to_string();
-                let binding = entry
+                let explicit_alias = entry
                     .split_whitespace()
                     .collect::<Vec<_>>()
                     .windows(2)
-                    .find_map(|window| (window[0] == "as").then(|| window[1].to_string()))
+                    .find_map(|window| (window[0] == "as").then(|| window[1].to_string()));
+                let explicitly_aliased = explicit_alias.is_some();
+                let binding = explicit_alias
                     .unwrap_or_else(|| module.split('.').next().unwrap_or(&module).to_string());
-                is_valid_identifier(&binding).then_some((binding, module))
+                is_valid_identifier(&binding).then_some((binding, module, explicitly_aliased))
             })
             .collect(),
     )

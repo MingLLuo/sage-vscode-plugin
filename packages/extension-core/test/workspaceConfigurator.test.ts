@@ -114,6 +114,50 @@ test("buildWorkspaceConfigurationUpdates preserves existing extra paths", () => 
   );
 });
 
+test("buildWorkspaceConfigurationUpdates merges existing Python and Ruff settings", () => {
+  const profile = WORKSPACE_CONFIGURATION_PROFILES.find((entry) => entry.id === "research");
+  assert.ok(profile);
+
+  const updates = buildWorkspaceConfigurationUpdates({
+    workspaceFolders: ["/workspace/project"],
+    discoveredSourceRoots: ["/workspace/project/src", "/opt/sage/src"],
+    configuredPythonExtraPaths: ["python-stubs"],
+    configuredPythonDiagnosticSeverityOverrides: {
+      reportUnusedImport: "warning",
+      reportMissingImports: "error",
+    },
+    configuredPythonExclude: ["generated"],
+    configuredPythonIgnore: ["legacy"],
+    configuredRuffExclude: ["dist"],
+    profile,
+  });
+
+  assert.deepEqual(
+    updates.find((update) => update.namespace === "python" && update.section === "analysis.extraPaths")?.value,
+    ["src", "python-stubs"],
+  );
+  assert.deepEqual(
+    updates.find((update) => update.namespace === "python" && update.section === "analysis.diagnosticSeverityOverrides")?.value,
+    {
+      reportUnusedImport: "warning",
+      reportMissingImports: "none",
+      reportMissingModuleSource: "none",
+    },
+  );
+  assert.deepEqual(
+    updates.find((update) => update.namespace === "python" && update.section === "analysis.exclude")?.value,
+    ["generated", "/opt/sage/src"],
+  );
+  assert.deepEqual(
+    updates.find((update) => update.namespace === "python" && update.section === "analysis.ignore")?.value,
+    ["legacy", "/opt/sage/src"],
+  );
+  assert.deepEqual(
+    updates.find((update) => update.namespace === "ruff" && update.section === "exclude")?.value,
+    ["dist", "/opt/sage/src"],
+  );
+});
+
 test("buildWorkspaceConfigurationUpdates keeps external Sage roots out of Pylance paths", () => {
   const profile = WORKSPACE_CONFIGURATION_PROFILES.find((entry) => entry.id === "research");
   assert.ok(profile);

@@ -14,6 +14,7 @@ use tree_sitter::Parser;
 mod cache_metadata;
 mod cache_persistence;
 mod cache_queries;
+mod identifier_filter;
 mod lookup_state;
 mod materialized_cache;
 mod model;
@@ -30,18 +31,22 @@ mod workspace_queries;
 use cache_metadata::*;
 use cache_persistence::*;
 use cache_queries::*;
+use identifier_filter::*;
 use materialized_cache::*;
 pub use model::*;
 use query_support::*;
-pub use query_support::{function_call_at_position, sage_prewarm_modules_for_source};
+pub use query_support::{
+    function_call_at_position, local_import_alias_symbol_from_source,
+    local_import_alias_symbol_from_symbols, sage_prewarm_modules_for_source,
+};
 use sage_specs::{
     SAGE_EXPORT_MAP, SAGE_METHOD_ALIAS_SPECS, SAGE_METHOD_SPECS, SAGE_OWNER_METHOD_MODULES,
 };
 use source_analysis::{
     dedupe_reference_records, diagnostics_for_source, is_sage_source_path, line_offsets,
     reference_spans_in_source, sage_load_attach_paths_before_line,
-    scope_references_for_resolved_symbol, source_explicit_import_lookup,
-    source_imported_sage_all_lookup,
+    scope_references_for_resolved_symbol, source_import_from_at_range,
+    source_imported_sage_all_star_lookup, SourceImportLookup,
 };
 use source_paths::*;
 use symbol_support::*;
@@ -52,7 +57,7 @@ pub use source_analysis::{
     preprocess_sage_source, references_in_source, semantic_spans,
 };
 
-const CACHE_FORMAT_VERSION: &str = "sage-index-v25-canonical-method-priority";
+const CACHE_FORMAT_VERSION: &str = "sage-index-v28-compatible-identifier-filter";
 const MAX_IMPORT_RESOLUTION_DEPTH: usize = 8;
 const MAX_DYNAMIC_HOT_EXPORT_NAMES: usize = 256;
 const SAGE_STAR_IMPORT_SENTINEL: &str = "__sage_star_import__";

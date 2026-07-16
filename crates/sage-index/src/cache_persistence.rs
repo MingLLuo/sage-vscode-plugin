@@ -7,8 +7,9 @@ pub(super) fn persist_file(
 ) -> Result<()> {
     let path = file.path.display().to_string();
     delete_path_from_db(connection, &path)?;
-    let mut file_statement =
-        connection.prepare("insert into files(path, module, fingerprint) values(?1, ?2, ?3)")?;
+    let mut file_statement = connection.prepare(
+        "insert into files(path, module, fingerprint, identifier_filter) values(?1, ?2, ?3, ?4)",
+    )?;
     let mut symbol_statement = connection.prepare(
         "insert into symbols(name, kind, module, path, start_line, start_character, end_line, end_character, detail, import_from, signature) values(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
     )?;
@@ -37,7 +38,12 @@ pub(super) fn insert_file_rows(
 ) -> Result<()> {
     let path = file.path.display().to_string();
     let fingerprint = file_fingerprint(&file.path)?;
-    file_statement.execute(params![path.as_str(), file.module.as_str(), fingerprint])?;
+    file_statement.execute(params![
+        path.as_str(),
+        file.module.as_str(),
+        fingerprint,
+        file.identifier_filter.as_slice(),
+    ])?;
     if let Some(docstring) = &file.module_docstring {
         doc_statement.execute(params![
             file.module.as_str(),
@@ -235,7 +241,8 @@ pub(super) fn create_schema(connection: &Connection) -> Result<()> {
         create table if not exists files(
           path text primary key,
           module text not null,
-          fingerprint text not null
+          fingerprint text not null,
+          identifier_filter blob not null default X''
         );
         create table if not exists symbols(
           name text not null,
@@ -328,6 +335,12 @@ pub(super) fn create_schema(connection: &Connection) -> Result<()> {
     create_lookup_indexes(connection)?;
     ensure_column(connection, "symbols", "import_from", "text")?;
     ensure_column(connection, "symbols", "signature", "text")?;
+    ensure_column(
+        connection,
+        "files",
+        "identifier_filter",
+        "blob not null default X''",
+    )?;
     ensure_column(
         connection,
         "sage_method_cache",

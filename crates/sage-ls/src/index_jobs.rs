@@ -113,7 +113,7 @@ impl Backend {
                 return;
             }
             let result = match result {
-                Ok((rebuilt, status)) => {
+                Ok((mut rebuilt, status)) => {
                     let mut current = index.write().await;
                     if index_job_result_is_current(
                         index_job_generation.load(Ordering::Acquire),
@@ -121,6 +121,7 @@ impl Backend {
                         current.status().generation,
                         initial_generation,
                     ) {
+                        rebuilt.finalize_pending_refresh_install(&current);
                         *current = rebuilt;
                         Ok((status, true))
                     } else {
@@ -233,7 +234,7 @@ impl Backend {
                 return;
             }
             let result = match result {
-                Ok((reconciled, status)) => {
+                Ok((mut reconciled, status)) => {
                     let mut current = index.write().await;
                     if index_job_result_is_current(
                         index_job_generation.load(Ordering::Acquire),
@@ -241,6 +242,7 @@ impl Backend {
                         current.status().generation,
                         initial_generation,
                     ) {
+                        reconciled.finalize_pending_refresh_install(&current);
                         *current = reconciled;
                         Ok((status, true))
                     } else {
@@ -290,6 +292,10 @@ impl Backend {
     }
 
     pub(super) async fn refresh_paths(&self, changed: Vec<PathBuf>, deleted: Vec<PathBuf>) {
+        {
+            let index = self.index.read().await;
+            index.mark_paths_pending_refresh(&changed, &deleted);
+        }
         let work_guard = self.index_work_gate.clone().lock_owned().await;
         if self.shutting_down.load(Ordering::Acquire) {
             return;
@@ -331,9 +337,10 @@ impl Backend {
             return;
         }
         let result = match result {
-            Ok((refreshed, status)) => {
+            Ok((mut refreshed, status)) => {
                 let mut current = self.index.write().await;
                 if current.status().generation == initial_generation {
+                    refreshed.finalize_pending_refresh_install(&current);
                     *current = refreshed;
                     Ok((status, true))
                 } else {
@@ -376,9 +383,15 @@ impl Backend {
     }
 
     pub(super) async fn index_status_payload(&self) -> Value {
+        let analysis_mode = *self.analysis_mode.read().await;
         let mut payload =
             serde_json::to_value(self.index.read().await.status()).unwrap_or_else(|_| json!({}));
         if let Some(object) = payload.as_object_mut() {
+            object.insert("analysis_mode".to_string(), json!(analysis_mode.as_str()));
+            object.insert(
+                "workspace_symbol_limit".to_string(),
+                json!(analysis_mode.workspace_symbol_limit()),
+            );
             object.insert(
                 "pending_jobs".to_string(),
                 json!(*self.pending_jobs.read().await),

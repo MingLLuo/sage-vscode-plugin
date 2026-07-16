@@ -10,16 +10,21 @@ import {
 } from "./environmentPresentation";
 import type { OutputLogger } from "./extensionLogger";
 import { waitForIndexRebuild } from "./indexRebuild";
-import { executeSageCommand, RUST_LSP_COMMANDS } from "./languageClient";
+import {
+  executeSageCommandWithTimeout,
+  RUST_LSP_COMMANDS,
+} from "./languageClient";
 import type { SageSettings } from "./settingsModel";
 import { formatDocsStatusReport, formatIndexStatusReport } from "./statusReports";
 import { buildSupportBundle } from "./supportBundle";
 import type { WorkspaceRuntimeState } from "./workspaceTrust";
 
+const USER_STATUS_REQUEST_TIMEOUT_MS = 10_000;
+
 export interface StatusCommandDependencies {
   context: vscode.ExtensionContext;
   outputChannel: vscode.OutputChannel;
-  logger: Pick<OutputLogger, "info">;
+  logger: Pick<OutputLogger, "info" | "warn">;
   ensureLanguageClientReady(action: string): Promise<LanguageClient | undefined>;
   refreshLanguageServerStatus(): Promise<void>;
   activeEditorSettings(): SageSettings;
@@ -38,12 +43,32 @@ export interface StatusCommandDependencies {
 export function registerStatusCommands(
   dependencies: StatusCommandDependencies,
 ): vscode.Disposable[] {
+  const requestStatus = <T>(
+    activeClient: LanguageClient,
+    command: string,
+    label: string,
+  ): Promise<T | null> => executeSageCommandWithTimeout<T>(
+    activeClient,
+    command,
+    [],
+    { timeoutMs: USER_STATUS_REQUEST_TIMEOUT_MS, label },
+  );
   const showStatusReport = (title: string, report: string, notification: string): void => {
     dependencies.outputChannel.appendLine(`## ${title}`);
     dependencies.outputChannel.appendLine(report);
     dependencies.outputChannel.appendLine("");
     dependencies.outputChannel.show(true);
     void vscode.window.showInformationMessage(notification);
+  };
+  const reportRequestFailure = async (action: string, error: unknown): Promise<void> => {
+    dependencies.logger.warn("status", `${action} failed`, { error: String(error) });
+    const selectedAction = await vscode.window.showErrorMessage(
+      `${action} did not complete: ${String(error)}`,
+      "Restart Language Server",
+    );
+    if (selectedAction === "Restart Language Server") {
+      await vscode.commands.executeCommand("sage.restartLanguageServer");
+    }
   };
 
   return [
@@ -59,7 +84,17 @@ export function registerStatusCommands(
       if (!activeClient) {
         return;
       }
-      const status = await executeSageCommand<IndexStatusSummary>(activeClient, RUST_LSP_COMMANDS.indexStatus);
+      let status: IndexStatusSummary | null;
+      try {
+        status = await requestStatus<IndexStatusSummary>(
+          activeClient,
+          RUST_LSP_COMMANDS.indexStatus,
+          "Sage index status request",
+        );
+      } catch (error) {
+        await reportRequestFailure("Showing the Sage index status", error);
+        return;
+      }
       dependencies.setIndexStatus(status ?? undefined);
       dependencies.updateStatusBar();
       showStatusReport(
@@ -74,7 +109,17 @@ export function registerStatusCommands(
       if (!activeClient) {
         return;
       }
-      const status = await executeSageCommand<DocsStatusSummary>(activeClient, RUST_LSP_COMMANDS.docsStatus);
+      let status: DocsStatusSummary | null;
+      try {
+        status = await requestStatus<DocsStatusSummary>(
+          activeClient,
+          RUST_LSP_COMMANDS.docsStatus,
+          "Sage documentation status request",
+        );
+      } catch (error) {
+        await reportRequestFailure("Showing the Sage documentation status", error);
+        return;
+      }
       dependencies.setDocsStatus(status ?? undefined);
       dependencies.updateStatusBar();
       showStatusReport(
@@ -135,23 +180,25 @@ export function registerStatusCommands(
       if (!activeClient) {
         return;
       }
-      const baselineStatus = await executeSageCommand<IndexStatusSummary>(
-        activeClient,
-        RUST_LSP_COMMANDS.indexStatus,
-      );
-      const baselineGeneration = baselineStatus?.generation;
-      if (typeof baselineGeneration !== "number" || !Number.isFinite(baselineGeneration)) {
-        throw new Error("Cannot rebuild the Sage index because its current generation is unavailable.");
-      }
-
-      const scheduledStatus = await executeSageCommand<IndexStatusSummary>(
-        activeClient,
-        RUST_LSP_COMMANDS.rebuildIndex,
-      );
-      dependencies.setIndexStatus(scheduledStatus ?? baselineStatus ?? undefined);
-      dependencies.updateStatusBar();
-
       try {
+        const baselineStatus = await requestStatus<IndexStatusSummary>(
+          activeClient,
+          RUST_LSP_COMMANDS.indexStatus,
+          "Sage index rebuild baseline request",
+        );
+        const baselineGeneration = baselineStatus?.generation;
+        if (typeof baselineGeneration !== "number" || !Number.isFinite(baselineGeneration)) {
+          throw new Error("Cannot rebuild the Sage index because its current generation is unavailable.");
+        }
+
+        const scheduledStatus = await requestStatus<IndexStatusSummary>(
+          activeClient,
+          RUST_LSP_COMMANDS.rebuildIndex,
+          "Sage index rebuild scheduling request",
+        );
+        dependencies.setIndexStatus(scheduledStatus ?? baselineStatus ?? undefined);
+        dependencies.updateStatusBar();
+
         const rebuiltStatus = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
@@ -160,14 +207,16 @@ export function registerStatusCommands(
           },
           async (progress) => waitForIndexRebuild({
             baselineGeneration,
-            readStatus: () => executeSageCommand<IndexStatusSummary>(
+            readStatus: () => requestStatus<IndexStatusSummary>(
               activeClient,
               RUST_LSP_COMMANDS.indexStatus,
+              "Sage index rebuild status request",
             ),
             reschedule: async () => {
-              const retryStatus = await executeSageCommand<IndexStatusSummary>(
+              const retryStatus = await requestStatus<IndexStatusSummary>(
                 activeClient,
                 RUST_LSP_COMMANDS.rebuildIndex,
+                "Sage index rebuild reschedule request",
               );
               dependencies.setIndexStatus(retryStatus ?? dependencies.getIndexStatus());
               dependencies.updateStatusBar();
@@ -200,8 +249,8 @@ export function registerStatusCommands(
         );
         return rebuiltStatus;
       } catch (error) {
-        void vscode.window.showErrorMessage(`Sage index rebuild did not complete: ${String(error)}`);
-        throw error;
+        await reportRequestFailure("Sage index rebuild", error);
+        return;
       }
     }),
   ];

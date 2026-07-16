@@ -65,6 +65,7 @@ const sourceDatePackageResult = spawnSync(
 );
 const sourceDateVsixPath = path.join(sourceDateTempRoot, `${manifest.name}-${manifest.version}.vsix`);
 const sourceDatePackageOutput = parseJsonOutput(sourceDatePackageResult.stdout);
+const hiddenFileRejection = packageWithUnexpectedHiddenFile();
 const zip = readZip(vsixPath);
 const sourceDateZip = sourceDatePackageResult.status === 0 && fs.existsSync(sourceDateVsixPath)
   ? readZip(sourceDateVsixPath)
@@ -117,9 +118,15 @@ const invalidArchiveModes = zip.entries
   .map((entry) => ({ name: entry.name, mode: entry.mode, expected: expectedArchiveMode(entry.name) }))
   .filter((entry) => entry.mode !== entry.expected);
 pushCheck(
-  "VSIX normalizes regular files to 0644 and sage-ls to 0755",
+  "VSIX normalizes regular files to 0644 and runtime executables to 0755",
   invalidArchiveModes.length === 0,
   invalidArchiveModes.slice(0, 10),
+);
+pushCheck(
+  "VSIX packaging rejects unknown hidden extension files",
+  hiddenFileRejection.status !== 0
+    && hiddenFileRejection.output.includes("Refusing to package unknown hidden extension file"),
+  hiddenFileRejection,
 );
 const compressedEntries = zip.entries.filter((entry) => entry.compressionMethod === ZIP_METHOD_DEFLATE);
 const compressedPayloadSize = zip.entries.reduce((total, entry) => total + entry.compressedSize, 0);
@@ -170,10 +177,24 @@ if (entries.has(binaryEntry) && entries.has(binaryMetadataEntry)) {
 pushCheck("VSIX contains vscode-languageclient dependency", entries.has("extension/node_modules/vscode-languageclient/package.json"), "vscode-languageclient");
 pushCheck("VSIX contains vscode-jsonrpc dependency", entries.has("extension/node_modules/vscode-jsonrpc/package.json"), "vscode-jsonrpc");
 pushCheck("VSIX contains jsonc-parser dependency", entries.has("extension/node_modules/jsonc-parser/package.json"), "jsonc-parser");
+const languageClientTerminateHelper = "extension/node_modules/vscode-languageclient/lib/node/terminateProcess.sh";
+pushCheck(
+  "VSIX keeps the executable language-client process helper",
+  entries.has(languageClientTerminateHelper)
+    && zip.entries.find((entry) => entry.name === languageClientTerminateHelper)?.mode === 0o100755,
+  languageClientTerminateHelper,
+);
 pushCheck("VSIX excludes TypeScript source", !entries.has("extension/src/extension.ts"), "extension/src/extension.ts");
 pushCheck("VSIX excludes extension tests", ![...entries].some((entry) => entry.startsWith("extension/test/")), "extension/test/");
 pushCheck("VSIX excludes extension-host tests", ![...entries].some((entry) => entry.startsWith("extension/test-host/")), "extension/test-host/");
 pushCheck("VSIX excludes source maps", ![...entries].some((entry) => entry.endsWith(".map")), "*.map");
+pushCheck("VSIX excludes .vscodeignore", !entries.has("extension/.vscodeignore"), "extension/.vscodeignore");
+const dependencyReleaseResidue = [...entries].filter(isDependencyReleaseResidue);
+pushCheck(
+  "VSIX excludes dependency test, coverage, process-info, and CVE advisory residue",
+  dependencyReleaseResidue.length === 0,
+  dependencyReleaseResidue.slice(0, 20),
+);
 
 const packagedManifest = JSON.parse(zip.text("extension/package.json"));
 pushCheck("packaged manifest id matches", packagedManifest.name === manifest.name, packagedManifest.name);
@@ -421,8 +442,46 @@ function buildExtension(creationMask) {
 
 function expectedArchiveMode(entryName) {
   return /^extension\/resources\/bin\/[^/]+\/sage-ls$/.test(entryName)
+    || entryName === "extension/node_modules/vscode-languageclient/lib/node/terminateProcess.sh"
     ? 0o100755
     : 0o100644;
+}
+
+function isDependencyReleaseResidue(entryName) {
+  if (!entryName.startsWith("extension/node_modules/")) {
+    return false;
+  }
+  const segments = entryName.split("/");
+  const baseName = segments.at(-1) ?? "";
+  return segments.some((segment) => [
+    ".tap",
+    "coverage",
+    "processinfo",
+  ].includes(segment.toLowerCase()))
+    || /^(?:advisory[-_])?cve[-_]/i.test(baseName);
+}
+
+function packageWithUnexpectedHiddenFile() {
+  const hiddenFile = path.join(packageRoot, "src", ".env.vsix-package-smoke");
+  const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "sage-vsix-package-hidden-file-smoke-"));
+  fs.writeFileSync(hiddenFile, "SAGE_VSIX_SHOULD_NOT_LEAK=1\n", "utf8");
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", outputDirectory],
+      {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+      },
+    );
+    return {
+      status: result.status,
+      output: `${result.stdout ?? ""}\n${result.stderr ?? ""}`.trim(),
+    };
+  } finally {
+    fs.rmSync(hiddenFile, { force: true });
+    fs.rmSync(outputDirectory, { recursive: true, force: true });
+  }
 }
 
 function findBuildMachinePaths(binary) {

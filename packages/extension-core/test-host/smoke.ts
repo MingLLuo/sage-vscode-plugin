@@ -168,6 +168,79 @@ async function verifyExternalSageSourceFollowUpWithPythonDisabled(): Promise<voi
     "follow-up external definition while ordinary Python analysis is disabled",
     "sage-source",
   );
+
+  const hovers = (await vscode.commands.executeCommand<vscode.Hover[]>(
+    "vscode.executeHoverProvider",
+    sourceUri,
+    sourcePosition,
+  )) ?? [];
+  assert.ok(
+    hovers.some((hover) => renderHoverContents(hover).includes("Unique external symbol")),
+    "expected hover documentation to remain available in the read-only external source view",
+  );
+
+  const callText = "ExternalSmokeCombinations([1, 2, 3], 2)";
+  const signaturePosition = positionOfNth(
+    sourceDocument,
+    callText,
+    1,
+    "ExternalSmokeCombinations([1, 2, 3], ".length,
+  );
+  const signatureHelp = await vscode.commands.executeCommand<vscode.SignatureHelp>(
+    "vscode.executeSignatureHelpProvider",
+    sourceUri,
+    signaturePosition,
+    ",",
+  );
+  assert.ok(
+    signatureHelp?.signatures.some((signature) =>
+      signature.label.includes("ExternalSmokeCombinations(n, k=None)")
+    ),
+    "expected signature help to use the external source backing file",
+  );
+
+  const links = (await vscode.commands.executeCommand<vscode.DocumentLink[]>(
+    "vscode.executeLinkProvider",
+    sourceUri,
+  )) ?? [];
+  assert.ok(
+    links.some((link) =>
+      link.target?.scheme === "sage-source"
+      && normalizePathForAssertion(link.target.fsPath).endsWith("external-sage-src/sage/combinat/linked.sage")
+    ),
+    "expected external source document links to retain the read-only URI scheme",
+  );
+
+  const hierarchyItems = (await vscode.commands.executeCommand<vscode.CallHierarchyItem[]>(
+    "vscode.prepareCallHierarchy",
+    sourceUri,
+    sourcePosition,
+  )) ?? [];
+  const combinationItem = hierarchyItems.find((item) => item.name === "ExternalSmokeCombinations");
+  assert.ok(combinationItem, "expected call hierarchy preparation in the external source view");
+  assert.equal(combinationItem.uri.scheme, "sage-source");
+
+  const incomingCalls = (await vscode.commands.executeCommand<vscode.CallHierarchyIncomingCall[]>(
+    "vscode.provideIncomingCalls",
+    combinationItem,
+  )) ?? [];
+  assert.ok(
+    incomingCalls.some((call) =>
+      call.from.name === "ExternalSmokeCaller" && call.from.uri.scheme === "sage-source"
+    ),
+    "expected incoming hierarchy items to be rewritten back to sage-source",
+  );
+
+  const outgoingCalls = (await vscode.commands.executeCommand<vscode.CallHierarchyOutgoingCall[]>(
+    "vscode.provideOutgoingCalls",
+    combinationItem,
+  )) ?? [];
+  assert.ok(
+    outgoingCalls.some((call) =>
+      call.to.name === "ExternalSmokeLeaf" && call.to.uri.scheme === "sage-source"
+    ),
+    "expected outgoing hierarchy items to be rewritten back to sage-source",
+  );
 }
 
 async function verifyUnsavedUnicodeNavigationRanges(workspaceUri: vscode.Uri): Promise<void> {

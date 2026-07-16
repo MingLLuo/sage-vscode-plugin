@@ -120,12 +120,15 @@ pub struct IndexedFile {
     pub path: PathBuf,
     pub symbols: Vec<SymbolRecord>,
     pub module_docstring: Option<String>,
+    #[serde(default)]
+    pub(super) identifier_filter: Vec<u8>,
 }
 
 pub(super) type SymbolLookupCache = Arc<Mutex<HashMap<String, Vec<SymbolRecord>>>>;
 pub(super) type FileLookupCache = Arc<Mutex<HashMap<PathBuf, IndexedFile>>>;
 pub(super) type SageMethodLookupCache = Arc<Mutex<HashMap<(String, String), Option<SymbolRecord>>>>;
 pub(super) type ReferenceLookupCache = Arc<Mutex<HashMap<String, Vec<ReferenceRecord>>>>;
+pub(super) type PendingRefreshPaths = Arc<Mutex<BTreeMap<PathBuf, u64>>>;
 
 #[derive(Clone, Debug, Default)]
 pub struct WorkspaceIndex {
@@ -155,6 +158,9 @@ pub struct WorkspaceIndex {
     pub(super) file_lookup_cache: FileLookupCache,
     pub(super) sage_method_lookup_cache: SageMethodLookupCache,
     pub(super) reference_lookup_cache: ReferenceLookupCache,
+    pub(super) pending_refresh_paths: PendingRefreshPaths,
+    pub(super) completed_pending_refresh_versions: BTreeMap<PathBuf, u64>,
+    pub(super) defer_pending_refresh_clear: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -199,6 +205,7 @@ pub(super) fn sage_method_cache_key(owner_type: SageOwnerType, member: &str) -> 
 #[derive(Clone, Debug)]
 pub(super) struct MemberResolution {
     pub(super) record: Option<SymbolRecord>,
+    pub(super) candidates: Vec<SymbolRecord>,
     pub(super) owner_type: Option<SageOwnerType>,
     pub(super) confidence: &'static str,
     pub(super) reason: String,
@@ -331,6 +338,15 @@ pub struct QueryDefinition {
     pub module: String,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QueryDefinitionCandidate {
+    pub definition: QueryDefinition,
+    pub confidence: String,
+    pub reason: String,
+    pub signature: Option<String>,
+    pub summary: Option<String>,
+}
+
 pub(super) fn query_definition_from_record(record: &SymbolRecord) -> Option<QueryDefinition> {
     if record.path.as_os_str().is_empty() {
         return None;
@@ -375,6 +391,8 @@ pub struct QueryResult {
     pub hover: Option<QueryHover>,
     pub documentation: Option<DocumentationRecord>,
     pub definition: Option<QueryDefinition>,
+    #[serde(default, rename = "definitionCandidates")]
+    pub definition_candidates: Vec<QueryDefinitionCandidate>,
     pub completions: Vec<QueryCompletion>,
     pub references: Vec<ReferenceRecord>,
     pub rename_preview: Vec<QueryTextEdit>,
@@ -398,6 +416,7 @@ pub struct QueryFeatures {
     pub rename_preview: bool,
     pub signature: bool,
     pub diagnostics: bool,
+    pub presentation: bool,
 }
 
 impl QueryFeatures {
@@ -408,6 +427,7 @@ impl QueryFeatures {
             rename_preview: true,
             signature: true,
             diagnostics: true,
+            presentation: true,
         }
     }
 
@@ -418,6 +438,7 @@ impl QueryFeatures {
             rename_preview: false,
             signature: true,
             diagnostics: false,
+            presentation: true,
         }
     }
 
@@ -428,6 +449,18 @@ impl QueryFeatures {
             rename_preview: false,
             signature: false,
             diagnostics: false,
+            presentation: true,
+        }
+    }
+
+    pub const fn definition_only() -> Self {
+        Self {
+            completions: false,
+            references: false,
+            rename_preview: false,
+            signature: false,
+            diagnostics: false,
+            presentation: false,
         }
     }
 }

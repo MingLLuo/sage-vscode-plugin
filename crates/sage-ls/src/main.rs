@@ -1,9 +1,11 @@
 #![allow(deprecated)]
 
+mod analysis_mode;
 mod call_hierarchy;
 mod document_links;
 mod editor_features;
 mod index_jobs;
+mod initialization;
 mod linked_document_prewarm;
 mod open_documents;
 mod runtime_docs;
@@ -11,13 +13,13 @@ mod signature_help;
 mod source_symbols;
 mod text_positions;
 
+use analysis_mode::AnalysisMode;
 use call_hierarchy::{
-    call_hierarchy_item_for_live_index_symbol, call_hierarchy_item_for_local_definition,
-    call_hierarchy_item_for_local_symbol_at_position, call_hierarchy_item_for_symbol_with_folds,
-    call_hierarchy_item_from_definition, call_hierarchy_item_from_symbol_record,
-    call_ranges_in_range, enclosing_call_hierarchy_item,
-    enclosing_call_hierarchy_item_from_context, is_identifier_start, push_incoming_call,
-    push_outgoing_call, CallHierarchySourceContext,
+    call_hierarchy_item_for_local_definition, call_hierarchy_item_for_local_symbol_at_position,
+    call_hierarchy_item_from_definition, enclosing_call_hierarchy_item,
+    enclosing_call_hierarchy_item_from_context, high_confidence_call_hierarchy_definition,
+    is_identifier_start, push_incoming_call, push_outgoing_call, resolve_outgoing_calls,
+    CallHierarchySourceContext,
 };
 use document_links::sage_document_links;
 #[cfg(test)]
@@ -27,6 +29,10 @@ use editor_features::{
 };
 #[cfg(test)]
 use index_jobs::index_job_result_is_current;
+use initialization::{
+    default_excludes, parse_initialization_options, source_roots_from_options,
+    workspace_folders_from_options, DocumentationPreferredSource,
+};
 #[cfg(test)]
 use linked_document_prewarm::import_modules_for_prewarm;
 use linked_document_prewarm::LinkedDocumentPrewarmer;
@@ -37,19 +43,22 @@ use open_documents::{
     physical_paths as open_document_physical_paths, unique_live_documents, uri_to_path,
     OpenDocument, OpenDocumentMap,
 };
+use rayon::prelude::*;
 use runtime_docs::{RuntimeDocsConfig, RuntimeDocsWorker};
 use sage_index::{
-    default_cache_dir, function_call_at_position, parse_source, semantic_spans,
-    DocumentationRecord, IndexOptions, QueryCompletion, QueryDefinition, QueryFeatures,
-    QueryPosition, QueryResult, SymbolKind as SageSymbolKind, SymbolRecord, WorkspaceIndex,
+    default_cache_dir, function_call_at_position, is_code_reference_at_range,
+    local_import_alias_symbol_from_source, local_import_alias_symbol_from_symbols, parse_source,
+    semantic_spans, DocumentationRecord, IndexOptions, QueryCompletion, QueryDefinition,
+    QueryFeatures, QueryPosition, QueryResult, SymbolKind as SageSymbolKind, SymbolRecord,
+    WorkspaceIndex,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use signature_help::signature_information;
 #[cfg(test)]
 use signature_help::signature_parameter_offsets;
-use source_symbols::{document_symbols_for_source, is_call_hierarchy_symbol, module_name_for_path};
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use source_symbols::{document_symbols_for_source, module_name_for_path};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -112,123 +121,12 @@ async fn refresh_editor_feature_caches(client: &Client) {
     let _ = client.workspace_diagnostic_refresh().await;
 }
 
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-struct InitializationOptions {
-    interpreter: InterpreterOptions,
-    analysis: AnalysisOptions,
-    workspace: WorkspaceOptions,
-    documentation: DocumentationOptions,
-    rust: RustOptions,
-    pyright: PyrightOptions,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-struct InterpreterOptions {
-    path: String,
-    args: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-struct AnalysisOptions {
-    extra_paths: Vec<String>,
-    source_roots: Vec<String>,
-    enable_diagnostics: bool,
-    enable_runtime_introspection: bool,
-    enable_pyx_parsing: bool,
-}
-
-impl Default for AnalysisOptions {
-    fn default() -> Self {
-        Self {
-            extra_paths: Vec::new(),
-            source_roots: Vec::new(),
-            enable_diagnostics: true,
-            enable_runtime_introspection: true,
-            enable_pyx_parsing: true,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-struct WorkspaceOptions {
-    folders: Vec<String>,
-    source_roots: Vec<String>,
-    exclude: Vec<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-struct DocumentationOptions {
-    preferred_source: String,
-    show_on_hover: bool,
-}
-
-impl Default for DocumentationOptions {
-    fn default() -> Self {
-        Self {
-            preferred_source: "auto".to_string(),
-            show_on_hover: true,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DocumentationPreferredSource {
-    Auto,
-    Workspace,
-    Runtime,
-    Reference,
-}
-
-impl DocumentationPreferredSource {
-    fn from_config(value: &str) -> Self {
-        match value.trim().to_ascii_lowercase().as_str() {
-            "workspace" => Self::Workspace,
-            "runtime" => Self::Runtime,
-            "reference" => Self::Reference,
-            _ => Self::Auto,
-        }
-    }
-
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Workspace => "workspace",
-            Self::Runtime => "runtime",
-            Self::Reference => "reference",
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-struct RustOptions {
-    cache_dir: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-struct PyrightOptions {
-    node_path: Option<String>,
-    server_path: Option<String>,
-}
-
 struct Backend {
     client: Client,
     index: Arc<RwLock<WorkspaceIndex>>,
     open_documents: Arc<RwLock<OpenDocumentMap>>,
     navigation_cache: Arc<RwLock<NavigationQueryCache>>,
+    analysis_mode: Arc<RwLock<AnalysisMode>>,
     diagnostics_enabled: Arc<RwLock<bool>>,
     docs_on_hover_enabled: Arc<RwLock<bool>>,
     docs_preferred_source: Arc<RwLock<DocumentationPreferredSource>>,
@@ -310,6 +208,7 @@ struct RenameTarget {
     definition: QueryDefinition,
     definition_ranges: Vec<sage_index::SourceRange>,
     declaration: Location,
+    local_import_alias: Option<SymbolRecord>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -325,6 +224,7 @@ struct ResolvedReferenceTarget {
     definition: QueryDefinition,
     definition_ranges: Vec<sage_index::SourceRange>,
     declaration: Option<Location>,
+    local_import_alias: Option<SymbolRecord>,
 }
 
 #[derive(Clone, Debug)]
@@ -343,6 +243,7 @@ async fn main() {
         index: Arc::new(RwLock::new(WorkspaceIndex::default())),
         open_documents: Arc::new(RwLock::new(OpenDocumentMap::new())),
         navigation_cache: Arc::new(RwLock::new(NavigationQueryCache::default())),
+        analysis_mode: Arc::new(RwLock::new(AnalysisMode::default())),
         diagnostics_enabled: Arc::new(RwLock::new(true)),
         docs_on_hover_enabled: Arc::new(RwLock::new(true)),
         docs_preferred_source: Arc::new(RwLock::new(DocumentationPreferredSource::Auto)),
@@ -363,6 +264,18 @@ impl LanguageServer for Backend {
         let initialize_started = Instant::now();
         let options = parse_initialization_options(params.initialization_options);
         trace_initialize_phase(initialize_started, "parse-options");
+        let analysis_mode = options.analysis.mode.effective();
+        *self.analysis_mode.write().await = analysis_mode;
+        if let Some(invalid_mode) = options.analysis.mode.invalid_value() {
+            self.client
+                .log_message(
+                    MessageType::WARNING,
+                    format!(
+                        "sage-ls received unsupported analysis mode {invalid_mode:?}; using default"
+                    ),
+                )
+                .await;
+        }
         let roots = source_roots_from_options(&options);
         trace_initialize_phase(initialize_started, "source-roots");
         *self.diagnostics_enabled.write().await = options.analysis.enable_diagnostics;
@@ -490,8 +403,16 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        let analysis_mode = *self.analysis_mode.read().await;
         self.client
-            .log_message(MessageType::INFO, "sage-ls v2 runtime initialized")
+            .log_message(
+                MessageType::INFO,
+                format!(
+                    "sage-ls v2 runtime initialized (analysis mode {}, workspace symbol limit {})",
+                    analysis_mode.as_str(),
+                    analysis_mode.workspace_symbol_limit(),
+                ),
+            )
             .await;
     }
 
@@ -739,13 +660,26 @@ impl LanguageServer for Backend {
                 params.text_document_position_params.position,
             )
             .await;
-        let Some(definition) = query.definition else {
+        if query.resolution_confidence.as_deref() == Some("high") {
+            let Some(definition) = query.definition.as_ref() else {
+                return Ok(None);
+            };
+            let Some(location) = self.location_for_query_definition(definition).await else {
+                return Ok(None);
+            };
+            return Ok(Some(GotoDefinitionResponse::Scalar(location)));
+        }
+        let origin_range = query
+            .target
+            .as_ref()
+            .map(|target| lsp_range_for_text(&document.text, &target.range));
+        let links = self
+            .links_for_navigation_candidates(&query, origin_range)
+            .await;
+        if links.len() < 2 {
             return Ok(None);
-        };
-        let Some(location) = self.location_for_query_definition(&definition).await else {
-            return Ok(None);
-        };
-        Ok(Some(GotoDefinitionResponse::Scalar(location)))
+        }
+        Ok(Some(GotoDefinitionResponse::Link(links)))
     }
 
     async fn goto_declaration(
@@ -753,13 +687,40 @@ impl LanguageServer for Backend {
         params: GotoDeclarationParams,
     ) -> Result<Option<GotoDeclarationResponse>> {
         let uri = &params.text_document_position_params.text_document.uri;
-        let Some(location) = self
-            .definition_location_at(uri, params.text_document_position_params.position)
-            .await
-        else {
+        let Some(document) = self.document_for_uri(uri).await else {
             return Ok(None);
         };
-        Ok(Some(GotoDeclarationResponse::Scalar(location)))
+        let Some(path) = uri_to_path(uri) else {
+            return Ok(None);
+        };
+        let query = self
+            .navigation_query_for_document(
+                uri,
+                &document,
+                &path,
+                params.text_document_position_params.position,
+            )
+            .await;
+        if query.resolution_confidence.as_deref() == Some("high") {
+            let Some(definition) = query.definition.as_ref() else {
+                return Ok(None);
+            };
+            let Some(location) = self.location_for_query_definition(definition).await else {
+                return Ok(None);
+            };
+            return Ok(Some(GotoDeclarationResponse::Scalar(location)));
+        }
+        let origin_range = query
+            .target
+            .as_ref()
+            .map(|target| lsp_range_for_text(&document.text, &target.range));
+        let links = self
+            .links_for_navigation_candidates(&query, origin_range)
+            .await;
+        if links.len() < 2 {
+            return Ok(None);
+        }
+        Ok(Some(GotoDeclarationResponse::Link(links)))
     }
 
     async fn goto_type_definition(
@@ -811,21 +772,34 @@ impl LanguageServer for Backend {
                 params.text_document_position_params.position,
             )
             .await;
-        let Some(definition) = query.definition else {
-            return Ok(None);
-        };
-        if should_defer_python_import_definition_to_python_provider(
-            &path,
-            &document.text,
-            params.text_document_position_params.position,
-            &definition,
-        ) {
+        if query.resolution_confidence.as_deref() == Some("high") {
+            let Some(definition) = query.definition.as_ref() else {
+                return Ok(None);
+            };
+            if should_defer_python_import_definition_to_python_provider(
+                &path,
+                &document.text,
+                params.text_document_position_params.position,
+                definition,
+            ) {
+                return Ok(None);
+            }
+            let Some(location) = self.location_for_query_definition(definition).await else {
+                return Ok(None);
+            };
+            return Ok(Some(GotoImplementationResponse::Scalar(location)));
+        }
+        let origin_range = query
+            .target
+            .as_ref()
+            .map(|target| lsp_range_for_text(&document.text, &target.range));
+        let links = self
+            .links_for_navigation_candidates(&query, origin_range)
+            .await;
+        if links.len() < 2 {
             return Ok(None);
         }
-        let Some(location) = self.location_for_query_definition(&definition).await else {
-            return Ok(None);
-        };
-        Ok(Some(GotoImplementationResponse::Scalar(location)))
+        Ok(Some(GotoImplementationResponse::Link(links)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -953,6 +927,7 @@ impl LanguageServer for Backend {
                     definition: target.definition.clone(),
                     definition_ranges: target.definition_ranges.clone(),
                     declaration: Some(target.declaration),
+                    local_import_alias: target.local_import_alias,
                 },
                 true,
                 ReferenceCollectionMode::Rename,
@@ -1065,27 +1040,13 @@ impl LanguageServer for Backend {
         let query = self
             .navigation_query_for_document(uri, &document, &path, position)
             .await;
-        if let Some(definition) = query.definition {
-            if canonical_path_for_comparison(&definition.path)
-                == canonical_path_for_comparison(&path)
-            {
-                if let Some(item) = call_hierarchy_item_for_local_definition(
-                    uri,
-                    &path,
-                    &document.text,
-                    &definition,
-                ) {
-                    return Ok(Some(vec![item]));
-                }
-            }
-            let Some(location) = self.location_for_query_definition(&definition).await else {
-                return Ok(Some(Vec::new()));
-            };
-            return Ok(Some(vec![call_hierarchy_item_from_definition(
-                &definition,
-                location.uri,
-                location.range,
-            )]));
+        if let Some(definition) = high_confidence_call_hierarchy_definition(&query) {
+            return Ok(Some(
+                self.call_hierarchy_item_for_definition(definition)
+                    .await
+                    .into_iter()
+                    .collect(),
+            ));
         }
         Ok(Some(
             enclosing_call_hierarchy_item(uri, &path, &document.text, position)
@@ -1156,42 +1117,28 @@ impl LanguageServer for Backend {
         let Some(path) = uri_to_path(&params.item.uri) else {
             return Ok(Some(Vec::new()));
         };
-        let Some(text) = self.text_for_uri_or_file(&params.item.uri).await else {
+        let Some(document) = self.document_for_uri(&params.item.uri).await else {
             return Ok(Some(Vec::new()));
         };
-        let parsed = parse_source(module_name_for_path(&path), &path, &text);
-        let folds = sage_folding_ranges(&text);
-        let call_ranges = call_ranges_in_range(&text, params.item.range);
+        let resolved_calls = {
+            let index = self.index.read().await;
+            resolve_outgoing_calls(
+                &index,
+                &path,
+                &document.text,
+                params.item.range,
+                &params.item.name,
+            )
+        };
         let mut calls = Vec::new();
-        for (name, from_range) in call_ranges {
-            if name == params.item.name {
-                continue;
-            }
-            let local = parsed
-                .symbols
-                .iter()
-                .find(|symbol| symbol.name == name && is_call_hierarchy_symbol(symbol))
-                .map(|symbol| {
-                    call_hierarchy_item_for_symbol_with_folds(
-                        &params.item.uri,
-                        &text,
-                        &folds,
-                        symbol,
-                    )
-                });
-            let to = if local.is_some() {
-                local
-            } else {
-                let indexed = self.index.read().await.resolve_symbol(&name, None);
-                match indexed {
-                    Some(symbol) => self.call_hierarchy_item_for_index_symbol(&symbol).await,
-                    None => None,
-                }
-            };
+        for resolved in resolved_calls {
+            let to = self
+                .call_hierarchy_item_for_definition(&resolved.definition)
+                .await;
             let Some(to) = to else {
                 continue;
             };
-            push_outgoing_call(&mut calls, to, from_range);
+            push_outgoing_call(&mut calls, to, resolved.from_range);
         }
         Ok(Some(calls))
     }
@@ -1266,8 +1213,10 @@ impl LanguageServer for Backend {
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<Vec<SymbolInformation>>> {
+        let limit = self.analysis_mode.read().await.workspace_symbol_limit();
         Ok(Some(
-            self.workspace_symbol_information(&params.query, 200).await,
+            self.workspace_symbol_information(&params.query, limit)
+                .await,
         ))
     }
 
@@ -1444,20 +1393,34 @@ impl Backend {
         Some((live.uri, live.document))
     }
 
-    async fn call_hierarchy_item_for_index_symbol(
+    async fn call_hierarchy_item_for_definition(
         &self,
-        symbol: &SymbolRecord,
+        definition: &QueryDefinition,
     ) -> Option<CallHierarchyItem> {
         let documents = self.open_documents.read().await;
-        if let Some(live) = live_document_for_path(&documents, &symbol.path) {
-            return call_hierarchy_item_for_live_index_symbol(
+        if let Some(live) = live_document_for_path(&documents, &definition.path) {
+            return call_hierarchy_item_for_local_definition(
                 &live.uri,
                 &live.path,
                 &live.document.text,
-                symbol,
+                definition,
             );
         }
-        call_hierarchy_item_from_symbol_record(symbol)
+        drop(documents);
+        let uri = Url::from_file_path(&definition.path).ok()?;
+        if let Ok(text) = std::fs::read_to_string(&definition.path) {
+            if let Some(item) =
+                call_hierarchy_item_for_local_definition(&uri, &definition.path, &text, definition)
+            {
+                return Some(item);
+            }
+        }
+        let location = self.location_for_query_definition(definition).await?;
+        Some(call_hierarchy_item_from_definition(
+            definition,
+            location.uri,
+            location.range,
+        ))
     }
 
     fn schedule_linked_document_prewarm(&self, uri: Url, text: String, version: i32) {
@@ -1517,6 +1480,37 @@ impl Backend {
     }
 
     async fn rename_target(&self, uri: &Url, position: Position) -> Option<RenameTarget> {
+        let document = self.document_for_uri(uri).await?;
+        let path = uri_to_path(uri)?;
+        let physical_path = canonical_path_for_comparison(&path);
+        let (word, range) = word_at_position(&document.text, position)?;
+        if !is_valid_identifier(&word)
+            || !is_code_reference_range(&path, &document.text, &word, range)
+        {
+            return None;
+        }
+        let parsed = self
+            .index
+            .read()
+            .await
+            .parse_source_for_query(&physical_path, &document.text);
+        if let Some(target) = local_import_alias_rename_target_with_symbols(
+            uri,
+            &document.text,
+            &word,
+            range,
+            &parsed.symbols,
+        ) {
+            if !self
+                .index
+                .read()
+                .await
+                .is_editable_path(&target.definition.path)
+            {
+                return None;
+            }
+            return Some(target);
+        }
         let target = self.resolved_reference_target_at(uri, position).await?;
         let is_editable = self
             .index
@@ -1532,6 +1526,7 @@ impl Backend {
             definition: target.definition,
             definition_ranges: target.definition_ranges,
             declaration: target.declaration?,
+            local_import_alias: None,
         })
     }
 
@@ -1551,6 +1546,9 @@ impl Backend {
         let query = self
             .navigation_query_for_document(uri, &document, &path, position)
             .await;
+        if query.resolution_confidence.as_deref() != Some("high") {
+            return None;
+        }
         let definition = query.definition?;
         let definition_ranges = self.definition_identity_ranges(&definition).await;
         let declaration = self.location_for_query_definition(&definition).await;
@@ -1560,6 +1558,7 @@ impl Backend {
             definition,
             definition_ranges,
             declaration,
+            local_import_alias: None,
         })
     }
 
@@ -1593,19 +1592,30 @@ impl Backend {
         ranges
     }
 
-    async fn definition_location_at(&self, uri: &Url, position: Position) -> Option<Location> {
-        let path = uri_to_path(uri)?;
-        let query = if let Some(document) = self.document_for_uri(uri).await {
-            self.navigation_query_for_document(uri, &document, &path, position)
+    async fn links_for_navigation_candidates(
+        &self,
+        query: &QueryResult,
+        origin_selection_range: Option<Range>,
+    ) -> Vec<LocationLink> {
+        let mut links = Vec::new();
+        let mut seen = BTreeSet::new();
+        for candidate in &query.definition_candidates {
+            let Some(location) = self
+                .location_for_query_definition(&candidate.definition)
                 .await
-        } else {
-            let text = std::fs::read_to_string(&path).ok()?;
-            let query_position = query_position_from_lsp(&text, position)?;
-            let index = self.index.read().await;
-            index.query_source_at_navigation(&path, &text, query_position)
-        };
-        let definition = query.definition.as_ref()?;
-        self.location_for_query_definition(definition).await
+            else {
+                continue;
+            };
+            if seen.insert(location_reference_key(&location.uri, &location.range)) {
+                links.push(LocationLink {
+                    origin_selection_range,
+                    target_uri: location.uri,
+                    target_range: location.range,
+                    target_selection_range: location.range,
+                });
+            }
+        }
+        links
     }
 
     async fn reference_locations(
@@ -1616,7 +1626,6 @@ impl Backend {
     ) -> Vec<Location> {
         let mut seen = BTreeSet::new();
         let mut locations = Vec::new();
-        let mut source_text_by_path: HashMap<PathBuf, Option<String>> = HashMap::new();
         let open_documents = self.open_documents.read().await.clone();
         let open_paths: BTreeSet<PathBuf> = open_document_physical_paths(&open_documents)
             .into_iter()
@@ -1627,52 +1636,88 @@ impl Backend {
             }
         }
         let index = self.index.read().await;
-        for reference in index.editable_references(&target.word) {
+        let indexed_references = match mode {
+            ReferenceCollectionMode::References => index.references(&target.word),
+            ReferenceCollectionMode::Rename => index.editable_references(&target.word),
+        };
+        let mut references_by_path: BTreeMap<PathBuf, Vec<sage_index::ReferenceRecord>> =
+            BTreeMap::new();
+        for reference in indexed_references {
             if open_paths.contains(&canonical_path_for_comparison(&reference.path)) {
                 continue;
             }
-            let Some(text) = source_text_by_path
+            references_by_path
                 .entry(reference.path.clone())
-                .or_insert_with(|| std::fs::read_to_string(&reference.path).ok())
-                .as_deref()
-            else {
-                continue;
-            };
-            if !reference_candidate_matches_target(
-                &index,
-                &reference.path,
-                text,
-                &reference.range,
-                target,
-            ) {
-                continue;
-            }
-            if let Ok(uri) = Url::from_file_path(&reference.path) {
-                push_scoped_reference_location(
-                    &mut locations,
-                    &mut seen,
-                    Location {
-                        uri,
-                        range: lsp_range_for_text(text, &reference.range),
-                    },
-                    target.declaration.as_ref(),
-                    include_declaration,
+                .or_default()
+                .push(reference);
+        }
+        let grouped_references: Vec<_> = references_by_path.into_iter().collect();
+        let mut indexed_locations: Vec<Location> = grouped_references
+            .into_par_iter()
+            .map(|(path, references)| {
+                let Ok(text) = std::fs::read_to_string(&path) else {
+                    return Vec::new();
+                };
+                let Ok(uri) = Url::from_file_path(&path) else {
+                    return Vec::new();
+                };
+                let parsed = index
+                    .fresh_file_for_query(&path)
+                    .unwrap_or_else(|| index.parse_source_for_query(&path, &text));
+                let ranges: Vec<_> = references
+                    .iter()
+                    .map(|reference| reference.range.clone())
+                    .collect();
+                let queries = index.query_source_definitions_for_ranges_with_symbols(
+                    &path,
+                    &text,
+                    &target.word,
+                    &ranges,
+                    &parsed.symbols,
                 );
-            }
+                references
+                    .into_iter()
+                    .zip(queries)
+                    .filter(|(_, query)| reference_query_matches_target(query, target))
+                    .map(|reference| Location {
+                        uri: uri.clone(),
+                        range: lsp_range_for_text(&text, &reference.0.range),
+                    })
+                    .collect()
+            })
+            .flatten()
+            .collect();
+        indexed_locations.sort_by(|left, right| {
+            left.uri
+                .as_str()
+                .cmp(right.uri.as_str())
+                .then(left.range.start.line.cmp(&right.range.start.line))
+                .then(left.range.start.character.cmp(&right.range.start.character))
+        });
+        for location in indexed_locations {
+            push_scoped_reference_location(
+                &mut locations,
+                &mut seen,
+                location,
+                target.declaration.as_ref(),
+                include_declaration,
+            );
         }
         for live in unique_live_documents(&open_documents) {
             if !reference_path_is_collectible(&index, &live.path, mode) {
                 continue;
             }
+            let parsed = index.parse_source_for_query(&live.path, &live.document.text);
             for reference in
                 sage_index::references_in_source(&live.path, &live.document.text, &target.word)
             {
-                if !reference_candidate_matches_target(
+                if !reference_candidate_matches_target_with_symbols(
                     &index,
                     &live.path,
                     &live.document.text,
                     &reference.range,
                     target,
+                    Some(&parsed.symbols),
                 ) {
                     continue;
                 }
@@ -1700,34 +1745,30 @@ impl Backend {
             .filter(|symbol| !symbol.is_empty())
             .map(str::to_string);
         let position_context = self.documentation_position_context(&payload).await;
-        let symbol = explicit_symbol.clone().or_else(|| {
-            position_context.as_ref().and_then(|context| {
-                word_at_position(
+        let position_symbol = position_context.as_ref().and_then(|context| {
+            word_at_position(
+                &context.text,
+                lsp_position_for_byte_column(
                     &context.text,
-                    lsp_position_for_byte_column(
-                        &context.text,
-                        context.position.line,
-                        context.position.character,
-                    ),
-                )
-                .map(|(word, _)| word)
-            })
-        })?;
+                    context.position.line,
+                    context.position.character,
+                ),
+            )
+            .map(|(word, _)| word)
+        });
+        let symbol = position_symbol.or(explicit_symbol.clone())?;
         let preferred_source = *self.docs_preferred_source.read().await;
-        let mut record = None;
-        if explicit_symbol.is_none() {
-            if let Some(context) = &position_context {
-                record = {
-                    let index = self.index.read().await;
-                    documentation_record_for_source_position(
-                        &index,
-                        &context.path,
-                        &context.text,
-                        context.position,
-                    )
-                };
-            }
-        }
+        let mut record = if let Some(context) = &position_context {
+            let index = self.index.read().await;
+            documentation_record_for_source_position(
+                &index,
+                &context.path,
+                &context.text,
+                context.position,
+            )
+        } else {
+            None
+        };
         if record.is_none() {
             record = self
                 .documentation_record_for_symbol(&symbol, preferred_source)
@@ -1779,7 +1820,24 @@ impl Backend {
         } else {
             Vec::new()
         };
-        let mut query = if let Some(symbol) = payload.get("symbol").and_then(Value::as_str) {
+        let position = payload
+            .get("position")
+            .and_then(|position| {
+                Some(Position::new(
+                    position.get("line")?.as_u64()? as u32,
+                    position.get("character")?.as_u64()? as u32,
+                ))
+            })
+            .and_then(|position| query_position_from_lsp(&document.text, position));
+        let mut query = if let Some(position) = position {
+            self.index.read().await.query_source_at_with_features(
+                &path,
+                &document.text,
+                position,
+                rename_to,
+                features,
+            )
+        } else if let Some(symbol) = payload.get("symbol").and_then(Value::as_str) {
             self.index.read().await.query_source_symbol_with_options(
                 &path,
                 &document.text,
@@ -1792,16 +1850,7 @@ impl Backend {
                 },
             )
         } else {
-            let line = payload.get("position")?.get("line")?.as_u64()? as u32;
-            let character = payload.get("position")?.get("character")?.as_u64()? as u32;
-            let position = query_position_from_lsp(&document.text, Position::new(line, character))?;
-            self.index.read().await.query_source_at_with_features(
-                &path,
-                &document.text,
-                position,
-                rename_to,
-                features,
-            )
+            return None;
         };
         self.enhance_query_with_runtime_docs(&mut query).await;
         serde_json::to_value(query).ok()
@@ -1869,6 +1918,9 @@ impl Backend {
         query: &QueryResult,
         preferred_source: DocumentationPreferredSource,
     ) -> Option<DocumentationRecord> {
+        if query.definition.is_none() && !query.definition_candidates.is_empty() {
+            return None;
+        }
         let symbol = runtime_docs_symbol_for_query(query, preferred_source)?;
         let record = self.runtime_docs.cached(symbol);
         if record.is_none() {
@@ -1878,6 +1930,9 @@ impl Backend {
     }
 
     async fn enhance_query_with_runtime_docs(&self, query: &mut QueryResult) {
+        if query.definition.is_none() && !query.definition_candidates.is_empty() {
+            return;
+        }
         let preferred_source = *self.docs_preferred_source.read().await;
         let Some(record) = self.runtime_docs_for_query(query, preferred_source).await else {
             return;
@@ -1893,6 +1948,47 @@ impl Backend {
         });
         query.documentation = Some(record);
     }
+}
+
+#[cfg(test)]
+fn local_import_alias_rename_target(
+    uri: &Url,
+    physical_path: &Path,
+    text: &str,
+    word: &str,
+    range: Range,
+) -> Option<RenameTarget> {
+    let symbols = parse_source(module_name_for_path(physical_path), physical_path, text).symbols;
+    local_import_alias_rename_target_with_symbols(uri, text, word, range, &symbols)
+}
+
+fn local_import_alias_rename_target_with_symbols(
+    uri: &Url,
+    text: &str,
+    word: &str,
+    range: Range,
+    symbols: &[SymbolRecord],
+) -> Option<RenameTarget> {
+    let source_range = source_range_from_lsp(text, range)?;
+    let alias = local_import_alias_symbol_from_symbols(text, symbols, word, &source_range)?;
+    let definition = QueryDefinition {
+        name: alias.name.clone(),
+        path: alias.path.clone(),
+        range: alias.range.clone(),
+        detail: alias.detail.clone(),
+        module: alias.module.clone(),
+    };
+    Some(RenameTarget {
+        word: word.to_string(),
+        range,
+        definition,
+        definition_ranges: vec![alias.range.clone()],
+        declaration: Location {
+            uri: uri.clone(),
+            range: lsp_range_for_text(text, &alias.range),
+        },
+        local_import_alias: Some(alias),
+    })
 }
 
 fn documentation_record_for_source_position(
@@ -1967,82 +2063,6 @@ fn first_docstring_summary_line(docstring: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(str::to_string)
-}
-
-fn parse_initialization_options(value: Option<Value>) -> InitializationOptions {
-    value
-        .and_then(|raw| serde_json::from_value(raw).ok())
-        .unwrap_or_default()
-}
-
-fn source_roots_from_options(options: &InitializationOptions) -> Vec<PathBuf> {
-    let mut roots = Vec::new();
-    let workspace_folders = workspace_folders_from_options(options);
-    roots.extend(
-        options
-            .workspace
-            .source_roots
-            .iter()
-            .filter_map(|entry| uri_or_path(entry)),
-    );
-    roots.extend(workspace_folders.clone());
-    roots.extend(resolve_configured_paths(
-        &options.analysis.source_roots,
-        &workspace_folders,
-    ));
-    roots.extend(resolve_configured_paths(
-        &options.analysis.extra_paths,
-        &workspace_folders,
-    ));
-    roots.sort();
-    roots.dedup();
-    roots
-}
-
-fn workspace_folders_from_options(options: &InitializationOptions) -> Vec<PathBuf> {
-    let mut folders: Vec<_> = options
-        .workspace
-        .folders
-        .iter()
-        .filter_map(|entry| uri_or_path(entry))
-        .collect();
-    folders.sort();
-    folders.dedup();
-    folders
-}
-
-fn resolve_configured_paths(values: &[String], workspace_folders: &[PathBuf]) -> Vec<PathBuf> {
-    values
-        .iter()
-        .flat_map(|value| {
-            let path = PathBuf::from(value);
-            if path.is_absolute() || workspace_folders.is_empty() {
-                vec![path]
-            } else {
-                workspace_folders
-                    .iter()
-                    .map(|folder| folder.join(value))
-                    .collect()
-            }
-        })
-        .collect()
-}
-
-fn uri_or_path(value: &str) -> Option<PathBuf> {
-    Url::parse(value)
-        .ok()
-        .and_then(|url| url.to_file_path().ok())
-        .or_else(|| Some(PathBuf::from(value)))
-}
-
-fn default_excludes() -> Vec<String> {
-    vec![
-        "**/.git/**".to_string(),
-        "**/__pycache__/**".to_string(),
-        "**/.venv/**".to_string(),
-        "**/build/**".to_string(),
-        "**/target/**".to_string(),
-    ]
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -2376,6 +2396,20 @@ fn live_definition_range(
             .abs_diff(definition.range.start_line)
     })
     .map(|symbol| symbol.range)
+    .or_else(|| live_parameter_definition_range(definition, text))
+}
+
+fn live_parameter_definition_range(
+    definition: &QueryDefinition,
+    text: &str,
+) -> Option<sage_index::SourceRange> {
+    if !definition.detail.starts_with("Local parameter ")
+        || definition.range.start_line != definition.range.end_line
+        || !is_code_reference_at_range(text, &definition.name, &definition.range)
+    {
+        return None;
+    }
+    Some(definition.range.clone())
 }
 
 fn should_defer_python_import_definition_to_python_provider(
@@ -2518,6 +2552,7 @@ fn same_physical_location(left: &Location, right: &Location) -> bool {
     }
 }
 
+#[cfg(test)]
 fn reference_candidate_matches_target(
     index: &WorkspaceIndex,
     path: &Path,
@@ -2525,20 +2560,59 @@ fn reference_candidate_matches_target(
     range: &sage_index::SourceRange,
     target: &ResolvedReferenceTarget,
 ) -> bool {
-    let candidate = index
-        .query_source_at_navigation(
-            path,
-            text,
-            QueryPosition {
-                line: range.start_line,
-                character: range.start_character,
-            },
-        )
-        .definition;
-    candidate.is_some_and(|candidate| {
-        same_definition_owner_identity(&target.definition, &candidate)
-            && target.definition_ranges.contains(&candidate.range)
-    })
+    reference_candidate_matches_target_with_symbols(index, path, text, range, target, None)
+}
+
+fn reference_candidate_matches_target_with_symbols(
+    index: &WorkspaceIndex,
+    path: &Path,
+    text: &str,
+    range: &sage_index::SourceRange,
+    target: &ResolvedReferenceTarget,
+    local_symbols: Option<&[SymbolRecord]>,
+) -> bool {
+    if let Some(alias) = target.local_import_alias.as_ref() {
+        if canonical_path_for_comparison(path) != canonical_path_for_comparison(&alias.path) {
+            return false;
+        }
+        let candidate = if let Some(symbols) = local_symbols {
+            local_import_alias_symbol_from_symbols(text, symbols, &target.word, range)
+        } else {
+            local_import_alias_symbol_from_source(
+                &alias.module,
+                &alias.path,
+                text,
+                &target.word,
+                range,
+            )
+        };
+        return candidate.is_some_and(|candidate| {
+            candidate.name == alias.name
+                && candidate.module == alias.module
+                && canonical_path_for_comparison(&candidate.path)
+                    == canonical_path_for_comparison(&alias.path)
+                && candidate.range == alias.range
+                && candidate.import_from == alias.import_from
+        });
+    }
+    let position = QueryPosition {
+        line: range.start_line,
+        character: range.start_character,
+    };
+    let query = if let Some(symbols) = local_symbols {
+        index.query_source_definition_with_symbols(path, text, position, symbols)
+    } else {
+        index.query_source_at_navigation(path, text, position)
+    };
+    reference_query_matches_target(&query, target)
+}
+
+fn reference_query_matches_target(query: &QueryResult, target: &ResolvedReferenceTarget) -> bool {
+    query.resolution_confidence.as_deref() == Some("high")
+        && query.definition.as_ref().is_some_and(|candidate| {
+            same_definition_owner_identity(&target.definition, candidate)
+                && target.definition_ranges.contains(&candidate.range)
+        })
 }
 
 fn reference_path_is_collectible(

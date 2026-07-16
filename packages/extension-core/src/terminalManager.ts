@@ -23,6 +23,7 @@ export interface TerminalSettings {
 
 export class SageTerminalManager implements vscode.Disposable {
   private replTerminal: vscode.Terminal | undefined;
+  private replConfigurationKey: string | undefined;
   private readonly runTaskLifecycle: RunTaskLifecycle<vscode.TaskExecution>;
   private readonly taskEndSubscription: vscode.Disposable;
   private readonly runInvocationNonce = randomUUID();
@@ -41,6 +42,7 @@ export class SageTerminalManager implements vscode.Disposable {
   handleClosedTerminal(terminal: vscode.Terminal): void {
     if (this.replTerminal === terminal) {
       this.replTerminal = undefined;
+      this.replConfigurationKey = undefined;
     }
   }
 
@@ -48,12 +50,14 @@ export class SageTerminalManager implements vscode.Disposable {
     if (this.replTerminal) {
       this.replTerminal.dispose();
       this.replTerminal = undefined;
+      this.replConfigurationKey = undefined;
     }
   }
 
   dispose(): void {
     this.replTerminal?.dispose();
     this.replTerminal = undefined;
+    this.replConfigurationKey = undefined;
     this.runTaskLifecycle.dispose();
   }
 
@@ -127,12 +131,22 @@ export class SageTerminalManager implements vscode.Disposable {
     interpreterPath: string;
     interpreterArgs: readonly string[];
   }): vscode.Terminal {
+    const configurationKey = JSON.stringify([
+      settings.interpreterPath,
+      ...settings.interpreterArgs,
+    ]);
+    if (this.replTerminal && this.replConfigurationKey !== configurationKey) {
+      this.replTerminal.dispose();
+      this.replTerminal = undefined;
+      this.replConfigurationKey = undefined;
+    }
     if (!this.replTerminal) {
       this.replTerminal = vscode.window.createTerminal({
         name: "Sage REPL",
         shellPath: settings.interpreterPath,
         shellArgs: [...settings.interpreterArgs],
       });
+      this.replConfigurationKey = configurationKey;
     }
 
     return this.replTerminal;

@@ -38,13 +38,29 @@ export function registerNavigationCommands(
 
       const selectedText = editor.document.getText(editor.selection).trim() || undefined;
       const languageServerUri = languageServerUriForDocument(editor.document);
-      const result = await requestDocumentation(
-        activeClient,
-        languageServerUri.toString(),
-        editor.selection.active.line,
-        editor.selection.active.character,
-        selectedText,
-      );
+      let result: Awaited<ReturnType<typeof requestDocumentation>>;
+      try {
+        result = await requestDocumentation(
+          activeClient,
+          languageServerUri.toString(),
+          editor.selection.active.line,
+          editor.selection.active.character,
+          selectedText,
+        );
+      } catch (error) {
+        dependencies.logger.error("navigation", "Sage documentation request failed", {
+          uri: editor.document.uri.toString(),
+          error: String(error),
+        });
+        const selectedAction = await vscode.window.showErrorMessage(
+          `Sage documentation request did not complete: ${String(error)}`,
+          "Restart Language Server",
+        );
+        if (selectedAction === "Restart Language Server") {
+          await vscode.commands.executeCommand("sage.restartLanguageServer");
+        }
+        return;
+      }
 
       if (!result) {
         const selectedAction = await vscode.window.showInformationMessage(

@@ -8,6 +8,7 @@ import type {
 } from "vscode-languageserver-protocol";
 
 import type { OutputLogger } from "./extensionLogger";
+import { registerExternalSourceLanguageFeatureProviders } from "./externalSourceLanguageFeatures";
 import { rewriteExternalDefinitionUris } from "./languageClient";
 import { isLspLocationPayload, type LspLocationPayload } from "./sageNavigation";
 import { locationFromLspPayload } from "./referenceQuickPick";
@@ -81,9 +82,7 @@ export function registerExternalSourceNavigationProviders(
         return null;
       }
       // Address the backing file directly while the visible editor remains the
-      // read-only sage-source view. Do not open a hidden file document here:
-      // doing so can leave the LSP with an independently cached text version
-      // after an external Git checkout or atomic save.
+      // read-only sage-source view. Do not open a hidden file document here.
       const response = await activeClient.sendRequest<ProtocolDefinition | ProtocolDefinitionLink[] | null>(
         method,
         {
@@ -187,10 +186,16 @@ export function registerExternalSourceNavigationProviders(
     vscode.languages.registerReferenceProvider(selector, {
       provideReferences: requestReferences,
     }),
+    ...registerExternalSourceLanguageFeatureProviders({
+      ...dependencies,
+      sourceFileUri: externalSourceFileUri,
+      textIsCurrent: (document, sourceUri) =>
+        externalSourceTextIsCurrent(document, sourceUri, dependencies),
+    }),
   ];
 }
 
-async function externalSourceTextIsCurrent(
+export async function externalSourceTextIsCurrent(
   document: vscode.TextDocument,
   sourceUri: vscode.Uri,
   dependencies: ExternalSourceNavigationDependencies,
@@ -203,8 +208,7 @@ async function externalSourceTextIsCurrent(
     return true;
   }
   // Never forward a position from stale visible text to the current file. The
-  // provider refresh is asynchronous, so the user can retry once the editor has
-  // visibly caught up with the backing source.
+  // provider refresh is asynchronous, so the user can retry after the view catches up.
   dependencies.refreshExternalSourceDocument?.(document);
   dependencies.logger.warn("navigation", "external Sage source changed before navigation; refreshing view", {
     uri: document.uri.toString(),

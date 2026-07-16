@@ -20,3 +20,26 @@ export function assertPinnedNodeVersion(repositoryRoot, actual = process.version
   }
   return expected;
 }
+
+export function pinnedNpmVersion(repositoryRoot) {
+  const packageJsonPath = path.join(repositoryRoot, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
+  const match = /^npm@(\d+\.\d+\.\d+)$/.exec(packageJson.packageManager ?? "");
+  if (!match) {
+    throw new Error(
+      `Expected an exact npm packageManager version in ${packageJsonPath}, got ${JSON.stringify(packageJson.packageManager)}`,
+    );
+  }
+  return match[1];
+}
+
+export function assertPinnedNpmVersion(repositoryRoot, actual) {
+  const expected = pinnedNpmVersion(repositoryRoot);
+  if (actual !== expected) {
+    throw new Error(
+      `VSIX packaging requires npm ${expected} from package.json; current runtime is ${actual}. `
+      + "Switch npm versions before building a release artifact.",
+    );
+  }
+  return expected;
+}

@@ -80,3 +80,4 @@ mod import_resolution;
 mod parsing_preprocess;
 mod runtime_reconcile;
 mod sage_navigation;
+mod strict_navigation;
