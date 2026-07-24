@@ -279,7 +279,9 @@ pub(super) fn parse_star_import(line: &str) -> Option<String> {
 
 pub(super) fn parse_multiline_from_import_start(line: &str) -> Option<(String, &str)> {
     let line = line.strip_prefix("from ")?;
-    let (module, rest) = line.split_once(" import ")?;
+    let (module, rest) = line
+        .split_once(" import ")
+        .or_else(|| line.split_once(" cimport "))?;
     let rest = rest.trim_start();
     let rest = rest.strip_prefix('(')?;
     Some((module.trim().to_string(), rest))

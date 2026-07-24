@@ -564,13 +564,15 @@ fn collect_indexable_paths_limits_installed_site_packages_to_sage_package() {
 #[test]
 fn sage_prewarm_modules_cover_sage_heavy_method_paths() {
     let modules = sage_prewarm_modules_for_source(
-            "from sage.all import GF, PolynomialRing, matrix\nmat = matrix(GF(7), 2, 2)\nrank = mat.rank()\nR = PolynomialRing(GF(7), 'x')\nI = R.ideal([])\n",
+            "from sage.all import GF, Polyhedron, PolynomialRing, matrix\nmat = matrix(GF(7), 2, 2)\nrank = mat.rank()\nR = PolynomialRing(GF(7), 'x')\nI = R.ideal([])\npoly = Polyhedron(vertices=[])\nvolume = poly.volume()\n",
         );
 
     assert!(modules.contains(&"sage.matrix.matrix0"));
     assert!(modules.contains(&"sage.matrix.matrix2"));
     assert!(modules.contains(&"sage.rings.polynomial.multi_polynomial_libsingular"));
     assert!(modules.contains(&"sage.rings.polynomial.multi_polynomial_ideal"));
+    assert!(modules.contains(&"sage.geometry.polyhedron.base0"));
+    assert!(modules.contains(&"sage.geometry.polyhedron.base7"));
 }
 
 #[test]

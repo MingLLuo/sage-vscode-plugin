@@ -500,6 +500,23 @@ fn augmented_rebinding_name(line: &str) -> Option<&str> {
 }
 
 pub(crate) fn line_rebinds_name(line: &str, target: &str) -> bool {
+    if preparser_assignment_re()
+        .captures(line)
+        .is_some_and(|captures| {
+            captures
+                .name("parent")
+                .is_some_and(|name| name.as_str() == target)
+                || captures.name("symbols").is_some_and(|symbols| {
+                    symbols
+                        .as_str()
+                        .split(',')
+                        .map(str::trim)
+                        .any(|name| name == target)
+                })
+        })
+    {
+        return true;
+    }
     if simple_assignment_re()
         .captures(line)
         .and_then(|captures| captures.name("name"))

@@ -7,7 +7,9 @@ mod editor_features;
 mod index_jobs;
 mod initialization;
 mod linked_document_prewarm;
+mod navigation;
 mod open_documents;
+mod references;
 mod runtime_docs;
 mod signature_help;
 mod source_symbols;
@@ -24,9 +26,7 @@ use call_hierarchy::{
 use document_links::sage_document_links;
 #[cfg(test)]
 use editor_features::sage_selection_range;
-use editor_features::{
-    code_before_comment, sage_folding_ranges, sage_inlay_hints, sage_selection_ranges,
-};
+use editor_features::{sage_folding_ranges, sage_inlay_hints, sage_selection_ranges};
 #[cfg(test)]
 use index_jobs::index_job_result_is_current;
 use initialization::{
@@ -37,20 +37,31 @@ use initialization::{
 use linked_document_prewarm::import_modules_for_prewarm;
 use linked_document_prewarm::LinkedDocumentPrewarmer;
 #[cfg(test)]
+use navigation::{
+    live_definition_range, navigation_response_for_links,
+    should_defer_python_import_definition_to_python_provider, NavigationQueryCacheKey,
+};
+use navigation::{navigation_query_cache_key, NavigationLinkSupport, NavigationQueryCache};
+#[cfg(test)]
 use open_documents::source_text_fingerprint;
 use open_documents::{
-    canonical_path_for_comparison, live_document_for_path, live_document_for_uri_or_path,
-    physical_paths as open_document_physical_paths, unique_live_documents, uri_to_path,
-    OpenDocument, OpenDocumentMap,
+    live_document_for_path, live_document_for_uri_or_path, uri_to_path, OpenDocument,
+    OpenDocumentMap,
 };
-use rayon::prelude::*;
+use references::ReferenceCollectionMode;
+#[cfg(test)]
+use references::{
+    indexed_reference_locations, local_import_alias_rename_target,
+    local_import_alias_rename_target_with_symbols, push_scoped_reference_location,
+    reference_candidate_matches_target, reference_candidate_matches_target_with_symbols,
+    reference_path_is_collectible, same_definition_identity, same_definition_owner_identity,
+    ResolvedReferenceTarget,
+};
 use runtime_docs::{RuntimeDocsConfig, RuntimeDocsWorker};
 use sage_index::{
-    default_cache_dir, function_call_at_position, is_code_reference_at_range,
-    local_import_alias_symbol_from_source, local_import_alias_symbol_from_source_name,
-    local_import_alias_symbol_from_symbols, parse_source, semantic_spans, DocumentationRecord,
-    IndexOptions, QueryCompletion, QueryDefinition, QueryFeatures, QueryPosition, QueryResult,
-    SymbolKind as SageSymbolKind, SymbolRecord, WorkspaceIndex,
+    default_cache_dir, function_call_at_position, parse_source, semantic_spans,
+    DocumentationRecord, IndexOptions, QueryCompletion, QueryDefinition, QueryFeatures,
+    QueryPosition, QueryResult, SymbolKind as SageSymbolKind, SymbolRecord, WorkspaceIndex,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -58,14 +69,16 @@ use signature_help::signature_information;
 #[cfg(test)]
 use signature_help::signature_parameter_offsets;
 use source_symbols::{document_symbols_for_source, module_name_for_path};
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+#[cfg(test)]
+use std::collections::BTreeSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use text_positions::{
     apply_text_document_change, byte_offset_to_utf16_character, is_word_byte, line_byte_bounds,
-    lsp_position_for_byte_column, lsp_range_for_path, lsp_range_for_text, query_position_from_lsp,
+    lsp_position_for_byte_column, lsp_range_for_text, query_position_from_lsp,
     utf16_character_to_byte_offset, word_at_position,
 };
 use tokio::sync::{Mutex, RwLock};
@@ -138,126 +151,6 @@ struct Backend {
     shutting_down: Arc<AtomicBool>,
     linked_document_prewarmer: LinkedDocumentPrewarmer,
     runtime_docs: RuntimeDocsWorker,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct NavigationLinkSupport {
-    declaration: bool,
-    definition: bool,
-    implementation: bool,
-}
-
-impl NavigationLinkSupport {
-    fn from_client_capabilities(capabilities: &ClientCapabilities) -> Self {
-        let Some(text_document) = capabilities.text_document.as_ref() else {
-            return Self::default();
-        };
-        Self {
-            declaration: text_document
-                .declaration
-                .as_ref()
-                .and_then(|capability| capability.link_support)
-                .unwrap_or(false),
-            definition: text_document
-                .definition
-                .as_ref()
-                .and_then(|capability| capability.link_support)
-                .unwrap_or(false),
-            implementation: text_document
-                .implementation
-                .as_ref()
-                .and_then(|capability| capability.link_support)
-                .unwrap_or(false),
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-struct NavigationQueryCacheKey {
-    uri: String,
-    version: i32,
-    content_fingerprint: Option<u64>,
-    line: u32,
-    character: u32,
-    index_generation: u64,
-}
-
-#[derive(Debug, Default)]
-struct NavigationQueryCache {
-    entries: HashMap<NavigationQueryCacheKey, QueryResult>,
-    order: VecDeque<NavigationQueryCacheKey>,
-}
-
-impl NavigationQueryCache {
-    fn get(&self, key: &NavigationQueryCacheKey) -> Option<QueryResult> {
-        self.entries.get(key).cloned()
-    }
-
-    fn insert(&mut self, key: NavigationQueryCacheKey, query: QueryResult) {
-        const CAPACITY: usize = 128;
-        if !self.entries.contains_key(&key) {
-            self.order.push_back(key.clone());
-        }
-        self.entries.insert(key, query);
-        while self.entries.len() > CAPACITY {
-            if let Some(oldest) = self.order.pop_front() {
-                self.entries.remove(&oldest);
-            }
-        }
-    }
-
-    fn invalidate_uri(&mut self, uri: &Url) {
-        let uri = uri.to_string();
-        self.entries.retain(|key, _| key.uri != uri);
-        self.order.retain(|key| key.uri != uri);
-    }
-
-    fn clear(&mut self) {
-        self.entries.clear();
-        self.order.clear();
-    }
-}
-
-fn navigation_query_cache_key(
-    uri: &Url,
-    document: &OpenDocument,
-    position: Position,
-    index_generation: u64,
-) -> NavigationQueryCacheKey {
-    NavigationQueryCacheKey {
-        uri: uri.to_string(),
-        version: document.version,
-        content_fingerprint: document.content_fingerprint,
-        line: position.line,
-        character: position.character,
-        index_generation,
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RenameTarget {
-    word: String,
-    range: Range,
-    definition: QueryDefinition,
-    definition_ranges: Vec<sage_index::SourceRange>,
-    declaration: Location,
-    local_import_alias: Option<SymbolRecord>,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ReferenceCollectionMode {
-    References,
-    Rename,
-}
-
-#[derive(Clone, Debug)]
-struct ResolvedReferenceTarget {
-    word: String,
-    range: Range,
-    definition: QueryDefinition,
-    definition_ranges: Vec<sage_index::SourceRange>,
-    declaration: Option<Location>,
-    local_import_alias: Option<SymbolRecord>,
 }
 
 #[derive(Clone, Debug)]
@@ -681,164 +574,28 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let Some(document) = self.document_for_uri(uri).await else {
-            return Ok(None);
-        };
-        let Some(path) = uri_to_path(uri) else {
-            return Ok(None);
-        };
-        let query = self
-            .navigation_query_for_document(
-                uri,
-                &document,
-                &path,
-                params.text_document_position_params.position,
-            )
-            .await;
-        if query.resolution_confidence.as_deref() == Some("high") {
-            let Some(definition) = query.definition.as_ref() else {
-                return Ok(None);
-            };
-            let Some(location) = self.location_for_query_definition(definition).await else {
-                return Ok(None);
-            };
-            return Ok(Some(GotoDefinitionResponse::Scalar(location)));
-        }
-        let origin_range = query
-            .target
-            .as_ref()
-            .map(|target| lsp_range_for_text(&document.text, &target.range));
-        let links = self
-            .links_for_navigation_candidates(&query, origin_range)
-            .await;
-        if links.len() < 2 {
-            return Ok(None);
-        }
-        let link_support = self.navigation_link_support.read().await.definition;
-        Ok(Some(navigation_response_for_links(links, link_support)))
+        self.goto_definition_response(params).await
     }
 
     async fn goto_declaration(
         &self,
         params: GotoDeclarationParams,
     ) -> Result<Option<GotoDeclarationResponse>> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let Some(document) = self.document_for_uri(uri).await else {
-            return Ok(None);
-        };
-        let Some(path) = uri_to_path(uri) else {
-            return Ok(None);
-        };
-        let query = self
-            .navigation_query_for_document(
-                uri,
-                &document,
-                &path,
-                params.text_document_position_params.position,
-            )
-            .await;
-        if query.resolution_confidence.as_deref() == Some("high") {
-            let Some(definition) = query.definition.as_ref() else {
-                return Ok(None);
-            };
-            let Some(location) = self.location_for_query_definition(definition).await else {
-                return Ok(None);
-            };
-            return Ok(Some(GotoDeclarationResponse::Scalar(location)));
-        }
-        let origin_range = query
-            .target
-            .as_ref()
-            .map(|target| lsp_range_for_text(&document.text, &target.range));
-        let links = self
-            .links_for_navigation_candidates(&query, origin_range)
-            .await;
-        if links.len() < 2 {
-            return Ok(None);
-        }
-        let link_support = self.navigation_link_support.read().await.declaration;
-        Ok(Some(navigation_response_for_links(links, link_support)))
+        self.goto_declaration_response(params).await
     }
 
     async fn goto_type_definition(
         &self,
         params: GotoTypeDefinitionParams,
     ) -> Result<Option<GotoTypeDefinitionResponse>> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let Some(document) = self.document_for_uri(uri).await else {
-            return Ok(None);
-        };
-        let Some(path) = uri_to_path(uri) else {
-            return Ok(None);
-        };
-        let Some(query_position) = query_position_from_lsp(
-            &document.text,
-            params.text_document_position_params.position,
-        ) else {
-            return Ok(None);
-        };
-        let index = self.index.read().await;
-        let Some(definition) =
-            index.type_definition_at_source(&path, &document.text, query_position)
-        else {
-            return Ok(None);
-        };
-        drop(index);
-        let Some(location) = self.location_for_query_definition(&definition).await else {
-            return Ok(None);
-        };
-        Ok(Some(GotoTypeDefinitionResponse::Scalar(location)))
+        self.goto_type_definition_response(params).await
     }
 
     async fn goto_implementation(
         &self,
         params: GotoImplementationParams,
     ) -> Result<Option<GotoImplementationResponse>> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let Some(document) = self.document_for_uri(uri).await else {
-            return Ok(None);
-        };
-        let Some(path) = uri_to_path(uri) else {
-            return Ok(None);
-        };
-        let query = self
-            .navigation_query_for_document(
-                uri,
-                &document,
-                &path,
-                params.text_document_position_params.position,
-            )
-            .await;
-        if query.resolution_confidence.as_deref() == Some("high") {
-            let Some(definition) = query.definition.as_ref() else {
-                return Ok(None);
-            };
-            if should_defer_python_import_definition_to_python_provider(
-                &path,
-                &document.text,
-                params.text_document_position_params.position,
-                definition,
-            ) {
-                return Ok(None);
-            }
-            let Some(location) = self.location_for_query_definition(definition).await else {
-                return Ok(None);
-            };
-            return Ok(Some(GotoImplementationResponse::Scalar(location)));
-        }
-        let origin_range = query
-            .target
-            .as_ref()
-            .map(|target| lsp_range_for_text(&document.text, &target.range));
-        let links = self
-            .links_for_navigation_candidates(&query, origin_range)
-            .await;
-        if links.len() < 2 {
-            return Ok(None);
-        }
-        let link_support = self.navigation_link_support.read().await.implementation;
-        Ok(Some(navigation_response_for_links(links, link_support)))
+        self.goto_implementation_response(params).await
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -904,21 +661,7 @@ impl LanguageServer for Backend {
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
-        let uri = &params.text_document_position.text_document.uri;
-        let Some(target) = self
-            .resolved_reference_target_at(uri, params.text_document_position.position)
-            .await
-        else {
-            return Ok(Some(Vec::new()));
-        };
-        Ok(Some(
-            self.reference_locations(
-                &target,
-                params.context.include_declaration,
-                ReferenceCollectionMode::References,
-            )
-            .await,
-        ))
+        self.references_response(params).await
     }
 
     async fn document_highlight(
@@ -947,58 +690,14 @@ impl LanguageServer for Backend {
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
-        let uri = &params.text_document_position.text_document.uri;
-        let Some(target) = self
-            .rename_target(uri, params.text_document_position.position)
-            .await
-        else {
-            return Ok(None);
-        };
-        if !is_valid_identifier(&params.new_name) {
-            return Ok(None);
-        }
-        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
-        for location in self
-            .reference_locations(
-                &ResolvedReferenceTarget {
-                    word: target.word.clone(),
-                    range: target.range,
-                    definition: target.definition.clone(),
-                    definition_ranges: target.definition_ranges.clone(),
-                    declaration: Some(target.declaration),
-                    local_import_alias: target.local_import_alias,
-                },
-                true,
-                ReferenceCollectionMode::Rename,
-            )
-            .await
-        {
-            changes.entry(location.uri).or_default().push(TextEdit {
-                range: location.range,
-                new_text: params.new_name.clone(),
-            });
-        }
-        Ok(Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }))
+        self.rename_response(params).await
     }
 
     async fn prepare_rename(
         &self,
         params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
-        let Some(target) = self
-            .rename_target(&params.text_document.uri, params.position)
-            .await
-        else {
-            return Ok(None);
-        };
-        Ok(Some(PrepareRenameResponse::RangeWithPlaceholder {
-            range: target.range,
-            placeholder: target.word,
-        }))
+        self.prepare_rename_response(params).await
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
@@ -1413,30 +1112,6 @@ impl Backend {
         Some(OpenDocument::on_disk(uri, text))
     }
 
-    async fn location_for_query_definition(
-        &self,
-        definition: &QueryDefinition,
-    ) -> Option<Location> {
-        if let Some((uri, document)) = self.open_document_for_path(&definition.path).await {
-            let range = live_definition_range(definition, &document.text)?;
-            return Some(Location {
-                uri,
-                range: lsp_range_for_text(&document.text, &range),
-            });
-        }
-        let uri = Url::from_file_path(&definition.path).ok()?;
-        Some(Location {
-            uri,
-            range: lsp_range_for_path(&definition.path, &definition.range),
-        })
-    }
-
-    async fn open_document_for_path(&self, path: &Path) -> Option<(Url, OpenDocument)> {
-        let documents = self.open_documents.read().await;
-        let live = live_document_for_path(&documents, path)?;
-        Some((live.uri, live.document))
-    }
-
     async fn call_hierarchy_item_for_definition(
         &self,
         definition: &QueryDefinition,
@@ -1479,35 +1154,6 @@ impl Backend {
         );
     }
 
-    async fn navigation_query_for_document(
-        &self,
-        uri: &Url,
-        document: &OpenDocument,
-        path: &Path,
-        position: Position,
-    ) -> QueryResult {
-        let Some(query_position) = query_position_from_lsp(&document.text, position) else {
-            return QueryResult {
-                fallback_reason: Some("invalid-lsp-position".to_string()),
-                ..QueryResult::default()
-            };
-        };
-        let index = self.index.read().await;
-        let index_generation = index.status().generation;
-        let key = navigation_query_cache_key(uri, document, position, index_generation);
-        if let Some(query) = self.navigation_cache.read().await.get(&key) {
-            drop(index);
-            return query;
-        }
-        let query = index.query_source_at_navigation(path, &document.text, query_position);
-        self.navigation_cache.write().await.insert(
-            navigation_query_cache_key(uri, document, position, index_generation),
-            query.clone(),
-        );
-        drop(index);
-        query
-    }
-
     async fn text_for_uri_or_file(&self, uri: &Url) -> Option<String> {
         let documents = self.open_documents.read().await;
         if let Some(live) = live_document_for_uri_or_path(&documents, uri) {
@@ -1521,207 +1167,6 @@ impl Backend {
     async fn prefix_at_uri_position(&self, uri: &Url, position: Position) -> Option<String> {
         let document = self.document_for_uri(uri).await?;
         current_prefix(&document.text, position)
-    }
-
-    async fn rename_target(&self, uri: &Url, position: Position) -> Option<RenameTarget> {
-        let document = self.document_for_uri(uri).await?;
-        let path = uri_to_path(uri)?;
-        let physical_path = canonical_path_for_comparison(&path);
-        let (word, range) = word_at_position(&document.text, position)?;
-        if !is_valid_identifier(&word)
-            || !is_code_reference_range(&path, &document.text, &word, range)
-        {
-            return None;
-        }
-        let parsed = self
-            .index
-            .read()
-            .await
-            .parse_source_for_query(&physical_path, &document.text);
-        if let Some(target) = local_import_alias_rename_target_with_symbols(
-            uri,
-            &document.text,
-            &word,
-            range,
-            &parsed.symbols,
-        ) {
-            if !self
-                .index
-                .read()
-                .await
-                .is_editable_path(&target.definition.path)
-            {
-                return None;
-            }
-            return Some(target);
-        }
-        let target = self.resolved_reference_target_at(uri, position).await?;
-        let is_editable = self
-            .index
-            .read()
-            .await
-            .is_editable_path(&target.definition.path);
-        if !is_editable {
-            return None;
-        }
-        Some(RenameTarget {
-            word: target.word,
-            range: target.range,
-            definition: target.definition,
-            definition_ranges: target.definition_ranges,
-            declaration: target.declaration?,
-            local_import_alias: None,
-        })
-    }
-
-    async fn resolved_reference_target_at(
-        &self,
-        uri: &Url,
-        position: Position,
-    ) -> Option<ResolvedReferenceTarget> {
-        let document = self.document_for_uri(uri).await?;
-        let path = uri_to_path(uri)?;
-        let (word, range) = word_at_position(&document.text, position)?;
-        if !is_valid_identifier(&word)
-            || !is_code_reference_range(&path, &document.text, &word, range)
-        {
-            return None;
-        }
-        let query = self
-            .navigation_query_for_document(uri, &document, &path, position)
-            .await;
-        if query.resolution_confidence.as_deref() != Some("high") {
-            return None;
-        }
-        let definition = query.definition?;
-        let definition_ranges = self.definition_identity_ranges(&definition).await;
-        let declaration = self.location_for_query_definition(&definition).await;
-        Some(ResolvedReferenceTarget {
-            word,
-            range,
-            definition,
-            definition_ranges,
-            declaration,
-            local_import_alias: None,
-        })
-    }
-
-    async fn definition_identity_ranges(
-        &self,
-        definition: &QueryDefinition,
-    ) -> Vec<sage_index::SourceRange> {
-        let mut ranges = vec![definition.range.clone()];
-        if let Some((_, document)) = self.open_document_for_path(&definition.path).await {
-            if let Some(range) = live_definition_range(definition, &document.text) {
-                if !ranges.contains(&range) {
-                    ranges.push(range);
-                }
-            }
-        }
-        if let Ok(text) = std::fs::read_to_string(&definition.path) {
-            let mut matching = parse_source(
-                module_name_for_path(&definition.path),
-                &definition.path,
-                &text,
-            )
-            .symbols
-            .into_iter()
-            .filter(|symbol| symbol.name == definition.name && symbol.detail == definition.detail);
-            if let Some(symbol) = matching.next() {
-                if matching.next().is_none() && !ranges.contains(&symbol.range) {
-                    ranges.push(symbol.range);
-                }
-            }
-        }
-        ranges
-    }
-
-    async fn links_for_navigation_candidates(
-        &self,
-        query: &QueryResult,
-        origin_selection_range: Option<Range>,
-    ) -> Vec<LocationLink> {
-        let mut links = Vec::new();
-        let mut seen = BTreeSet::new();
-        for candidate in &query.definition_candidates {
-            let Some(location) = self
-                .location_for_query_definition(&candidate.definition)
-                .await
-            else {
-                continue;
-            };
-            if seen.insert(location_reference_key(&location.uri, &location.range)) {
-                links.push(LocationLink {
-                    origin_selection_range,
-                    target_uri: location.uri,
-                    target_range: location.range,
-                    target_selection_range: location.range,
-                });
-            }
-        }
-        links
-    }
-
-    async fn reference_locations(
-        &self,
-        target: &ResolvedReferenceTarget,
-        include_declaration: bool,
-        mode: ReferenceCollectionMode,
-    ) -> Vec<Location> {
-        let mut seen = BTreeSet::new();
-        let mut locations = Vec::new();
-        let open_documents = self.open_documents.read().await.clone();
-        let open_paths: BTreeSet<PathBuf> = open_document_physical_paths(&open_documents)
-            .into_iter()
-            .collect();
-        if include_declaration {
-            if let Some(declaration) = target.declaration.clone() {
-                push_reference_location(&mut locations, &mut seen, declaration);
-            }
-        }
-        let index = self.index.read().await;
-        let indexed_locations = indexed_reference_locations(&index, target, mode, &open_paths);
-        for location in indexed_locations {
-            push_scoped_reference_location(
-                &mut locations,
-                &mut seen,
-                location,
-                target.declaration.as_ref(),
-                include_declaration,
-            );
-        }
-        for live in unique_live_documents(&open_documents) {
-            if !reference_path_is_collectible(&index, &live.path, mode) {
-                continue;
-            }
-            let parsed = index.parse_source_for_query(&live.path, &live.document.text);
-            for reference in
-                sage_index::references_in_source(&live.path, &live.document.text, &target.word)
-            {
-                if !reference_candidate_matches_target_with_symbols(
-                    &index,
-                    &live.path,
-                    &live.document.text,
-                    &reference.range,
-                    target,
-                    Some(&parsed.symbols),
-                ) {
-                    continue;
-                }
-                push_scoped_reference_location(
-                    &mut locations,
-                    &mut seen,
-                    Location {
-                        uri: live.uri.clone(),
-                        range: lsp_range_for_text(&live.document.text, &reference.range),
-                    },
-                    target.declaration.as_ref(),
-                    include_declaration,
-                );
-            }
-        }
-        drop(index);
-        locations
     }
 
     async fn documentation_payload(&self, payload: Value) -> Option<Value> {
@@ -1937,47 +1382,6 @@ impl Backend {
     }
 }
 
-#[cfg(test)]
-fn local_import_alias_rename_target(
-    uri: &Url,
-    physical_path: &Path,
-    text: &str,
-    word: &str,
-    range: Range,
-) -> Option<RenameTarget> {
-    let symbols = parse_source(module_name_for_path(physical_path), physical_path, text).symbols;
-    local_import_alias_rename_target_with_symbols(uri, text, word, range, &symbols)
-}
-
-fn local_import_alias_rename_target_with_symbols(
-    uri: &Url,
-    text: &str,
-    word: &str,
-    range: Range,
-    symbols: &[SymbolRecord],
-) -> Option<RenameTarget> {
-    let source_range = source_range_from_lsp(text, range)?;
-    let alias = local_import_alias_symbol_from_symbols(text, symbols, word, &source_range)?;
-    let definition = QueryDefinition {
-        name: alias.name.clone(),
-        path: alias.path.clone(),
-        range: alias.range.clone(),
-        detail: alias.detail.clone(),
-        module: alias.module.clone(),
-    };
-    Some(RenameTarget {
-        word: word.to_string(),
-        range,
-        definition,
-        definition_ranges: vec![alias.range.clone()],
-        declaration: Location {
-            uri: uri.clone(),
-            range: lsp_range_for_text(text, &alias.range),
-        },
-        local_import_alias: Some(alias),
-    })
-}
-
 fn documentation_record_for_source_position(
     index: &WorkspaceIndex,
     path: &Path,
@@ -2175,24 +1579,8 @@ fn document_highlights_for_source(
         .collect()
 }
 
-fn is_code_reference_range(_path: &Path, text: &str, word: &str, target_range: Range) -> bool {
-    source_range_from_lsp(text, target_range)
-        .is_some_and(|range| sage_index::is_code_reference_at_range(text, word, &range))
-}
-
 fn may_fallback_to_enclosing_call_hierarchy(text: &str, position: Position) -> bool {
     word_at_position(text, position).is_none()
-}
-
-fn source_range_from_lsp(text: &str, range: Range) -> Option<sage_index::SourceRange> {
-    let start = query_position_from_lsp(text, range.start)?;
-    let end = query_position_from_lsp(text, range.end)?;
-    Some(sage_index::SourceRange {
-        start_line: start.line,
-        start_character: start.character,
-        end_line: end.line,
-        end_character: end.character,
-    })
 }
 
 fn is_incomplete_sage_exponent_diagnostic(diagnostic: &Diagnostic) -> bool {
@@ -2366,118 +1754,6 @@ fn query_completion_kind(kind: &str) -> CompletionItemKind {
     }
 }
 
-fn live_definition_range(
-    definition: &QueryDefinition,
-    text: &str,
-) -> Option<sage_index::SourceRange> {
-    parse_source(
-        module_name_for_path(&definition.path),
-        &definition.path,
-        text,
-    )
-    .symbols
-    .into_iter()
-    .filter(|symbol| symbol.name == definition.name)
-    .filter(|symbol| !matches!(symbol.kind, SageSymbolKind::Module | SageSymbolKind::Import))
-    .filter(|symbol| definition.detail.is_empty() || symbol.detail == definition.detail)
-    .min_by_key(|symbol| {
-        symbol
-            .range
-            .start_line
-            .abs_diff(definition.range.start_line)
-    })
-    .map(|symbol| symbol.range)
-    .or_else(|| live_parameter_definition_range(definition, text))
-}
-
-fn live_parameter_definition_range(
-    definition: &QueryDefinition,
-    text: &str,
-) -> Option<sage_index::SourceRange> {
-    if !definition.detail.starts_with("Local parameter ")
-        || definition.range.start_line != definition.range.end_line
-        || !is_code_reference_at_range(text, &definition.name, &definition.range)
-    {
-        return None;
-    }
-    Some(definition.range.clone())
-}
-
-fn should_defer_python_import_definition_to_python_provider(
-    path: &Path,
-    text: &str,
-    position: Position,
-    definition: &QueryDefinition,
-) -> bool {
-    if path.extension().and_then(|extension| extension.to_str()) != Some("py") {
-        return false;
-    }
-    if !definition.module.starts_with("sage.") {
-        return false;
-    }
-    let Some((word, _)) = word_at_position(text, position) else {
-        return false;
-    };
-    if word != definition.name {
-        return false;
-    }
-    is_sage_from_import_item_position(text, position.line, &word)
-}
-
-fn is_sage_from_import_item_position(text: &str, line_number: u32, word: &str) -> bool {
-    let lines = text.lines().collect::<Vec<_>>();
-    let Some(line) = lines.get(line_number as usize) else {
-        return false;
-    };
-    let trimmed = code_before_comment(line).trim();
-    if !line_looks_like_import_item(trimmed, word) {
-        return false;
-    }
-    if let Some(module) = sage_from_import_module(trimmed) {
-        return module.starts_with("sage.");
-    }
-
-    let mut current = line_number as usize;
-    let mut scanned = 0usize;
-    while current > 0 && scanned < 40 {
-        current -= 1;
-        scanned += 1;
-        let previous = code_before_comment(lines[current]).trim();
-        if previous.is_empty() {
-            return false;
-        }
-        if let Some(module) = sage_from_import_module(previous) {
-            return module.starts_with("sage.");
-        }
-        if !line_looks_like_import_continuation(previous) {
-            return false;
-        }
-    }
-    false
-}
-
-fn sage_from_import_module(line: &str) -> Option<&str> {
-    let rest = line.strip_prefix("from ")?;
-    let import_index = rest.find(" import")?;
-    Some(rest[..import_index].trim())
-}
-
-fn line_looks_like_import_item(line: &str, word: &str) -> bool {
-    if let Some(module) = sage_from_import_module(line) {
-        return module.starts_with("sage.") && line[5 + module.len()..].contains(word);
-    }
-    let item = line.trim_end_matches(',').trim();
-    item == word
-        || item
-            .strip_prefix(word)
-            .is_some_and(|rest| rest.trim_start().starts_with("as "))
-}
-
-fn line_looks_like_import_continuation(line: &str) -> bool {
-    let item = line.trim_end_matches(',').trim();
-    item == "(" || item == ")" || item.bytes().next().is_some_and(is_identifier_start)
-}
-
 fn current_prefix(text: &str, position: Position) -> Option<String> {
     let line = text.lines().nth(position.line as usize)?;
     let character = utf16_character_to_byte_offset(line, position.character)?;
@@ -2487,282 +1763,6 @@ fn current_prefix(text: &str, position: Position) -> Option<String> {
         start -= 1;
     }
     Some(line[start..character].to_string())
-}
-
-fn is_valid_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
-}
-
-fn location_reference_key(uri: &Url, range: &Range) -> String {
-    format!(
-        "{}:{}:{}:{}:{}",
-        uri, range.start.line, range.start.character, range.end.line, range.end.character
-    )
-}
-
-fn navigation_response_for_links(
-    links: Vec<LocationLink>,
-    link_support: bool,
-) -> GotoDefinitionResponse {
-    if link_support {
-        return GotoDefinitionResponse::Link(links);
-    }
-    GotoDefinitionResponse::Array(
-        links
-            .into_iter()
-            .map(|link| Location {
-                uri: link.target_uri,
-                range: link.target_selection_range,
-            })
-            .collect(),
-    )
-}
-
-fn push_reference_location(
-    locations: &mut Vec<Location>,
-    seen: &mut BTreeSet<String>,
-    location: Location,
-) {
-    let key = location_reference_key(&location.uri, &location.range);
-    if seen.insert(key) {
-        locations.push(location);
-    }
-}
-
-fn push_scoped_reference_location(
-    locations: &mut Vec<Location>,
-    seen: &mut BTreeSet<String>,
-    location: Location,
-    declaration: Option<&Location>,
-    include_declaration: bool,
-) {
-    if !include_declaration
-        && declaration.is_some_and(|declaration| same_physical_location(declaration, &location))
-    {
-        return;
-    }
-    push_reference_location(locations, seen, location);
-}
-
-fn same_physical_location(left: &Location, right: &Location) -> bool {
-    if left.range != right.range {
-        return false;
-    }
-    match (uri_to_path(&left.uri), uri_to_path(&right.uri)) {
-        (Some(left), Some(right)) => {
-            canonical_path_for_comparison(&left) == canonical_path_for_comparison(&right)
-        }
-        _ => left.uri == right.uri,
-    }
-}
-
-#[cfg(test)]
-fn reference_candidate_matches_target(
-    index: &WorkspaceIndex,
-    path: &Path,
-    text: &str,
-    range: &sage_index::SourceRange,
-    target: &ResolvedReferenceTarget,
-) -> bool {
-    reference_candidate_matches_target_with_symbols(index, path, text, range, target, None)
-}
-
-fn reference_candidate_matches_target_with_symbols(
-    index: &WorkspaceIndex,
-    path: &Path,
-    text: &str,
-    range: &sage_index::SourceRange,
-    target: &ResolvedReferenceTarget,
-    local_symbols: Option<&[SymbolRecord]>,
-) -> bool {
-    if let Some(alias) = target.local_import_alias.as_ref() {
-        if canonical_path_for_comparison(path) != canonical_path_for_comparison(&alias.path) {
-            return false;
-        }
-        let candidate = if let Some(symbols) = local_symbols {
-            local_import_alias_symbol_from_symbols(text, symbols, &target.word, range)
-        } else {
-            local_import_alias_symbol_from_source(
-                &alias.module,
-                &alias.path,
-                text,
-                &target.word,
-                range,
-            )
-        };
-        return candidate.is_some_and(|candidate| {
-            candidate.name == alias.name
-                && candidate.module == alias.module
-                && canonical_path_for_comparison(&candidate.path)
-                    == canonical_path_for_comparison(&alias.path)
-                && candidate.range == alias.range
-                && candidate.import_from == alias.import_from
-        });
-    }
-    let parsed_symbols;
-    let symbols = if let Some(symbols) = local_symbols {
-        symbols
-    } else {
-        parsed_symbols = parse_source(module_name_for_path(path), path, text).symbols;
-        &parsed_symbols
-    };
-    let position = QueryPosition {
-        line: range.start_line,
-        character: range.start_character,
-    };
-    let query = if let Some(symbols) = local_symbols {
-        index.query_source_definition_with_symbols(path, text, position, symbols)
-    } else {
-        index.query_source_at_navigation(path, text, position)
-    };
-    reference_query_or_aliased_import_matches_target(
-        index, path, text, range, target, symbols, &query,
-    )
-}
-
-fn reference_query_or_aliased_import_matches_target(
-    index: &WorkspaceIndex,
-    path: &Path,
-    text: &str,
-    range: &sage_index::SourceRange,
-    target: &ResolvedReferenceTarget,
-    symbols: &[SymbolRecord],
-    query: &QueryResult,
-) -> bool {
-    if reference_query_matches_target(query, target) {
-        return true;
-    }
-    // `from provider import target as alias` contains two distinct rename domains. A rename
-    // started at `target` must update the imported source token, while preserving the local
-    // binding and all `alias(...)` uses. Resolve through the alias declaration and retain the
-    // existing high-confidence identity gate before accepting that source token.
-    let Some(alias) =
-        local_import_alias_symbol_from_source_name(text, symbols, &target.word, range)
-    else {
-        return false;
-    };
-    let alias_query = index.query_source_definition_with_symbols(
-        path,
-        text,
-        QueryPosition {
-            line: alias.range.start_line,
-            character: alias.range.start_character,
-        },
-        symbols,
-    );
-    reference_query_matches_target(&alias_query, target)
-}
-
-fn indexed_reference_locations(
-    index: &WorkspaceIndex,
-    target: &ResolvedReferenceTarget,
-    mode: ReferenceCollectionMode,
-    open_paths: &BTreeSet<PathBuf>,
-) -> Vec<Location> {
-    let indexed_references = match mode {
-        ReferenceCollectionMode::References => index.references(&target.word),
-        ReferenceCollectionMode::Rename => index.editable_references(&target.word),
-    };
-    let mut references_by_path: BTreeMap<PathBuf, Vec<sage_index::ReferenceRecord>> =
-        BTreeMap::new();
-    for reference in indexed_references {
-        if open_paths.contains(&canonical_path_for_comparison(&reference.path)) {
-            continue;
-        }
-        references_by_path
-            .entry(reference.path.clone())
-            .or_default()
-            .push(reference);
-    }
-    let mut locations: Vec<Location> = references_by_path
-        .into_iter()
-        .collect::<Vec<_>>()
-        .into_par_iter()
-        .map(|(path, references)| {
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                return Vec::new();
-            };
-            let Ok(uri) = Url::from_file_path(&path) else {
-                return Vec::new();
-            };
-            let parsed = index
-                .fresh_file_for_query(&path)
-                .unwrap_or_else(|| index.parse_source_for_query(&path, &text));
-            let ranges: Vec<_> = references
-                .iter()
-                .map(|reference| reference.range.clone())
-                .collect();
-            let queries = index.query_source_definitions_for_ranges_with_symbols(
-                &path,
-                &text,
-                &target.word,
-                &ranges,
-                &parsed.symbols,
-            );
-            references
-                .into_iter()
-                .zip(queries)
-                .filter(|(reference, query)| {
-                    reference_query_or_aliased_import_matches_target(
-                        index,
-                        &path,
-                        &text,
-                        &reference.range,
-                        target,
-                        &parsed.symbols,
-                        query,
-                    )
-                })
-                .map(|(reference, _)| Location {
-                    uri: uri.clone(),
-                    range: lsp_range_for_text(&text, &reference.range),
-                })
-                .collect()
-        })
-        .flatten()
-        .collect();
-    locations.sort_by(|left, right| {
-        left.uri
-            .as_str()
-            .cmp(right.uri.as_str())
-            .then(left.range.start.line.cmp(&right.range.start.line))
-            .then(left.range.start.character.cmp(&right.range.start.character))
-    });
-    locations
-}
-
-fn reference_query_matches_target(query: &QueryResult, target: &ResolvedReferenceTarget) -> bool {
-    query.resolution_confidence.as_deref() == Some("high")
-        && query.definition.as_ref().is_some_and(|candidate| {
-            same_definition_owner_identity(&target.definition, candidate)
-                && target.definition_ranges.contains(&candidate.range)
-        })
-}
-
-fn reference_path_is_collectible(
-    index: &WorkspaceIndex,
-    path: &Path,
-    mode: ReferenceCollectionMode,
-) -> bool {
-    mode == ReferenceCollectionMode::References
-        || index.is_editable_path(&canonical_path_for_comparison(path))
-}
-
-#[cfg(test)]
-fn same_definition_identity(left: &QueryDefinition, right: &QueryDefinition) -> bool {
-    same_definition_owner_identity(left, right) && left.range == right.range
-}
-
-fn same_definition_owner_identity(left: &QueryDefinition, right: &QueryDefinition) -> bool {
-    left.name == right.name
-        && left.module == right.module
-        && left.detail == right.detail
-        && canonical_path_for_comparison(&left.path) == canonical_path_for_comparison(&right.path)
 }
 
 fn encode_semantic_tokens(text: &str) -> Vec<SemanticToken> {

@@ -8,6 +8,21 @@ fn same_symbol_candidate(left: &SymbolRecord, right: &SymbolRecord) -> bool {
         && left.detail == right.detail
 }
 
+fn sage_owner_types_share_navigation_family(
+    expected: SageOwnerType,
+    candidate: SageOwnerType,
+) -> bool {
+    matches!(
+        (expected, candidate),
+        (
+            SageOwnerType::PolynomialRing,
+            SageOwnerType::PolynomialRing
+                | SageOwnerType::UnivariatePolynomialRing
+                | SageOwnerType::MultivariatePolynomialRing
+        )
+    ) || expected == candidate
+}
+
 pub(super) struct MemberResolutionContext<'a> {
     pub(super) module_hint: Option<&'a str>,
     pub(super) query_path: &'a Path,
@@ -113,11 +128,7 @@ impl WorkspaceIndex {
             if let Some(owner_type) =
                 infer_completion_owner_type(source, &context.owner, position.line)
             {
-                let completions =
-                    self.known_sage_method_completions(owner_type, &context.prefix, limit);
-                if !completions.is_empty() {
-                    return completions;
-                }
+                return self.known_sage_method_completions(owner_type, &context.prefix, limit);
             }
         }
         let prefix = current_prefix(source, position.line, position.character).unwrap_or_default();
@@ -558,21 +569,28 @@ impl WorkspaceIndex {
         let candidate_owner_type = strict_owner_type.or(heuristic_owner_type);
         let owner_type = strict_owner_type;
         if let Some(owner_type) = strict_owner_type {
-            if let Some(record) = self.resolve_known_sage_method_record(owner_type, member) {
-                return MemberResolution {
-                    record: Some(record),
-                    candidates: Vec::new(),
-                    owner_type: Some(owner_type),
-                    confidence: "high",
-                    reason: format!(
-                        "resolved Sage {} method `{}` from owner `{}`",
-                        owner_type.as_str(),
-                        member,
-                        owner
-                    ),
-                    candidate_count: 1,
-                    suppress_global_fallback: true,
-                };
+            // The generic catalog spans ordinary, Laurent, power-series, and
+            // Boolean polynomial rings. A reliable constructor binding proves
+            // the broad family, but not which method implementation owns the
+            // call, so only specialized ring owners may authorize a direct
+            // catalog jump.
+            if owner_type != SageOwnerType::PolynomialRing {
+                if let Some(record) = self.resolve_known_sage_method_record(owner_type, member) {
+                    return MemberResolution {
+                        record: Some(record),
+                        candidates: Vec::new(),
+                        owner_type: Some(owner_type),
+                        confidence: "high",
+                        reason: format!(
+                            "resolved Sage {} method `{}` from owner `{}`",
+                            owner_type.as_str(),
+                            member,
+                            owner
+                        ),
+                        candidate_count: 1,
+                        suppress_global_fallback: true,
+                    };
+                }
             }
         }
         if let Some(owner_resolution) = self.resolve_source_derived_namespace_owner(
@@ -841,6 +859,7 @@ impl WorkspaceIndex {
         preferred_owner_type: Option<SageOwnerType>,
     ) -> Vec<SymbolRecord> {
         let preferred = preferred_owner_type
+            .filter(|owner_type| *owner_type != SageOwnerType::PolynomialRing)
             .and_then(|owner_type| self.resolve_known_sage_method_record(owner_type, member));
         let mut candidates: Vec<_> = self
             .symbol_candidates(member)
@@ -859,14 +878,31 @@ impl WorkspaceIndex {
         }
         let mut candidates = dedupe_symbol_records(candidates);
         candidates.sort_by(|left, right| {
+            let left_family_match = preferred_owner_type.is_some_and(|preferred_owner| {
+                source_derived_method_owner_for_symbol(left).is_some_and(|candidate_owner| {
+                    sage_owner_types_share_navigation_family(
+                        preferred_owner,
+                        candidate_owner.owner_type,
+                    )
+                })
+            });
+            let right_family_match = preferred_owner_type.is_some_and(|preferred_owner| {
+                source_derived_method_owner_for_symbol(right).is_some_and(|candidate_owner| {
+                    sage_owner_types_share_navigation_family(
+                        preferred_owner,
+                        candidate_owner.owner_type,
+                    )
+                })
+            });
             let left_preferred = preferred
                 .as_ref()
                 .is_some_and(|preferred| same_symbol_candidate(preferred, left));
             let right_preferred = preferred
                 .as_ref()
                 .is_some_and(|preferred| same_symbol_candidate(preferred, right));
-            right_preferred
-                .cmp(&left_preferred)
+            right_family_match
+                .cmp(&left_family_match)
+                .then(right_preferred.cmp(&left_preferred))
                 .then(symbol_choice_key(left).cmp(&symbol_choice_key(right)))
                 .then(left.module.cmp(&right.module))
                 .then(left.path.cmp(&right.path))
@@ -912,13 +948,10 @@ impl WorkspaceIndex {
             );
         };
         if let Some((receiver, member)) = constructor.rsplit_once('.') {
-            if sage_method_return_type(member) == Some(owner_type) {
-                if let Some(receiver_type) = infer_owner_type_before_strict(
-                    source,
-                    receiver,
-                    member,
-                    target_range.start_line,
-                ) {
+            if let Some(receiver_type) =
+                infer_owner_type_before_strict(source, receiver, member, target_range.start_line)
+            {
+                if sage_method_return_type(receiver_type, member) == Some(owner_type) {
                     if let Some(receiver_constructor) = assignment_constructor_before_line(
                         source,
                         receiver,

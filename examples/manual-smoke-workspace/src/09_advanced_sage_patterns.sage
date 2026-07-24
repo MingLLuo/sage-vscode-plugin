@@ -9,6 +9,8 @@ P.<w> = PolynomialRing(QQ)
 K.<i> = NumberField(w^2 + 1, embedding=CC.gen())
 
 R.<x, y, z> = PolynomialRing(GF(127), 3, order="degrevlex")
+preparser_ring_generator = R.gen()
+preparser_polynomial_degree = x.degree()
 I = ideal([
     x^2 + y*z - 1,
     y^2 - z + x,
@@ -18,6 +20,7 @@ groebner_data = I.groebner_basis()
 quotient_ring = R.quotient(I, names=("xb", "yb", "zb"))
 
 F.<a> = GF(2^8, name="a")
+preparser_field_parent = a.parent()
 linear_layer = matrix(F, 4, 4, lambda r, c: a^(r + 2*c))
 branch_number_probe = min(
     vector(F, row).hamming_weight() + (linear_layer * vector(F, row)).hamming_weight()
@@ -33,6 +36,8 @@ torsion_profile = [
 
 Kfun.<t> = FunctionField(GF(5))
 S.<Y> = Kfun[]
+preparser_series_generator = S.gen()
+preparser_series_degree = Y.degree()
 cover_polynomial = Y^3 + t*Y + 1
 cover_invariants = {
     "disc": cover_polynomial.discriminant(),
@@ -69,3 +74,5 @@ advanced_sage_targets = [
     dual_dimension,
     trace_window(w^2 + 3*w + 1, width=7),
 ]
+
+number_field_generator_polynomial = i.polynomial()

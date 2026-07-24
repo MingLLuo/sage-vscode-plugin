@@ -1012,7 +1012,41 @@ fn hydrate_resolves_source_derived_class_method_aliases() {
 }
 
 #[test]
-fn hydrate_resolves_class_derived_sage_methods_outside_module_buckets() {
+fn hydrate_does_not_cross_classify_sage_classes_outside_owner_modules() {
+    assert_eq!(
+        sage_owner_type_from_class_name("GenericGraph", "sage.graphs.generic_graph"),
+        Some(SageOwnerType::Graph)
+    );
+    assert_eq!(
+        sage_owner_type_from_class_name(
+            "EllipticCurve_generic",
+            "sage.schemes.elliptic_curves.ell_generic"
+        ),
+        Some(SageOwnerType::EllipticCurve)
+    );
+    assert_eq!(
+        sage_owner_type_from_class_name(
+            "NumberField_generic",
+            "sage.rings.number_field.number_field"
+        ),
+        Some(SageOwnerType::NumberField)
+    );
+    assert_eq!(
+        sage_owner_type_from_class_name("Graphics", "sage.plot.graphics"),
+        None
+    );
+    assert_eq!(
+        sage_owner_type_from_class_name(
+            "HyperellipticCurve_generic",
+            "sage.schemes.hyperelliptic_curves.hyperelliptic_generic"
+        ),
+        None
+    );
+    assert_eq!(
+        sage_owner_type_from_class_name("FutureGraphAlgorithms", "sage.future.graph_algorithms"),
+        None
+    );
+
     let root = test_root("class-derived-method-cache");
     fs::create_dir_all(root.join("sage/future")).unwrap();
     fs::write(
@@ -1049,20 +1083,13 @@ fn hydrate_resolves_class_derived_sage_methods_outside_module_buckets() {
     let query =
         hydrated.query_source_at_navigation(&consumer, source, QueryPosition { line, character });
     assert_eq!(query.owner_type.as_deref(), Some("Graph"));
-    assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
-    assert_eq!(
+    assert_ne!(query.resolution_confidence.as_deref(), Some("high"));
+    assert_ne!(
         query
             .definition
             .as_ref()
             .map(|definition| definition.path.as_path()),
         Some(normalize_path(root.join("sage/future/graph_algorithms.py")).as_path())
-    );
-    assert_eq!(
-        query
-            .documentation
-            .as_ref()
-            .map(|documentation| documentation.summary.as_str()),
-        Some("Return experimental graph walks.")
     );
 
     let (completion_line, completion_character) = first_position(source, "G.experimental_");
@@ -1075,9 +1102,64 @@ fn hydrate_resolves_class_derived_sage_methods_outside_module_buckets() {
         .into_iter()
         .map(|item| item.label)
         .collect();
-    assert_eq!(
-        labels.first().map(String::as_str),
-        Some("experimental_walks")
+    assert!(
+        labels.iter().all(|label| label != "experimental_walks"),
+        "unrelated Sage classes must not pollute Graph completions: {labels:?}"
     );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn connection_refresh_keeps_polyhedron_method_cache_class_scoped() {
+    let root = test_root("connection-polyhedron-method-cache");
+    let polyhedron_root = root.join("sage/geometry/polyhedron");
+    fs::create_dir_all(&polyhedron_root).unwrap();
+    fs::write(
+        polyhedron_root.join("base0.py"),
+        "class Polyhedron_base0:\n    def vertices(self):\n        \"\"\"Return the polyhedron vertices.\"\"\"\n        return ()\n",
+    )
+    .unwrap();
+    fs::write(
+        polyhedron_root.join("face.py"),
+        "class PolyhedronFace:\n    def as_polyhedron(self):\n        \"\"\"Convert this face, not a polyhedron instance.\"\"\"\n        return None\n",
+    )
+    .unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: Vec::new(),
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    let mut index = WorkspaceIndex::new(options);
+    index.rebuild().unwrap();
+
+    let connection = Connection::open(index.db_path()).unwrap();
+    refresh_materialized_caches(&connection, &index.options().roots).unwrap();
+
+    let vertices = load_materialized_sage_method_from_db(
+        index.db_path(),
+        SageOwnerType::Polyhedron,
+        "vertices",
+        &index.options().roots,
+    )
+    .unwrap();
+    assert_eq!(
+        vertices.as_ref().map(|symbol| symbol.path.as_path()),
+        Some(normalize_path(polyhedron_root.join("base0.py")).as_path()),
+        "connection refresh should retain methods from Polyhedron implementation classes"
+    );
+    let face_method = load_materialized_sage_method_from_db(
+        index.db_path(),
+        SageOwnerType::Polyhedron,
+        "as_polyhedron",
+        &index.options().roots,
+    )
+    .unwrap();
+    assert!(
+        face_method.is_none(),
+        "PolyhedronFace methods must not enter the Polyhedron method cache: {face_method:?}"
+    );
+
     fs::remove_dir_all(root).ok();
 }

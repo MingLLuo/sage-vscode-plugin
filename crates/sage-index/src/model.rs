@@ -173,6 +173,8 @@ pub(super) enum SageOwnerType {
     Matrix,
     FreeModule,
     PolynomialRing,
+    UnivariatePolynomialRing,
+    MultivariatePolynomialRing,
     PolynomialElement,
     Ideal,
     Field,
@@ -181,6 +183,8 @@ pub(super) enum SageOwnerType {
     Graph,
     EllipticCurve,
     NumberField,
+    NumberFieldElement,
+    Polyhedron,
 }
 
 impl SageOwnerType {
@@ -190,6 +194,8 @@ impl SageOwnerType {
             Self::Matrix => "Matrix",
             Self::FreeModule => "FreeModule",
             Self::PolynomialRing => "PolynomialRing",
+            Self::UnivariatePolynomialRing => "UnivariatePolynomialRing",
+            Self::MultivariatePolynomialRing => "MultivariatePolynomialRing",
             Self::PolynomialElement => "PolynomialElement",
             Self::Ideal => "Ideal",
             Self::Field => "Field",
@@ -198,6 +204,8 @@ impl SageOwnerType {
             Self::Graph => "Graph",
             Self::EllipticCurve => "EllipticCurve",
             Self::NumberField => "NumberField",
+            Self::NumberFieldElement => "NumberFieldElement",
+            Self::Polyhedron => "Polyhedron",
         }
     }
 }

@@ -135,6 +135,12 @@ Rust V2:
 - `crates/sage-ls/src/main.rs`
   Composition root for `tower-lsp` capabilities, request dispatch, shared server state, and internal `sage.__rust.*`
   execute commands. Keep navigation, text conversion, editor features, and background work in their modules below.
+- `crates/sage-ls/src/navigation.rs`
+  Owns definition, declaration, type-definition, and implementation responses, including navigation caching, verified
+  live ranges, `LocationLink` capability negotiation, and ordered candidate links.
+- `crates/sage-ls/src/references.rs`
+  Owns high-confidence references, prepare-rename, rename edits, alias-binding identity, and workspace reference
+  collection. Changes here must preserve the same identity threshold as navigation.
 - `crates/sage-ls/src/open_documents.rs`
   Owns open-document identity and source lookup. It canonicalizes physical aliases only for matching, prefers the newest
   live buffer over indexed disk text, and preserves the client-facing URI used to open that buffer.
@@ -194,6 +200,9 @@ Rust index:
   and source-import analysis through small parsing submodules.
 - `crates/sage-index/src/query_support.rs` and `crates/sage-index/src/query_support/`
   Route pure call, completion, Sage-type, symbol, and syntax query helpers without expanding the workspace API modules.
+  Sage domain catalogs remain in `sage_types.rs`; scope-aware type flow, assignment/RHS inference, and conservative
+  local-function return inference live in `sage_type_inference.rs`, `sage_assignment_inference.rs`, and
+  `local_function_returns.rs`.
 - `crates/sage-index/src/sage_specs.rs`, `source_paths.rs`, `symbol_support.rs`, and `syntax_support.rs`
   Hold static Sage mappings and shared path, ranking/deduplication, and syntax primitives.
 - `crates/sage-index/src/tests.rs` and `crates/sage-index/src/tests/`

@@ -101,6 +101,24 @@ pub(super) const SAGE_EXPORT_MAP: &[SageExportTarget] = &[
     },
     SageExportTarget {
         import_module: "sage.all",
+        name: "Polyhedron",
+        source_module: "sage.geometry.polyhedron.constructor",
+        source_name: "Polyhedron",
+    },
+    SageExportTarget {
+        import_module: "sage.geometry.all",
+        name: "Polyhedron",
+        source_module: "sage.geometry.polyhedron.constructor",
+        source_name: "Polyhedron",
+    },
+    SageExportTarget {
+        import_module: "sage.geometry.polyhedron.all",
+        name: "Polyhedron",
+        source_module: "sage.geometry.polyhedron.constructor",
+        source_name: "Polyhedron",
+    },
+    SageExportTarget {
+        import_module: "sage.all",
         name: "matrix",
         source_module: "sage.matrix.constructor",
         source_name: "matrix",
@@ -337,6 +355,24 @@ pub(super) const SAGE_OWNER_METHOD_MODULES: &[SageOwnerModuleSpec] = &[
         priority: 10,
     },
     SageOwnerModuleSpec {
+        owner_type: SageOwnerType::UnivariatePolynomialRing,
+        module: "sage.rings.polynomial.polynomial_ring",
+        recursive: false,
+        priority: 0,
+    },
+    SageOwnerModuleSpec {
+        owner_type: SageOwnerType::MultivariatePolynomialRing,
+        module: "sage.rings.polynomial.multi_polynomial_libsingular",
+        recursive: false,
+        priority: 0,
+    },
+    SageOwnerModuleSpec {
+        owner_type: SageOwnerType::MultivariatePolynomialRing,
+        module: "sage.rings.polynomial.multi_polynomial_ring",
+        recursive: false,
+        priority: 5,
+    },
+    SageOwnerModuleSpec {
         owner_type: SageOwnerType::PolynomialRing,
         module: "sage.structure.parent_gens",
         recursive: false,
@@ -441,6 +477,18 @@ pub(super) const SAGE_OWNER_METHOD_MODULES: &[SageOwnerModuleSpec] = &[
     SageOwnerModuleSpec {
         owner_type: SageOwnerType::NumberField,
         module: "sage.rings.number_field",
+        recursive: true,
+        priority: 10,
+    },
+    SageOwnerModuleSpec {
+        owner_type: SageOwnerType::NumberFieldElement,
+        module: "sage.rings.number_field.number_field_element",
+        recursive: false,
+        priority: 0,
+    },
+    SageOwnerModuleSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        module: "sage.geometry.polyhedron",
         recursive: true,
         priority: 10,
     },
@@ -596,6 +644,16 @@ pub(super) const SAGE_METHOD_SPECS: &[SageMethodSpec] = &[
         owner_type: SageOwnerType::PolynomialRing,
         member: "gen",
         module: "sage.structure.parent_gens",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::UnivariatePolynomialRing,
+        member: "gen",
+        module: "sage.rings.polynomial.polynomial_ring",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::MultivariatePolynomialRing,
+        member: "gen",
+        module: "sage.rings.polynomial.multi_polynomial_libsingular",
     },
     SageMethodSpec {
         owner_type: SageOwnerType::PolynomialRing,
@@ -921,6 +979,56 @@ pub(super) const SAGE_METHOD_SPECS: &[SageMethodSpec] = &[
         owner_type: SageOwnerType::NumberField,
         member: "is_isomorphic",
         module: "sage.rings.number_field.number_field",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::NumberFieldElement,
+        member: "parent",
+        module: "sage.structure.element",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::NumberFieldElement,
+        member: "polynomial",
+        module: "sage.rings.number_field.number_field_element",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        member: "vertices",
+        module: "sage.geometry.polyhedron.base0",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        member: "dim",
+        module: "sage.geometry.polyhedron.base1",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        member: "contains",
+        module: "sage.geometry.polyhedron.base1",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        member: "facets",
+        module: "sage.geometry.polyhedron.base3",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        member: "polar",
+        module: "sage.geometry.polyhedron.base5",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        member: "intersection",
+        module: "sage.geometry.polyhedron.base5",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        member: "plot",
+        module: "sage.geometry.polyhedron.base6",
+    },
+    SageMethodSpec {
+        owner_type: SageOwnerType::Polyhedron,
+        member: "volume",
+        module: "sage.geometry.polyhedron.base7",
     },
 ];
 

@@ -856,6 +856,12 @@ fn infer_owner_type_from_completion_owner_name(name: &str) -> Option<SageOwnerTy
     if lower == "number_field" || lower.ends_with("_number_field") {
         return Some(SageOwnerType::NumberField);
     }
+    if matches!(lower.as_str(), "polyhedron" | "polytope")
+        || lower.ends_with("_polyhedron")
+        || lower.ends_with("_polytope")
+    {
+        return Some(SageOwnerType::Polyhedron);
+    }
     if matches!(name, "value" | "element" | "entry" | "x" | "y" | "root") {
         return Some(SageOwnerType::FieldElement);
     }

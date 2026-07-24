@@ -752,3 +752,42 @@ fn query_prefers_documented_python_constructor_over_pxd_declaration() {
     );
     fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn query_resolves_multiline_cimport_bindings() {
+    let root = test_root("multiline-cimport");
+    let provider = root.join("sage/structure/element.pxd");
+    let consumer = root.join("sage/matrix/template.pxi");
+    fs::create_dir_all(provider.parent().unwrap()).unwrap();
+    fs::create_dir_all(consumer.parent().unwrap()).unwrap();
+    fs::write(
+        &provider,
+        "cdef class Element:\n    pass\n\ncdef class Matrix(Element):\n    pass\n",
+    )
+    .unwrap();
+    let source = "from sage.structure.element cimport (\n    Element,\n    Matrix,\n)\n\ncdef Matrix cached_matrix\n";
+    fs::write(&consumer, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    let (line, character) = position_in_line(source, "cdef Matrix", "Matrix");
+    let query =
+        index.query_source_at_navigation(&consumer, source, QueryPosition { line, character });
+    assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+    assert_eq!(
+        query
+            .definition
+            .as_ref()
+            .map(|definition| definition.path.as_path()),
+        Some(normalize_path(provider).as_path()),
+        "multiline cimport should resolve to its declaration: {query:?}"
+    );
+
+    fs::remove_dir_all(root).ok();
+}

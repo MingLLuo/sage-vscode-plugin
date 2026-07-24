@@ -17,6 +17,7 @@ const debugInspector = path.join(
   process.platform === "win32" ? "sage-debug-inspect.exe" : "sage-debug-inspect",
 );
 const publicFixtureCandidates = [
+  path.join(repositoryRoot, "examples", "manual-smoke-workspace", "src", "09_advanced_sage_patterns.sage"),
   path.join(repositoryRoot, "examples", "manual-smoke-workspace", "src", "10_sage_heavy_python.py"),
   path.join(repositoryRoot, "examples", "manual-smoke-workspace", "src", "11_sage_object_methods.py"),
 ];
@@ -145,6 +146,35 @@ async function runFileSmoke(realFile, warmedRootKeys) {
 
 function buildScenarios(filePath, text) {
   const fileName = path.basename(filePath);
+  if (fileName === "09_advanced_sage_patterns.sage") {
+    return [
+      ownedMethod(
+        "preparser-ring",
+        "MultivariatePolynomialRing",
+        "gen",
+        "sage/src/sage/rings/polynomial/multi_polynomial_libsingular.pyx",
+        1,
+      ),
+      ownedMethod(
+        "preparser-polynomial",
+        "PolynomialElement",
+        "degree",
+        "sage/src/sage/rings/polynomial/multi_polynomial_element.py",
+      ),
+      ownedMethod(
+        "preparser-field-element",
+        "FieldElement",
+        "parent",
+        "sage/src/sage/structure/element.pyx",
+      ),
+      ownedMethod(
+        "preparser-number-field-element",
+        "NumberFieldElement",
+        "polynomial",
+        "sage/src/sage/rings/number_field/number_field_element.pyx",
+      ),
+    ].filter((scenario) => scenarioExists(text, scenario));
+  }
   if (fileName === "10_sage_heavy_python.py") {
     return [
       coldSymbol("PolynomialRing", "sage/src/sage/rings/polynomial/polynomial_ring_constructor.py"),
@@ -212,6 +242,13 @@ function buildScenarios(filePath, text) {
         "NumberField",
         "high",
       ),
+      symbolScenario(
+        "sage-all-polyhedron",
+        "Polyhedron",
+        "sage/src/sage/geometry/polyhedron/constructor.py",
+        "Polyhedron",
+        "high",
+      ),
       graphMethod("vertices", "sage/src/sage/graphs/generic_graph.py"),
       graphMethod("neighbors", "sage/src/sage/graphs/generic_graph.py"),
       graphMethod("edges", "sage/src/sage/graphs/generic_graph.py"),
@@ -241,6 +278,14 @@ function buildScenarios(filePath, text) {
       numberFieldMethod("places", "sage/src/sage/rings/number_field/number_field.py"),
       numberFieldMethod("class_group", "sage/src/sage/rings/number_field/number_field.py"),
       numberFieldMethod("unit_group", "sage/src/sage/rings/number_field/number_field.py"),
+      polyhedronMethod("vertices", "sage/src/sage/geometry/polyhedron/base0.py", 1),
+      polyhedronMethod("dim", "sage/src/sage/geometry/polyhedron/base1.py"),
+      polyhedronMethod("contains", "sage/src/sage/geometry/polyhedron/base1.py"),
+      polyhedronMethod("facets", "sage/src/sage/geometry/polyhedron/base3.py"),
+      polyhedronMethod("polar", "sage/src/sage/geometry/polyhedron/base5.py"),
+      polyhedronMethod("intersection", "sage/src/sage/geometry/polyhedron/base5.py"),
+      polyhedronMethod("plot", "sage/src/sage/geometry/polyhedron/base6.py", 2),
+      polyhedronMethod("volume", "sage/src/sage/geometry/polyhedron/base7.py"),
     ].filter((scenario) => scenarioExists(text, scenario));
   }
   return [
@@ -347,6 +392,10 @@ function ellipticCurveMethod(member, definitionPathIncludes, occurrence = 0) {
 
 function numberFieldMethod(member, definitionPathIncludes, occurrence = 0) {
   return ownedMethod("number-field", "NumberField", member, definitionPathIncludes, occurrence);
+}
+
+function polyhedronMethod(member, definitionPathIncludes, occurrence = 0) {
+  return ownedMethod("polyhedron", "Polyhedron", member, definitionPathIncludes, occurrence);
 }
 
 function ownedMethod(idPrefix, ownerType, member, definitionPathIncludes, occurrence = 0) {

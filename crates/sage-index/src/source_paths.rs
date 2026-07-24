@@ -129,8 +129,17 @@ pub(super) fn cache_namespace_digest(
     exclude_globs: &[String],
     enable_pyx: bool,
 ) -> String {
+    cache_namespace_digest_for_version(CACHE_FORMAT_VERSION, roots, exclude_globs, enable_pyx)
+}
+
+pub(super) fn cache_namespace_digest_for_version(
+    format_version: &str,
+    roots: &[PathBuf],
+    exclude_globs: &[String],
+    enable_pyx: bool,
+) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(CACHE_FORMAT_VERSION);
+    hasher.update(format_version);
     hasher.update([0]);
     for root in roots {
         hasher.update(root.display().to_string());

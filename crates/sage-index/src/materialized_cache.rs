@@ -768,8 +768,11 @@ pub(super) fn source_derived_method_records_from_connection(
         let mut symbols =
             load_method_like_symbols_for_owner_module(connection, module_spec, roots)?;
         for symbol in symbols.drain(..) {
-            let key = (module_spec.owner_type, symbol.name.clone());
-            let choice_key = sage_method_choice_key(module_spec.priority, &symbol);
+            let Some(owner) = source_derived_method_owner_for_symbol(&symbol) else {
+                continue;
+            };
+            let key = (owner.owner_type, symbol.name.clone());
+            let choice_key = sage_method_choice_key(owner.priority, &symbol);
             match best.get(&key) {
                 Some((existing_key, _)) if *existing_key <= choice_key => {}
                 _ => {

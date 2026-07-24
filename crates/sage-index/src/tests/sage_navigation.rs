@@ -456,8 +456,8 @@ fn query_resolves_sage_method_owners_and_suppresses_wrong_global_fallback() {
             "def derivative(x):\n    \"\"\"Wrong global derivative fallback.\"\"\"\n    return x\n\ndef append(x):\n    return x\n",
         )
         .unwrap();
-    let consumer = root.join("consumer.py");
-    let source = "from sage.all import GF, PolynomialRing, matrix\nfield = GF(7)\nring = PolynomialRing(field, names=[\"x\"])\nmat = matrix(field, 2, 2)\nQ = matrix(field, 2, 2)\nA = matrix(field, 2, 2)\npoly = ring.gen(0)\nrank_value = mat.rank()\nqs_field = Q.base_ring()\nkernel = A.right_kernel()\njac = matrix(ring, 1, 1, lambda i, j: poly.derivative(ring.gen(0)))\nideal = ring.ideal([poly])\nroots = ideal.variety()\nno_jump = mat.append(1)\nencoded = json.dumps({})\n";
+    let consumer = root.join("consumer.sage");
+    let source = "from sage.all import GF, PolynomialRing, matrix\nfield = GF(7)\nring.<x, y> = PolynomialRing(field, 2)\nmat = matrix(field, 2, 2)\nQ = matrix(field, 2, 2)\nA = matrix(field, 2, 2)\npoly = ring.gen(0)\nrank_value = mat.rank()\nqs_field = Q.base_ring()\nkernel = A.right_kernel()\njac = matrix(ring, 1, 1, lambda i, j: poly.derivative(ring.gen(0)))\nideal = ring.ideal([poly])\nroots = ideal.variety()\nno_jump = mat.append(1)\nencoded = json.dumps({})\n";
     fs::write(&consumer, source).unwrap();
     let mut index = WorkspaceIndex::new(IndexOptions {
         roots: vec![root.clone()],
@@ -483,7 +483,7 @@ fn query_resolves_sage_method_owners_and_suppresses_wrong_global_fallback() {
         ),
         (
             "ideal",
-            "PolynomialRing",
+            "MultivariatePolynomialRing",
             root.join("sage/rings/polynomial/multi_polynomial_libsingular.pyx"),
         ),
         (

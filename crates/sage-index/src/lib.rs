@@ -62,7 +62,10 @@ pub fn source_definition_header_end(source: &str, offset: usize) -> Option<usize
     syntax_support::definition_header_end(source, offset)
 }
 
-const CACHE_FORMAT_VERSION: &str = "sage-index-v28-compatible-identifier-filter";
+// Bump whenever persisted symbol/materialization semantics change. In particular,
+// v29 discards method caches created before owner classes were constrained to
+// their actual Sage module families.
+const CACHE_FORMAT_VERSION: &str = "sage-index-v29-owner-domain-classification";
 const MAX_IMPORT_RESOLUTION_DEPTH: usize = 8;
 const MAX_DYNAMIC_HOT_EXPORT_NAMES: usize = 256;
 const SAGE_STAR_IMPORT_SENTINEL: &str = "__sage_star_import__";

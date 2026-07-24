@@ -337,6 +337,7 @@ pub(super) const SAGE_TYPES: &[&str] = &[
     "NumberField",
     "MatrixSpace",
     "EllipticCurve",
+    "Polyhedron",
     "Graph",
     "DiGraph",
     "FreeModule",

@@ -224,7 +224,24 @@ pub(crate) fn assignment_constructor_before_line(
         constructor = assignment_constructor_re()
             .captures(trimmed)
             .and_then(|captures| captures.name("ctor"))
-            .map(|ctor| ctor.as_str().to_string());
+            .map(|ctor| ctor.as_str().to_string())
+            .or_else(|| {
+                let assignment = parse_preparser_assignment(trimmed)?;
+                if assignment.generators.contains(&variable) {
+                    return Some(format!("{}.gen", assignment.parent));
+                }
+                (assignment.parent == variable)
+                    .then_some(assignment.rhs)?
+                    .trim()
+                    .strip_suffix("[]")
+                    .map(|_| "PolynomialRing".to_string())
+                    .or_else(|| {
+                        assignment_call_re()
+                            .captures(assignment.rhs.trim())
+                            .and_then(|captures| captures.name("callee"))
+                            .map(|callee| callee.as_str().to_string())
+                    })
+            });
     }
     constructor
 }

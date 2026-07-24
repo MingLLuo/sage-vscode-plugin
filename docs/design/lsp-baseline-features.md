@@ -2,85 +2,89 @@
 
 ## Purpose
 
-This note records the minimum feature set that should make the plugin feel like a real language tool rather than a
-demo extension.
+This note records the maintained production baseline for the Rust language server. The legacy Python server remains a
+compatibility oracle, but it is not the production analysis authority.
 
-## Baseline
+## Editor Baseline
 
-The current baseline now includes:
+The maintained baseline includes:
 
-- hover
-- completion
-- definition
+- hover and static/runtime documentation
+- context-aware completion and completion resolution
+- definition, declaration, type definition, and implementation
+- ordered navigation candidates through `LocationLink`
+- references, prepare rename, and rename
 - signature help
-- semantic tokens for Sage namespaces, constructors, decorators, readonly library values, and preparser declarations
-- document symbols
-- workspace symbols
-- references
-- rename
-- low-noise unresolved-import diagnostics
-- quick-fix import rewrites for deterministic unresolved-import-name diagnostics
-- conservative syntax diagnostics for Python and `.sage`
-- source-projected `.sage` syntax diagnostics that point back to original caret/generator syntax instead of generated validation text
-- custom documentation requests
-- dotted singleton-member resolution for common Sage patterns such as `graphs.PetersenGraph`
-- member completion for statically understood singleton APIs
-- completion responses serialized as concrete LSP `CompletionItem` objects under real clients
-- Python-like `.sage` parsing through the AST path when no preparser assignment is present
-- hybrid `.sage` parsing that merges preparser-aware top-level extraction with AST-driven class/method/import analysis
-- saved `.sage` modules participating in workspace indexing instead of only live open-document parsing
-- cached symbol and member resolution for indexed modules to reduce repeated definition and documentation lookup cost
-- persistent module-cache reuse for indexed source roots, with automatic invalidation when file size or mtime changes
-- open-document overlay caching so repeated requests against unchanged editor buffers reuse parsed records instead of re-parsing the same text
+- semantic tokens and range semantic tokens
+- document and workspace symbols
+- document highlights, links, folding, selection ranges, and inlay hints
+- call hierarchy
+- conservative diagnostics and deterministic quick fixes
+- Sage `load`/`attach`, Cython include/import, `.pyx`, `.pxd`, `.pxi`, and `.spyx` navigation
 
-## Scope
+## Navigation Contract
 
-- These features are primarily static and index-driven, with runtime fallback for documentation, definitions, and
-  signatures when static resolution misses Sage runtime objects.
-- Python-heavy `.sage` files now stay on the richer Python AST path unless they use Sage preparser assignment syntax
-  such as `R.<x, y> = ...`; that keeps class, method, import, and assignment tracking closer to ordinary Python-editor
-  behavior for mixed Sage/Python projects.
-- Preparser-heavy `.sage` files now keep their generator declarations from the loose parser while still regaining AST
-  structure for the rest of the file through a sanitized hybrid parse.
-- Static resolution now includes class-body imports, singleton instance aliases, and dotted member traversal so common
-  Sage generator objects remain navigable even when the selected Sage runtime cannot answer introspection requests.
-- Indexed-module resolution caches currently target repeated symbol and member lookups; this is a first step toward a
-  broader split between hot document state and colder library/workspace indexes.
-- Persistent cache writes are best-effort. If the preferred cache directory is unavailable, the server falls back to a
-  temporary cache location or disables persistence without breaking analysis.
-- Open documents now act like a hot overlay above the colder workspace/library index, which is closer to how modern
-  language tools separate live editor state from background index state.
-- Server request wiring now routes common documentation, definition, overlay-refresh, and diagnostics flows through
-  shared helpers so the handler layer stays thinner as more LSP features accumulate.
-- Saved and watched workspace files now refresh the indexed module graph incrementally, including correct recomposition
-  of mixed `.pyx`/`.pxd` native modules when only one component changes or disappears.
-- Batched workspace-change application now updates that incremental index in one pass per event burst, which reduces
-  repeated cache persistence and cache-reset churn under larger watcher batches.
-- Warm-start cache hydration now reuses persisted module source for unchanged files, so cache hits avoid rereading each
-  unchanged module from disk before the index becomes usable.
-- When a warm snapshot is available, server startup now hydrates that cached module graph first, refreshes smaller
-  non-Sage roots eagerly, and leaves large Sage roots on-demand until a request or explicit full-index path actually
-  needs them.
-- Deferred eager or lazy loads no longer write partial snapshots back to disk, so warm-start cache hydration stays
-  authoritative instead of being poisoned by incomplete module sets.
-- Full-index completion no longer has to reset and rebuild the whole workspace graph when only some roots were
-  deferred; it can now scan the missing roots incrementally and then persist the completed snapshot.
-- Query-driven cold global lookups such as workspace-symbol search and import-candidate ranking now search deferred
-  roots on demand instead of forcing an immediate whole-library completion pass up front.
-- Deferred-root query search now prefers lightweight module summaries over full `ModuleRecord` loads, so cold global
-  lookups can answer from summary data without inflating the in-memory module graph first.
-- When no persisted summary snapshot is ready yet, cold global lookups now fall back to query-scoped summaries built
-  only for ripgrep-discovered candidate files, keeping the first `workspace symbols` and import-candidate requests on
-  a real local Sage checkout under the one-second target without eagerly loading the full library graph.
-- They are designed to stay predictable and low-noise while still remaining usable against real Sage installations.
-- Diagnostics are intentionally conservative and currently focus on unresolved imports plus syntax errors that can be
-  validated safely without pretending to approximate a full Python or Cython type checker.
-- Deterministic unresolved-import-name diagnostics now expose standard LSP quick fixes when the index can already
-  prove a better import source module for the missing symbol.
+Navigation is confidence-aware:
+
+- `high`: one identity-checked target may be returned as a direct jump.
+- `ambiguous`: no target is forced; the client receives ordered candidates and an explanation.
+- `weak` or `none`: evidence may enrich hover or completion, but it cannot authorize references, rename, call
+  hierarchy, or a direct jump.
+
+Type ownership must come from visible imports, explicit constructors, verified assignment flow, preparser bindings, or
+another identity-preserving source. A member name or variable-name resemblance alone is never sufficient for a
+high-confidence jump. Coarse catalog owners that span multiple implementation families remain candidate-only.
+
+Method return inference uses both the receiver type and method name. For example, `change_ring()` preserves a proven
+Matrix or Vector owner, `GF(...).gen()` yields a finite-field element, and a NumberField generator yields a distinct
+number-field element. Ordinary polynomial-ring parents are split into proven univariate and multivariate owners;
+element return types remain conservative where the concrete implementation is not proved. Tuple-valued and other
+variant-dependent calls remain unknown.
+
+## Sage Source Support
+
+- `.sage` preprocessing preserves original source positions while recognizing caret exponents, ranges, empty ring
+  brackets, and `R.<x, y> = ...` generator assignments.
+- Preparser parent and generator bindings participate in strict type flow and local-function return inference.
+- Python, Sage, and Cython imports support single-line and parenthesized forms, including multiline `cimport`.
+- `sage.all`, lazy imports, star re-exports, and source-derived method catalogs are materialized from the configured
+  Sage checkout.
+- Known Sage owners include matrices, vectors, free modules, polynomial rings/elements/ideals, finite fields/elements,
+  graphs, elliptic curves, number fields/elements, and polyhedra.
+- Polyhedron navigation follows the shared `base0` through `base7` hierarchy while excluding faces,
+  representations, parents, and backend-specific classes from the generic instance cache.
+
+## Index and Runtime Baseline
+
+- SQLite caches are namespaced by cache format, source roots, excludes, and parser options.
+- Cache-format changes invalidate old materialized semantics rather than silently reusing stale method targets.
+- Startup hydrates a valid cache first, then reconciles source fingerprints and editable files in the background.
+- Open documents override disk state and preserve their client URI across canonical path aliases.
+- Static analysis works without launching Sage. Optional runtime introspection enriches documentation and reports a
+  clear degraded state when unavailable.
+- Blocking scans, parsing, SQLite work, and linked-document prewarming stay off LSP request workers.
+
+## Verification Baseline
+
+Changes to this surface should keep the following gates green:
+
+- Rust unit tests and strict Clippy
+- extension, syntax-pack, and legacy Python compatibility tests
+- LSP navigation and shutdown protocol smokes
+- debug-workbench interaction matrix
+- real-file smoke tests against the locally discovered Sage checkout
+- release LSP latency and cold index performance budgets
+- repository hygiene and product-readiness checks
+
+Real-file coverage must include both positive and negative navigation cases. A passing timing-only query is not evidence
+that its owner, confidence, and source path are correct.
 
 ## Follow-up Areas
 
-- `.sage` source mapping still needs to feed more of the diagnostics and navigation surface.
-- Semantic tokens should expand beyond the current baseline into more classifiable Sage runtime objects.
-- Richer code actions, richer diagnostics, and deeper runtime-aware analysis remain open work.
-- Library-index persistence and incremental background indexing remain open performance work.
+- Complete element and constructor variants where Sage behavior differs: univariate versus multivariate polynomial
+  elements, Laurent/power-series/Boolean rings, Graph versus DiGraph, absolute versus relative number fields, and
+  field-specific elliptic curves.
+- Expand common constructors without collapsing distinct Sage domains into a broad owner.
+- Continue splitting large test and completion modules when responsibilities can move without weakening behavioral
+  coverage.
+- Expand semantic classification and diagnostics only where the result remains conservative and source-mapped.

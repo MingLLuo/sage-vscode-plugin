@@ -171,7 +171,7 @@ const uxScenarios = [
     id: "advanced-keyword-call-signature",
     title: "Advanced keyword call signature",
     file: "09_advanced_sage_patterns.sage",
-    line: 69,
+    line: 74,
     character: 35,
     expects: {
       noDiagnostics: true,
@@ -275,7 +275,7 @@ const uxScenarios = [
     id: "sage-object-graph-method",
     title: "Sage object Graph method resolution",
     file: "11_sage_object_methods.py",
-    line: 25,
+    line: 26,
     character: 26,
     expects: {
       noDiagnostics: true,
@@ -288,7 +288,7 @@ const uxScenarios = [
     id: "sage-object-elliptic-curve-method",
     title: "Sage object EllipticCurve method resolution",
     file: "11_sage_object_methods.py",
-    line: 42,
+    line: 43,
     character: 31,
     expects: {
       noDiagnostics: true,
@@ -301,12 +301,25 @@ const uxScenarios = [
     id: "sage-object-number-field-method",
     title: "Sage object NumberField method resolution",
     file: "11_sage_object_methods.py",
-    line: 66,
+    line: 67,
     character: 26,
     expects: {
       noDiagnostics: true,
       definitionPathIncludes: "sage/src/sage/rings/number_field/number_field_base.pyx",
       ownerType: "NumberField",
+      resolutionConfidence: "high",
+    },
+  },
+  {
+    id: "sage-object-polyhedron-method",
+    title: "Sage object Polyhedron method resolution",
+    file: "11_sage_object_methods.py",
+    line: 79,
+    character: 31,
+    expects: {
+      noDiagnostics: true,
+      definitionPathIncludes: "sage/src/sage/geometry/polyhedron/base0.py",
+      ownerType: "Polyhedron",
       resolutionConfidence: "high",
     },
   },

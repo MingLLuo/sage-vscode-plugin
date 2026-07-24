@@ -50,6 +50,12 @@ pub(super) fn source_derived_method_owner_for_symbol(
     if let Some(owner) = source_derived_method_owner_from_method_detail(symbol) {
         return Some(owner);
     }
+    if is_polyhedron_module(&symbol.module) && method_detail_parts(&symbol.detail).is_some() {
+        // The recursive module tree also contains faces, representations,
+        // parents, and combinatorial helpers. Only recognized Polyhedron
+        // implementation classes may populate the instance-method cache.
+        return None;
+    }
     let module_spec = SAGE_OWNER_METHOD_MODULES
         .iter()
         .filter(|spec| module_matches_owner_module_spec(&symbol.module, spec))
@@ -91,9 +97,12 @@ pub(super) fn source_derived_method_detail_priority(
                 60
             }
         }
-        SageOwnerType::PolynomialRing => polynomial_ring_source_priority(module),
+        SageOwnerType::PolynomialRing
+        | SageOwnerType::UnivariatePolynomialRing
+        | SageOwnerType::MultivariatePolynomialRing => polynomial_ring_source_priority(module),
         SageOwnerType::PolynomialElement => polynomial_element_source_priority(module),
         SageOwnerType::EllipticCurve => elliptic_curve_source_priority(module, &lower),
+        SageOwnerType::Polyhedron => polyhedron_source_priority(module),
         SageOwnerType::Matrix => matrix_source_priority(module, &lower),
         SageOwnerType::Ideal if !module.starts_with("sage.rings.polynomial") => 60,
         SageOwnerType::Field | SageOwnerType::FieldElement
@@ -103,6 +112,11 @@ pub(super) fn source_derived_method_detail_priority(
         }
         SageOwnerType::Vector if !module.starts_with("sage.modules") => 60,
         SageOwnerType::NumberField if !module.starts_with("sage.rings.number_field") => 60,
+        SageOwnerType::NumberFieldElement
+            if module != "sage.rings.number_field.number_field_element" =>
+        {
+            60
+        }
         _ => 0,
     }
 }
@@ -164,6 +178,28 @@ pub(super) fn elliptic_curve_source_priority(module: &str, lower_class_name: &st
     }
 }
 
+pub(super) fn polyhedron_source_priority(module: &str) -> u8 {
+    match module {
+        "sage.geometry.polyhedron.base0"
+        | "sage.geometry.polyhedron.base1"
+        | "sage.geometry.polyhedron.base2"
+        | "sage.geometry.polyhedron.base3"
+        | "sage.geometry.polyhedron.base4"
+        | "sage.geometry.polyhedron.base5"
+        | "sage.geometry.polyhedron.base6"
+        | "sage.geometry.polyhedron.base7" => 0,
+        "sage.geometry.polyhedron.base" => 5,
+        "sage.geometry.polyhedron.base_QQ"
+        | "sage.geometry.polyhedron.base_ZZ"
+        | "sage.geometry.polyhedron.base_RDF"
+        | "sage.geometry.polyhedron.base_mutable"
+        | "sage.geometry.polyhedron.base_number_field" => 10,
+        module if module.starts_with("sage.geometry.polyhedron.backend_") => 20,
+        module if is_polyhedron_module(module) => 40,
+        _ => 60,
+    }
+}
+
 pub(super) fn method_detail_parts(detail: &str) -> Option<(&str, &str)> {
     detail.strip_prefix("Method ")?.split_once('.')
 }
@@ -206,6 +242,16 @@ pub(super) fn sage_owner_type_from_class_name(
             || lower.contains("booleanpolynomialring")
             || lower.ends_with("ring")
         {
+            if module == "sage.rings.polynomial.polynomial_ring" {
+                return Some(SageOwnerType::UnivariatePolynomialRing);
+            }
+            if matches!(
+                module,
+                "sage.rings.polynomial.multi_polynomial_libsingular"
+                    | "sage.rings.polynomial.multi_polynomial_ring"
+            ) {
+                return Some(SageOwnerType::MultivariatePolynomialRing);
+            }
             return Some(SageOwnerType::PolynomialRing);
         }
         if lower.contains("polynomial") || lower.contains("polydict") {
@@ -220,16 +266,31 @@ pub(super) fn sage_owner_type_from_class_name(
             return Some(SageOwnerType::Field);
         }
     }
-    if module.starts_with("sage.") && lower.contains("ellipticcurve") {
+    if (module == "sage.schemes.elliptic_curves"
+        || module.starts_with("sage.schemes.elliptic_curves."))
+        && lower.contains("ellipticcurve")
+    {
         return Some(SageOwnerType::EllipticCurve);
     }
-    if module.starts_with("sage.") && lower.contains("numberfield") {
-        return Some(SageOwnerType::NumberField);
+    if module == "sage.rings.number_field" || module.starts_with("sage.rings.number_field.") {
+        if lower.contains("numberfieldelement") {
+            return Some(SageOwnerType::NumberFieldElement);
+        }
+        if lower.contains("numberfield") {
+            return Some(SageOwnerType::NumberField);
+        }
     }
-    if module.starts_with("sage.") && lower.contains("graph") {
+    if is_polyhedron_module(module) && (lower == "polyhedron" || lower.starts_with("polyhedron_")) {
+        return Some(SageOwnerType::Polyhedron);
+    }
+    if (module == "sage.graphs" || module.starts_with("sage.graphs.")) && lower.contains("graph") {
         return Some(SageOwnerType::Graph);
     }
     None
+}
+
+fn is_polyhedron_module(module: &str) -> bool {
+    module == "sage.geometry.polyhedron" || module.starts_with("sage.geometry.polyhedron.")
 }
 
 pub(super) fn module_matches_owner_module_spec(module: &str, spec: &SageOwnerModuleSpec) -> bool {

@@ -12,6 +12,7 @@ from sage.all import (
     GF,
     Graph,
     NumberField,
+    Polyhedron,
     PolynomialRing,
     QQ,
     QQbar,
@@ -69,4 +70,19 @@ def number_field_report():
         "places": field.places(),
         "class_group": field.class_group(),
         "unit_group": field.unit_group(),
+    }
+
+
+def polyhedron_report():
+    """Exercise generic polyhedron methods across the shared base hierarchy."""
+    polyhedron = Polyhedron(vertices=[[0, 0], [1, 0], [0, 1]])
+    return {
+        "vertices": polyhedron.vertices(),
+        "dimension": polyhedron.dim(),
+        "contains": polyhedron.contains([0, 0]),
+        "facets": polyhedron.facets(),
+        "polar": polyhedron.polar(),
+        "intersection": polyhedron.intersection(polyhedron),
+        "plot": polyhedron.plot(),
+        "volume": polyhedron.volume(),
     }
