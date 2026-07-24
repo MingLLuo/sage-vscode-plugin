@@ -112,12 +112,21 @@ impl WorkspaceIndex {
         let mut paths = BTreeSet::new();
         let mut persisted_paths = BTreeSet::new();
         if self.cached_file_count > 0 {
-            if let Ok(cached_paths) = load_file_paths_from_db(&self.db_path, &self.options.roots) {
-                persisted_paths.extend(cached_paths);
-            }
-            match load_filtered_file_paths_from_db(&self.db_path, &self.options.roots, name) {
-                Ok(Some(filtered_paths)) => paths.extend(filtered_paths),
-                _ => paths.extend(persisted_paths.iter().cloned()),
+            if let Some((persisted_live_paths, filtered_paths)) =
+                self.cached_identifier_filter_paths(name)
+            {
+                persisted_paths = persisted_live_paths;
+                paths.extend(filtered_paths);
+            } else {
+                if let Ok(cached_paths) =
+                    load_file_paths_from_db(&self.db_path, &self.options.roots)
+                {
+                    persisted_paths.extend(cached_paths);
+                }
+                match load_filtered_file_paths_from_db(&self.db_path, &self.options.roots, name) {
+                    Ok(Some(filtered_paths)) => paths.extend(filtered_paths),
+                    _ => paths.extend(persisted_paths.iter().cloned()),
+                }
             }
         }
         // A filesystem event is marked before the replacement index is prepared. Keep those few
@@ -143,6 +152,68 @@ impl WorkspaceIndex {
             .flatten()
             .collect();
         dedupe_reference_records(results)
+    }
+
+    fn cached_identifier_filter_paths(
+        &self,
+        name: &str,
+    ) -> Option<(BTreeSet<PathBuf>, Vec<PathBuf>)> {
+        let cache = self.identifier_filter_cache.lock().ok()?;
+        let filters = cache.as_ref()?;
+        // `persisted_paths` is only used to avoid rescanning live/preloaded overlays already
+        // represented by the snapshot. Do not clone every indexed path for each reference query.
+        let persisted_paths = self
+            .files
+            .keys()
+            .filter(|path| filters.contains_key(*path))
+            .cloned()
+            .collect();
+        let filtered_paths = filters
+            .iter()
+            .filter(|(_, filter)| {
+                filter.len() != IDENTIFIER_FILTER_BYTES
+                    || identifier_filter_might_contain(filter, name)
+            })
+            .map(|(path, _)| path.clone())
+            .collect();
+        Some((persisted_paths, filtered_paths))
+    }
+
+    pub(super) fn prewarm_identifier_filter_cache(&self) {
+        let loaded = (self.cached_file_count > 0)
+            .then(|| load_identifier_filters_from_db(&self.db_path, &self.options.roots).ok())
+            .flatten();
+        if let Ok(mut cache) = self.identifier_filter_cache.lock() {
+            *cache = loaded;
+        }
+    }
+
+    pub(super) fn clear_identifier_filter_cache(&self) {
+        if let Ok(mut cache) = self.identifier_filter_cache.lock() {
+            *cache = None;
+        }
+    }
+
+    pub(super) fn update_identifier_filter_cache(
+        &self,
+        changed: &[IndexedFile],
+        deleted: &[PathBuf],
+    ) {
+        let Ok(mut cache) = self.identifier_filter_cache.lock() else {
+            return;
+        };
+        let Some(filters) = cache.as_mut() else {
+            return;
+        };
+        for path in deleted {
+            filters.remove(&normalize_path(path.clone()));
+        }
+        for file in changed {
+            filters.insert(
+                normalize_path(file.path.clone()),
+                file.identifier_filter.clone(),
+            );
+        }
     }
 
     pub(super) fn effective_editable_roots(&self) -> Vec<PathBuf> {

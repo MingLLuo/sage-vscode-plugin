@@ -47,10 +47,10 @@ use rayon::prelude::*;
 use runtime_docs::{RuntimeDocsConfig, RuntimeDocsWorker};
 use sage_index::{
     default_cache_dir, function_call_at_position, is_code_reference_at_range,
-    local_import_alias_symbol_from_source, local_import_alias_symbol_from_symbols, parse_source,
-    semantic_spans, DocumentationRecord, IndexOptions, QueryCompletion, QueryDefinition,
-    QueryFeatures, QueryPosition, QueryResult, SymbolKind as SageSymbolKind, SymbolRecord,
-    WorkspaceIndex,
+    local_import_alias_symbol_from_source, local_import_alias_symbol_from_source_name,
+    local_import_alias_symbol_from_symbols, parse_source, semantic_spans, DocumentationRecord,
+    IndexOptions, QueryCompletion, QueryDefinition, QueryFeatures, QueryPosition, QueryResult,
+    SymbolKind as SageSymbolKind, SymbolRecord, WorkspaceIndex,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -126,6 +126,7 @@ struct Backend {
     index: Arc<RwLock<WorkspaceIndex>>,
     open_documents: Arc<RwLock<OpenDocumentMap>>,
     navigation_cache: Arc<RwLock<NavigationQueryCache>>,
+    navigation_link_support: Arc<RwLock<NavigationLinkSupport>>,
     analysis_mode: Arc<RwLock<AnalysisMode>>,
     diagnostics_enabled: Arc<RwLock<bool>>,
     docs_on_hover_enabled: Arc<RwLock<bool>>,
@@ -137,6 +138,38 @@ struct Backend {
     shutting_down: Arc<AtomicBool>,
     linked_document_prewarmer: LinkedDocumentPrewarmer,
     runtime_docs: RuntimeDocsWorker,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct NavigationLinkSupport {
+    declaration: bool,
+    definition: bool,
+    implementation: bool,
+}
+
+impl NavigationLinkSupport {
+    fn from_client_capabilities(capabilities: &ClientCapabilities) -> Self {
+        let Some(text_document) = capabilities.text_document.as_ref() else {
+            return Self::default();
+        };
+        Self {
+            declaration: text_document
+                .declaration
+                .as_ref()
+                .and_then(|capability| capability.link_support)
+                .unwrap_or(false),
+            definition: text_document
+                .definition
+                .as_ref()
+                .and_then(|capability| capability.link_support)
+                .unwrap_or(false),
+            implementation: text_document
+                .implementation
+                .as_ref()
+                .and_then(|capability| capability.link_support)
+                .unwrap_or(false),
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -243,6 +276,7 @@ async fn main() {
         index: Arc::new(RwLock::new(WorkspaceIndex::default())),
         open_documents: Arc::new(RwLock::new(OpenDocumentMap::new())),
         navigation_cache: Arc::new(RwLock::new(NavigationQueryCache::default())),
+        navigation_link_support: Arc::new(RwLock::new(NavigationLinkSupport::default())),
         analysis_mode: Arc::new(RwLock::new(AnalysisMode::default())),
         diagnostics_enabled: Arc::new(RwLock::new(true)),
         docs_on_hover_enabled: Arc::new(RwLock::new(true)),
@@ -262,6 +296,8 @@ async fn main() {
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let initialize_started = Instant::now();
+        *self.navigation_link_support.write().await =
+            NavigationLinkSupport::from_client_capabilities(&params.capabilities);
         let options = parse_initialization_options(params.initialization_options);
         trace_initialize_phase(initialize_started, "parse-options");
         let analysis_mode = options.analysis.mode.effective();
@@ -679,7 +715,8 @@ impl LanguageServer for Backend {
         if links.len() < 2 {
             return Ok(None);
         }
-        Ok(Some(GotoDefinitionResponse::Link(links)))
+        let link_support = self.navigation_link_support.read().await.definition;
+        Ok(Some(navigation_response_for_links(links, link_support)))
     }
 
     async fn goto_declaration(
@@ -720,7 +757,8 @@ impl LanguageServer for Backend {
         if links.len() < 2 {
             return Ok(None);
         }
-        Ok(Some(GotoDeclarationResponse::Link(links)))
+        let link_support = self.navigation_link_support.read().await.declaration;
+        Ok(Some(navigation_response_for_links(links, link_support)))
     }
 
     async fn goto_type_definition(
@@ -799,7 +837,8 @@ impl LanguageServer for Backend {
         if links.len() < 2 {
             return Ok(None);
         }
-        Ok(Some(GotoImplementationResponse::Link(links)))
+        let link_support = self.navigation_link_support.read().await.implementation;
+        Ok(Some(navigation_response_for_links(links, link_support)))
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
@@ -1032,6 +1071,8 @@ impl LanguageServer for Backend {
             return Ok(Some(Vec::new()));
         };
         let position = params.text_document_position_params.position;
+        let may_fallback_to_enclosing =
+            may_fallback_to_enclosing_call_hierarchy(&document.text, position);
         if let Some(item) =
             call_hierarchy_item_for_local_symbol_at_position(uri, &path, &document.text, position)
         {
@@ -1047,6 +1088,9 @@ impl LanguageServer for Backend {
                     .into_iter()
                     .collect(),
             ));
+        }
+        if !may_fallback_to_enclosing {
+            return Ok(Some(Vec::new()));
         }
         Ok(Some(
             enclosing_call_hierarchy_item(uri, &path, &document.text, position)
@@ -1636,64 +1680,7 @@ impl Backend {
             }
         }
         let index = self.index.read().await;
-        let indexed_references = match mode {
-            ReferenceCollectionMode::References => index.references(&target.word),
-            ReferenceCollectionMode::Rename => index.editable_references(&target.word),
-        };
-        let mut references_by_path: BTreeMap<PathBuf, Vec<sage_index::ReferenceRecord>> =
-            BTreeMap::new();
-        for reference in indexed_references {
-            if open_paths.contains(&canonical_path_for_comparison(&reference.path)) {
-                continue;
-            }
-            references_by_path
-                .entry(reference.path.clone())
-                .or_default()
-                .push(reference);
-        }
-        let grouped_references: Vec<_> = references_by_path.into_iter().collect();
-        let mut indexed_locations: Vec<Location> = grouped_references
-            .into_par_iter()
-            .map(|(path, references)| {
-                let Ok(text) = std::fs::read_to_string(&path) else {
-                    return Vec::new();
-                };
-                let Ok(uri) = Url::from_file_path(&path) else {
-                    return Vec::new();
-                };
-                let parsed = index
-                    .fresh_file_for_query(&path)
-                    .unwrap_or_else(|| index.parse_source_for_query(&path, &text));
-                let ranges: Vec<_> = references
-                    .iter()
-                    .map(|reference| reference.range.clone())
-                    .collect();
-                let queries = index.query_source_definitions_for_ranges_with_symbols(
-                    &path,
-                    &text,
-                    &target.word,
-                    &ranges,
-                    &parsed.symbols,
-                );
-                references
-                    .into_iter()
-                    .zip(queries)
-                    .filter(|(_, query)| reference_query_matches_target(query, target))
-                    .map(|reference| Location {
-                        uri: uri.clone(),
-                        range: lsp_range_for_text(&text, &reference.0.range),
-                    })
-                    .collect()
-            })
-            .flatten()
-            .collect();
-        indexed_locations.sort_by(|left, right| {
-            left.uri
-                .as_str()
-                .cmp(right.uri.as_str())
-                .then(left.range.start.line.cmp(&right.range.start.line))
-                .then(left.range.start.character.cmp(&right.range.start.character))
-        });
+        let indexed_locations = indexed_reference_locations(&index, target, mode, &open_paths);
         for location in indexed_locations {
             push_scoped_reference_location(
                 &mut locations,
@@ -2193,6 +2180,10 @@ fn is_code_reference_range(_path: &Path, text: &str, word: &str, target_range: R
         .is_some_and(|range| sage_index::is_code_reference_at_range(text, word, &range))
 }
 
+fn may_fallback_to_enclosing_call_hierarchy(text: &str, position: Position) -> bool {
+    word_at_position(text, position).is_none()
+}
+
 fn source_range_from_lsp(text: &str, range: Range) -> Option<sage_index::SourceRange> {
     let start = query_position_from_lsp(text, range.start)?;
     let end = query_position_from_lsp(text, range.end)?;
@@ -2514,6 +2505,24 @@ fn location_reference_key(uri: &Url, range: &Range) -> String {
     )
 }
 
+fn navigation_response_for_links(
+    links: Vec<LocationLink>,
+    link_support: bool,
+) -> GotoDefinitionResponse {
+    if link_support {
+        return GotoDefinitionResponse::Link(links);
+    }
+    GotoDefinitionResponse::Array(
+        links
+            .into_iter()
+            .map(|link| Location {
+                uri: link.target_uri,
+                range: link.target_selection_range,
+            })
+            .collect(),
+    )
+}
+
 fn push_reference_location(
     locations: &mut Vec<Location>,
     seen: &mut BTreeSet<String>,
@@ -2595,6 +2604,13 @@ fn reference_candidate_matches_target_with_symbols(
                 && candidate.import_from == alias.import_from
         });
     }
+    let parsed_symbols;
+    let symbols = if let Some(symbols) = local_symbols {
+        symbols
+    } else {
+        parsed_symbols = parse_source(module_name_for_path(path), path, text).symbols;
+        &parsed_symbols
+    };
     let position = QueryPosition {
         line: range.start_line,
         character: range.start_character,
@@ -2604,7 +2620,120 @@ fn reference_candidate_matches_target_with_symbols(
     } else {
         index.query_source_at_navigation(path, text, position)
     };
-    reference_query_matches_target(&query, target)
+    reference_query_or_aliased_import_matches_target(
+        index, path, text, range, target, symbols, &query,
+    )
+}
+
+fn reference_query_or_aliased_import_matches_target(
+    index: &WorkspaceIndex,
+    path: &Path,
+    text: &str,
+    range: &sage_index::SourceRange,
+    target: &ResolvedReferenceTarget,
+    symbols: &[SymbolRecord],
+    query: &QueryResult,
+) -> bool {
+    if reference_query_matches_target(query, target) {
+        return true;
+    }
+    // `from provider import target as alias` contains two distinct rename domains. A rename
+    // started at `target` must update the imported source token, while preserving the local
+    // binding and all `alias(...)` uses. Resolve through the alias declaration and retain the
+    // existing high-confidence identity gate before accepting that source token.
+    let Some(alias) =
+        local_import_alias_symbol_from_source_name(text, symbols, &target.word, range)
+    else {
+        return false;
+    };
+    let alias_query = index.query_source_definition_with_symbols(
+        path,
+        text,
+        QueryPosition {
+            line: alias.range.start_line,
+            character: alias.range.start_character,
+        },
+        symbols,
+    );
+    reference_query_matches_target(&alias_query, target)
+}
+
+fn indexed_reference_locations(
+    index: &WorkspaceIndex,
+    target: &ResolvedReferenceTarget,
+    mode: ReferenceCollectionMode,
+    open_paths: &BTreeSet<PathBuf>,
+) -> Vec<Location> {
+    let indexed_references = match mode {
+        ReferenceCollectionMode::References => index.references(&target.word),
+        ReferenceCollectionMode::Rename => index.editable_references(&target.word),
+    };
+    let mut references_by_path: BTreeMap<PathBuf, Vec<sage_index::ReferenceRecord>> =
+        BTreeMap::new();
+    for reference in indexed_references {
+        if open_paths.contains(&canonical_path_for_comparison(&reference.path)) {
+            continue;
+        }
+        references_by_path
+            .entry(reference.path.clone())
+            .or_default()
+            .push(reference);
+    }
+    let mut locations: Vec<Location> = references_by_path
+        .into_iter()
+        .collect::<Vec<_>>()
+        .into_par_iter()
+        .map(|(path, references)| {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                return Vec::new();
+            };
+            let Ok(uri) = Url::from_file_path(&path) else {
+                return Vec::new();
+            };
+            let parsed = index
+                .fresh_file_for_query(&path)
+                .unwrap_or_else(|| index.parse_source_for_query(&path, &text));
+            let ranges: Vec<_> = references
+                .iter()
+                .map(|reference| reference.range.clone())
+                .collect();
+            let queries = index.query_source_definitions_for_ranges_with_symbols(
+                &path,
+                &text,
+                &target.word,
+                &ranges,
+                &parsed.symbols,
+            );
+            references
+                .into_iter()
+                .zip(queries)
+                .filter(|(reference, query)| {
+                    reference_query_or_aliased_import_matches_target(
+                        index,
+                        &path,
+                        &text,
+                        &reference.range,
+                        target,
+                        &parsed.symbols,
+                        query,
+                    )
+                })
+                .map(|(reference, _)| Location {
+                    uri: uri.clone(),
+                    range: lsp_range_for_text(&text, &reference.range),
+                })
+                .collect()
+        })
+        .flatten()
+        .collect();
+    locations.sort_by(|left, right| {
+        left.uri
+            .as_str()
+            .cmp(right.uri.as_str())
+            .then(left.range.start.line.cmp(&right.range.start.line))
+            .then(left.range.start.character.cmp(&right.range.start.character))
+    });
+    locations
 }
 
 fn reference_query_matches_target(query: &QueryResult, target: &ResolvedReferenceTarget) -> bool {

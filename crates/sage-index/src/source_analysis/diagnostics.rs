@@ -205,31 +205,51 @@ pub(super) fn reference_spans_in_source(
     records
 }
 
+pub struct CodeReferenceMap<'source> {
+    source: &'source str,
+    code_map: CodeMap,
+}
+
+impl<'source> CodeReferenceMap<'source> {
+    pub fn new(source: &'source str) -> Self {
+        Self {
+            source,
+            code_map: CodeMap::new(source),
+        }
+    }
+
+    pub fn contains(&self, name: &str, range: &SourceRange) -> bool {
+        if name.is_empty() {
+            return false;
+        }
+        let Some(start) = self
+            .code_map
+            .offset(range.start_line, range.start_character)
+        else {
+            return false;
+        };
+        let Some(end) = self.code_map.offset(range.end_line, range.end_character) else {
+            return false;
+        };
+        if start >= end || !self.code_map.is_code_offset(start) {
+            return false;
+        }
+        let bytes = self.source.as_bytes();
+        if bytes.get(start..end) != Some(name.as_bytes()) {
+            return false;
+        }
+        if start > 0 && is_word_byte(bytes[start - 1]) {
+            return false;
+        }
+        if bytes.get(end).is_some_and(|byte| is_word_byte(*byte)) {
+            return false;
+        }
+        true
+    }
+}
+
 pub fn is_code_reference_at_range(source: &str, name: &str, range: &SourceRange) -> bool {
-    if name.is_empty() {
-        return false;
-    }
-    let code_map = CodeMap::new(source);
-    let Some(start) = code_map.offset(range.start_line, range.start_character) else {
-        return false;
-    };
-    let Some(end) = code_map.offset(range.end_line, range.end_character) else {
-        return false;
-    };
-    if start >= end || !code_map.is_code_offset(start) {
-        return false;
-    }
-    let bytes = source.as_bytes();
-    if bytes.get(start..end) != Some(name.as_bytes()) {
-        return false;
-    }
-    if start > 0 && is_word_byte(bytes[start - 1]) {
-        return false;
-    }
-    if bytes.get(end).is_some_and(|byte| is_word_byte(*byte)) {
-        return false;
-    }
-    true
+    CodeReferenceMap::new(source).contains(name, range)
 }
 
 pub(super) fn dedupe_reference_records(references: Vec<ReferenceRecord>) -> Vec<ReferenceRecord> {

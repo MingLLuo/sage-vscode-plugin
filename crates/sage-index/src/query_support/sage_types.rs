@@ -252,28 +252,63 @@ fn infer_owner_type_before_with_hints(
     max_line: u32,
     allow_name_hints: bool,
 ) -> Option<SageOwnerType> {
-    let local_function_returns = infer_local_function_return_types(source, allow_name_hints);
+    let scope_map = LexicalScopeMap::new(source);
+    let local_function_returns =
+        infer_local_function_return_types(source, allow_name_hints, max_line, &scope_map);
     let mut known_types: HashMap<String, SageOwnerType> = HashMap::new();
+    let target_functions = scope_map.enclosing_function_lines(max_line);
+    let mut entered_functions = BTreeSet::new();
     let owner_base = owner_base_identifier(owner);
+    if owner_base.is_some_and(|name| expression_locally_binds_name_on_line(source, name, max_line))
+    {
+        return None;
+    }
     for (line_index, line) in source.lines().enumerate() {
         if line_index as u32 > max_line {
             break;
         }
-        let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
+        if !scope_map.is_code_line(line_index as u32) {
             continue;
         }
+        let trimmed = line.trim_start();
+        match scope_map.line_relation_to(line_index as u32, max_line) {
+            InferenceLineRelation::Hidden => continue,
+            InferenceLineRelation::Conditional => {
+                known_types.retain(|name, _| !line_rebinds_name(trimmed, name));
+                continue;
+            }
+            InferenceLineRelation::Dominates => {}
+        }
+        for function_line in scope_map.enclosing_function_lines(line_index as u32) {
+            if target_functions.contains(&function_line) && entered_functions.insert(function_line)
+            {
+                known_types.retain(|name, _| {
+                    !scope_map.function_statically_binds_name(source, function_line, name)
+                });
+            }
+        }
+        if let Some(parameters) =
+            scope_map.enclosing_function_parameters_at_line(line_index as u32, max_line)
+        {
+            known_types.retain(|name, _| !parameters.contains(name));
+        }
         let Some((name, rhs)) = parse_simple_assignment(trimmed) else {
+            known_types.retain(|name, _| !line_rebinds_name(trimmed, name));
             continue;
         };
-        if let Some(owner_type) =
+        known_types
+            .retain(|known_name, _| known_name == name || !line_rebinds_name(trimmed, known_name));
+        let inferred_type =
             infer_type_from_rhs(rhs, &known_types, &local_function_returns, allow_name_hints)
                 .or_else(|| {
                     allow_name_hints
                         .then(|| infer_owner_type_from_name(name))
                         .flatten()
-                })
-        {
+                });
+        // The right-hand side sees the old binding, but every assignment then
+        // creates a new one. Unknown values must clear stale constructor types.
+        known_types.remove(name);
+        if let Some(owner_type) = inferred_type {
             known_types.insert(name.to_string(), owner_type);
         }
     }
@@ -465,52 +500,148 @@ fn infer_owner_type_from_explicit_expression(owner: &str, member: &str) -> Optio
 fn infer_local_function_return_types(
     source: &str,
     allow_name_hints: bool,
+    max_line: u32,
+    scope_map: &LexicalScopeMap,
 ) -> HashMap<String, SageOwnerType> {
-    let mut returns = HashMap::new();
+    let mut returns: HashMap<String, SageOwnerType> = HashMap::new();
+    let target_functions = scope_map.enclosing_function_lines(max_line);
+    let mut entered_functions = BTreeSet::new();
     let lines: Vec<&str> = source.lines().collect();
-    for (line_index, line) in lines.iter().enumerate() {
+    for (line_index, line) in lines.iter().enumerate().take(max_line as usize + 1) {
+        if !scope_map.is_code_line(line_index as u32) {
+            continue;
+        }
         let trimmed = line.trim_start();
+        match scope_map.line_relation_to(line_index as u32, max_line) {
+            InferenceLineRelation::Hidden => continue,
+            InferenceLineRelation::Conditional => {
+                returns.retain(|name, _| !line_rebinds_name(trimmed, name));
+                continue;
+            }
+            InferenceLineRelation::Dominates => {}
+        }
+        for function_line in scope_map.enclosing_function_lines(line_index as u32) {
+            if target_functions.contains(&function_line) && entered_functions.insert(function_line)
+            {
+                returns.retain(|name, _| {
+                    !scope_map.function_statically_binds_name(source, function_line, name)
+                });
+            }
+        }
+        if let Some(parameters) =
+            scope_map.enclosing_function_parameters_at_line(line_index as u32, max_line)
+        {
+            returns.retain(|name, _| !parameters.contains(name));
+        }
         let Some(captures) = function_header_re().captures(trimmed) else {
+            returns.retain(|name, _| !line_rebinds_name(trimmed, name));
             continue;
         };
         let Some(name) = captures.name("name").map(|name| name.as_str()) else {
             continue;
         };
-        let indent = line.len() - trimmed.len();
-        let mut known_types = HashMap::new();
-        for body_line in lines.iter().skip(line_index + 1) {
-            let body_trimmed = body_line.trim_start();
-            if body_trimmed.is_empty() || body_trimmed.starts_with('#') {
-                continue;
-            }
-            let body_indent = body_line.len() - body_trimmed.len();
-            if body_indent <= indent {
-                break;
-            }
-            if let Some((assigned, rhs)) = parse_simple_assignment(body_trimmed) {
-                if let Some(owner_type) =
-                    infer_type_from_rhs(rhs, &known_types, &returns, allow_name_hints).or_else(
-                        || {
-                            allow_name_hints
-                                .then(|| infer_owner_type_from_name(assigned))
-                                .flatten()
-                        },
-                    )
-                {
-                    known_types.insert(assigned.to_string(), owner_type);
-                }
-            }
-            if let Some(return_expr) = body_trimmed.strip_prefix("return ") {
-                if let Some(owner_type) =
-                    infer_type_from_rhs(return_expr, &known_types, &returns, allow_name_hints)
-                {
-                    returns.insert(name.to_string(), owner_type);
-                    break;
-                }
-            }
+        let inferred = infer_local_function_return_type(
+            &lines,
+            line_index as u32,
+            &returns,
+            allow_name_hints,
+            scope_map,
+        );
+        returns.remove(name);
+        if let Some(owner_type) = inferred {
+            returns.insert(name.to_string(), owner_type);
         }
     }
     returns
+}
+
+fn infer_local_function_return_type(
+    lines: &[&str],
+    function_line: u32,
+    local_function_returns: &HashMap<String, SageOwnerType>,
+    allow_name_hints: bool,
+    scope_map: &LexicalScopeMap,
+) -> Option<SageOwnerType> {
+    let mut known_types: HashMap<String, SageOwnerType> = HashMap::new();
+    let mut return_type = None;
+    let mut saw_return = false;
+    let mut saw_unconditional_return = false;
+    let mut entered_function_scope = false;
+    for (line_index, body_line) in lines.iter().enumerate().skip(function_line as usize + 1) {
+        let line_index = line_index as u32;
+        if scope_map.is_within_function_scope(line_index, function_line) {
+            entered_function_scope = true;
+        } else if entered_function_scope {
+            break;
+        } else {
+            continue;
+        }
+        if !scope_map.is_code_line(line_index) {
+            continue;
+        }
+        let body_trimmed = body_line.trim_start();
+        let return_expression = if body_trimmed == "return" {
+            Some("")
+        } else {
+            body_trimmed.strip_prefix("return ")
+        };
+        if !scope_map.is_unconditional_function_body_line(line_index, function_line) {
+            if scope_map.is_direct_function_body_line(line_index, function_line) {
+                if let Some(return_expression) = return_expression {
+                    saw_return = true;
+                    let owner_type = infer_type_from_rhs(
+                        return_expression,
+                        &known_types,
+                        local_function_returns,
+                        allow_name_hints,
+                    )?;
+                    if return_type.is_some_and(|known| known != owner_type) {
+                        return None;
+                    }
+                    return_type = Some(owner_type);
+                }
+                known_types.retain(|name, _| !line_rebinds_name(body_trimmed, name));
+            }
+            continue;
+        }
+        if let Some((assigned, rhs)) = parse_simple_assignment(body_trimmed) {
+            known_types.retain(|known_name, _| {
+                known_name == assigned || !line_rebinds_name(body_trimmed, known_name)
+            });
+            let inferred =
+                infer_type_from_rhs(rhs, &known_types, local_function_returns, allow_name_hints)
+                    .or_else(|| {
+                        allow_name_hints
+                            .then(|| infer_owner_type_from_name(assigned))
+                            .flatten()
+                    });
+            known_types.remove(assigned);
+            if let Some(owner_type) = inferred {
+                known_types.insert(assigned.to_string(), owner_type);
+            }
+        } else {
+            known_types.retain(|name, _| !line_rebinds_name(body_trimmed, name));
+        }
+
+        let Some(return_expression) = return_expression else {
+            continue;
+        };
+        saw_return = true;
+        saw_unconditional_return = true;
+        let owner_type = infer_type_from_rhs(
+            return_expression,
+            &known_types,
+            local_function_returns,
+            allow_name_hints,
+        )?;
+        if return_type.is_some_and(|known| known != owner_type) {
+            return None;
+        }
+        return_type = Some(owner_type);
+    }
+    (saw_return && saw_unconditional_return)
+        .then_some(return_type)
+        .flatten()
 }
 
 fn parse_simple_assignment(line: &str) -> Option<(&str, &str)> {
@@ -548,8 +679,10 @@ fn infer_type_from_rhs(
         .map(|callee| callee.as_str());
     if let Some(callee) = callee {
         let short = callee.rsplit('.').next().unwrap_or(callee);
-        if let Some(owner_type) = local_function_returns.get(short).copied() {
-            return Some(owner_type);
+        if !callee.contains('.') {
+            if let Some(owner_type) = local_function_returns.get(short).copied() {
+                return Some(owner_type);
+            }
         }
         if let Some(owner_type) = sage_constructor_return_type(short) {
             return Some(owner_type);

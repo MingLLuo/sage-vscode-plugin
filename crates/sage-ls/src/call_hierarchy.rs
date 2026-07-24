@@ -6,11 +6,14 @@ use super::{
         is_call_hierarchy_symbol, module_name_for_path, symbol_body_range, symbol_kind,
     },
     text_positions::{
-        byte_offset_to_utf16_character, is_word_byte, lsp_range_for_text, query_position_from_lsp,
-        utf16_character_to_byte_offset, word_at_position,
+        byte_offset_to_utf16_character, is_word_byte, line_byte_bounds, lsp_range_for_text,
+        query_position_from_lsp, utf16_character_to_byte_offset, word_at_position,
     },
 };
-use sage_index::{parse_source, QueryDefinition, QueryResult, SymbolRecord, WorkspaceIndex};
+use sage_index::{
+    parse_source, source_definition_header_end, CodeReferenceMap, QueryDefinition, QueryResult,
+    SymbolRecord, WorkspaceIndex,
+};
 use std::path::Path;
 use tower_lsp::lsp_types::{
     CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall, FoldingRange,
@@ -252,6 +255,28 @@ pub(super) fn call_ranges_in_range(text: &str, range: Range) -> Vec<(String, Ran
             scan_end,
         ));
     }
+    // The lightweight line scanner above deliberately keeps call extraction cheap, while the
+    // shared source classifier remains the authority for Python/Sage strings and comments.  The
+    // final check is important for multiline and triple-quoted strings whose opening delimiter
+    // may be on a different line from the apparent call.
+    let code_references = CodeReferenceMap::new(text);
+    calls.retain(|(name, candidate_range)| {
+        let Some(start) = query_position_from_lsp(text, candidate_range.start) else {
+            return false;
+        };
+        let Some(end) = query_position_from_lsp(text, candidate_range.end) else {
+            return false;
+        };
+        code_references.contains(
+            name,
+            &sage_index::SourceRange {
+                start_line: start.line,
+                start_character: start.character,
+                end_line: end.line,
+                end_character: end.character,
+            },
+        )
+    });
     calls
 }
 
@@ -275,12 +300,50 @@ pub(super) fn resolve_outgoing_calls(
     range: Range,
     caller_name: &str,
 ) -> Vec<ResolvedOutgoingCall> {
-    call_ranges_in_range(text, range)
+    let nested_ranges = nested_call_hierarchy_ranges(path, text, range, caller_name);
+    let calls: Vec<_> = call_ranges_in_range(text, range)
         .into_iter()
         .filter(|(name, _)| name != caller_name)
-        .filter_map(|(_, from_range)| {
-            let position = query_position_from_lsp(text, from_range.start)?;
-            let query = index.query_source_at_navigation(path, text, position);
+        .filter(|(_, from_range)| {
+            !nested_ranges
+                .iter()
+                .any(|nested| contains_position(nested, from_range.start))
+        })
+        .filter_map(|(name, from_range)| {
+            let start = query_position_from_lsp(text, from_range.start)?;
+            let end = query_position_from_lsp(text, from_range.end)?;
+            Some((
+                from_range,
+                (
+                    name,
+                    sage_index::SourceRange {
+                        start_line: start.line,
+                        start_character: start.character,
+                        end_line: end.line,
+                        end_character: end.character,
+                    },
+                ),
+            ))
+        })
+        .collect();
+    if calls.is_empty() {
+        return Vec::new();
+    }
+    let parsed = parse_source(module_name_for_path(path), path, text);
+    let query_inputs = calls
+        .iter()
+        .map(|(_, query)| query.clone())
+        .collect::<Vec<_>>();
+    index
+        .query_source_definitions_for_named_ranges_with_symbols(
+            path,
+            text,
+            &query_inputs,
+            &parsed.symbols,
+        )
+        .into_iter()
+        .zip(calls)
+        .filter_map(|(query, (from_range, _))| {
             high_confidence_call_hierarchy_definition(&query)
                 .cloned()
                 .map(|definition| ResolvedOutgoingCall {
@@ -289,6 +352,89 @@ pub(super) fn resolve_outgoing_calls(
                 })
         })
         .collect()
+}
+
+fn nested_call_hierarchy_ranges(
+    path: &Path,
+    text: &str,
+    caller_range: Range,
+    caller_name: &str,
+) -> Vec<Range> {
+    let parsed = parse_source(module_name_for_path(path), path, text);
+    parsed
+        .symbols
+        .iter()
+        .filter(|symbol| is_call_hierarchy_symbol(symbol))
+        .filter(|symbol| {
+            let selection = lsp_range_for_text(text, &symbol.range);
+            contains_position(&caller_range, selection.start)
+                && !(symbol.name == caller_name
+                    && symbol.range.start_line == caller_range.start.line)
+        })
+        .filter_map(|symbol| nested_symbol_suite_range(text, symbol))
+        .filter(|range| {
+            contains_position(&caller_range, range.start)
+                && contains_position(&caller_range, range.end)
+        })
+        .collect()
+}
+
+fn nested_symbol_suite_range(text: &str, symbol: &SymbolRecord) -> Option<Range> {
+    let (line_start, _) = line_byte_bounds(text, symbol.range.start_line)?;
+    let header_offset = line_start.checked_add(symbol.range.start_character as usize)?;
+    let suite_offset = source_definition_header_end(text, header_offset)?.checked_add(1)?;
+    let suite_start = lsp_position_for_source_offset(text, suite_offset)?;
+    let suite_end = nested_symbol_suite_end(text, symbol.range.start_line, suite_offset)?;
+    position_leq(suite_start, suite_end).then(|| Range::new(suite_start, suite_end))
+}
+
+fn nested_symbol_suite_end(
+    text: &str,
+    declaration_line: u32,
+    suite_offset: usize,
+) -> Option<Position> {
+    let (declaration_start, declaration_end) = line_byte_bounds(text, declaration_line)?;
+    let declaration_indent = leading_indent_width(&text[declaration_start..declaration_end]);
+    let suite_start = lsp_position_for_source_offset(text, suite_offset)?;
+    let (_, header_line_end) = line_byte_bounds(text, suite_start.line)?;
+    let inline_suite = text[suite_offset..header_line_end].trim_start();
+    if !inline_suite.is_empty() && !inline_suite.starts_with('#') {
+        return lsp_position_for_source_offset(text, header_line_end);
+    }
+
+    let mut line = suite_start.line.saturating_add(1);
+    let mut suite_end = lsp_position_for_source_offset(text, header_line_end)?;
+    while let Some((line_start, line_end)) = line_byte_bounds(text, line) {
+        let source_line = &text[line_start..line_end];
+        let trimmed = source_line.trim_start();
+        if !trimmed.is_empty()
+            && !trimmed.starts_with('#')
+            && leading_indent_width(source_line) <= declaration_indent
+        {
+            return Some(Position::new(line, 0));
+        }
+        suite_end = lsp_position_for_source_offset(text, line_end)?;
+        line = line.saturating_add(1);
+    }
+    Some(suite_end)
+}
+
+fn leading_indent_width(line: &str) -> usize {
+    line.chars()
+        .take_while(|ch| *ch == ' ' || *ch == '\t')
+        .map(|ch| if ch == '\t' { 4 } else { 1 })
+        .sum()
+}
+
+fn lsp_position_for_source_offset(text: &str, offset: usize) -> Option<Position> {
+    if offset > text.len() || !text.is_char_boundary(offset) {
+        return None;
+    }
+    let line = text[..offset].bytes().filter(|byte| *byte == b'\n').count() as u32;
+    let (line_start, line_end) = line_byte_bounds(text, line)?;
+    let byte_column = offset.saturating_sub(line_start).min(line_end - line_start);
+    let character = byte_offset_to_utf16_character(&text[line_start..line_end], byte_column)?;
+    Some(Position::new(line, character))
 }
 
 fn call_ranges_in_line(
@@ -563,6 +709,127 @@ mod tests {
             "caller",
         );
         assert!(calls.is_empty());
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn outgoing_calls_do_not_leak_from_nested_functions() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sage-ls-outgoing-nested-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let provider = root.join("provider.py");
+        let consumer = root.join("consumer.py");
+        fs::write(
+            &provider,
+            "def direct():\n    return 1\n\ndef nested_only():\n    return 2\n",
+        )
+        .unwrap();
+        let source = [
+            "from provider import direct, nested_only",
+            "",
+            "def outer():",
+            "    direct()",
+            "    def inner():",
+            "        nested_only()",
+            "    return direct()",
+        ]
+        .join("\n");
+        fs::write(&consumer, &source).unwrap();
+
+        let mut index = WorkspaceIndex::new(IndexOptions {
+            roots: vec![root.clone()],
+            editable_roots: vec![root.clone()],
+            exclude_globs: Vec::new(),
+            cache_dir: root.join(".cache"),
+            enable_pyx: true,
+        });
+        index.rebuild().unwrap();
+        let calls = resolve_outgoing_calls(
+            &index,
+            &consumer,
+            &source,
+            Range::new(Position::new(2, 0), Position::new(6, 19)),
+            "outer",
+        );
+
+        assert_eq!(
+            calls
+                .iter()
+                .map(|call| call.definition.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["direct", "direct"]
+        );
+        fs::remove_dir_all(root).ok();
+    }
+
+    #[test]
+    fn outgoing_calls_keep_nested_definition_header_calls_in_outer_scope() {
+        let nonce = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("sage-ls-outgoing-header-{nonce}"));
+        fs::create_dir_all(&root).unwrap();
+        let provider = root.join("provider.py");
+        let consumer = root.join("consumer.py");
+        fs::write(
+            &provider,
+            [
+                "def build_default():",
+                "    return 1",
+                "def build_base():",
+                "    return object",
+                "def nested_body():",
+                "    return 2",
+                "def class_body():",
+                "    return 3",
+            ]
+            .join("\n"),
+        )
+        .unwrap();
+        let source = [
+            "from provider import build_default, build_base, nested_body, class_body",
+            "",
+            "def outer():",
+            "    def inner(",
+            "        value=build_default(),",
+            "    ):",
+            "        nested_body()",
+            "    class Inner(",
+            "        build_base(),",
+            "    ):",
+            "        class_body()",
+            "    return 0",
+        ]
+        .join("\n");
+        fs::write(&consumer, &source).unwrap();
+
+        let mut index = WorkspaceIndex::new(IndexOptions {
+            roots: vec![root.clone()],
+            editable_roots: vec![root.clone()],
+            exclude_globs: Vec::new(),
+            cache_dir: root.join(".cache"),
+            enable_pyx: true,
+        });
+        index.rebuild().unwrap();
+        let calls = resolve_outgoing_calls(
+            &index,
+            &consumer,
+            &source,
+            Range::new(Position::new(2, 0), Position::new(11, 12)),
+            "outer",
+        );
+
+        assert_eq!(
+            calls
+                .iter()
+                .map(|call| (call.definition.name.as_str(), call.from_range.start.line))
+                .collect::<Vec<_>>(),
+            vec![("build_default", 4), ("build_base", 8)]
+        );
         fs::remove_dir_all(root).ok();
     }
 }

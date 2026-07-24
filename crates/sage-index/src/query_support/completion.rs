@@ -124,41 +124,6 @@ pub(crate) fn local_shadow_symbol_from_symbols(
         .map(|candidate| candidate.record)
 }
 
-pub(crate) fn local_receiver_member_symbol_from_symbols(
-    source: &str,
-    symbols: &[SymbolRecord],
-    owner: &str,
-    name: &str,
-    target_range: &SourceRange,
-) -> Option<SymbolRecord> {
-    if !matches!(owner.trim(), "self" | "cls") {
-        return None;
-    }
-    let class_scope = definition_scope_at_line(source, target_range.start_line)
-        .into_iter()
-        .rev()
-        .find(|scope| scope.kind == DefinitionScopeKind::Class)?;
-    let class_name = symbols
-        .iter()
-        .find(|record| {
-            record.kind == SymbolKind::Class && record.range.start_line == class_scope.line
-        })?
-        .name
-        .clone();
-    let expected_detail = format!("Method {class_name}.{name}");
-    symbols
-        .iter()
-        .find(|record| {
-            record.name == name
-                && record.detail == expected_detail
-                && matches!(
-                    record.kind,
-                    SymbolKind::Function | SymbolKind::CythonDeclaration
-                )
-        })
-        .cloned()
-}
-
 pub(crate) fn is_local_parameter_symbol(record: &SymbolRecord) -> bool {
     record.kind == SymbolKind::Variable && record.detail.starts_with("Local parameter ")
 }
@@ -200,6 +165,49 @@ pub fn local_import_alias_symbol_from_symbols(
 ) -> Option<SymbolRecord> {
     let record = local_import_symbol_from_symbols(source, symbols, name, target_range)?;
     is_explicit_import_alias_symbol(&record).then_some(record)
+}
+
+pub fn local_import_alias_symbol_from_source_name(
+    source: &str,
+    symbols: &[SymbolRecord],
+    source_name: &str,
+    source_range: &SourceRange,
+) -> Option<SymbolRecord> {
+    // Most references are ordinary uses. Avoid reparsing import syntax unless the indexed
+    // declarations show an explicit alias on the same source line.
+    if !symbols.iter().any(|record| {
+        record.kind == SymbolKind::Import
+            && record.range.start_line == source_range.start_line
+            && record.name != source_name
+            && record
+                .import_from
+                .as_deref()
+                .and_then(|import_from| import_from.rsplit_once("::"))
+                .is_some_and(|(_, imported_name)| imported_name == source_name)
+    }) {
+        return None;
+    }
+    let binding = source_aliased_import_at_range(source, source_name, source_range)?;
+    let mut record = symbols
+        .iter()
+        .find(|record| {
+            record.kind == SymbolKind::Import
+                && record.name == binding.binding_name
+                && record.range == binding.binding_range
+        })?
+        .clone();
+    if let Some(import_from) = source_import_from_at_range(source, &record.name, &record.range) {
+        record.detail = format!("Import {} from {import_from}", record.name);
+        record.import_from = Some(import_from);
+    }
+    record
+        .import_from
+        .as_deref()
+        .and_then(|import_from| import_from.rsplit_once("::"))
+        .is_some_and(|(_, imported_name)| {
+            imported_name == source_name && record.name != source_name
+        })
+        .then_some(record)
 }
 
 pub(crate) fn local_import_symbol_from_source(
@@ -382,7 +390,7 @@ fn parameter_candidates_for_target(
     candidates
 }
 
-fn definition_scope_at_line(source: &str, target_line: u32) -> Vec<DefinitionScope> {
+pub(super) fn definition_scope_at_line(source: &str, target_line: u32) -> Vec<DefinitionScope> {
     let mut scope: Vec<(DefinitionScope, usize)> = Vec::new();
     for (line_index, line) in source.lines().enumerate().take(target_line as usize + 1) {
         let trimmed = line.trim_start();
@@ -413,15 +421,15 @@ fn definition_scope_at_line(source: &str, target_line: u32) -> Vec<DefinitionSco
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum DefinitionScopeKind {
+pub(super) enum DefinitionScopeKind {
     Function,
     Class,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct DefinitionScope {
-    line: u32,
-    kind: DefinitionScopeKind,
+pub(super) struct DefinitionScope {
+    pub(super) line: u32,
+    pub(super) kind: DefinitionScopeKind,
 }
 
 fn definition_scope_kind(trimmed: &str) -> Option<DefinitionScopeKind> {
@@ -435,7 +443,7 @@ fn definition_scope_kind(trimmed: &str) -> Option<DefinitionScopeKind> {
     .then_some(DefinitionScopeKind::Function)
 }
 
-fn scope_is_visible_from(
+pub(super) fn scope_is_visible_from(
     binding_scope: &[DefinitionScope],
     target_scope: &[DefinitionScope],
 ) -> bool {
@@ -548,7 +556,7 @@ fn parameter_symbols_for_scope(
     )
 }
 
-fn parameter_symbols_for_function(
+pub(super) fn parameter_symbols_for_function(
     module: &str,
     path: &Path,
     source: &str,
@@ -717,14 +725,26 @@ fn parameter_name(raw: &str) -> Option<&str> {
         .trim_start_matches('*')
         .trim()
         .trim_start_matches('/');
-    if name.is_empty() || !is_valid_identifier(name) {
-        None
-    } else {
-        Some(name)
+    if !name.is_empty() && is_valid_identifier(name) {
+        return Some(name);
     }
+    // Cython commonly spells receivers as `Matrix self` or `Matrix* self`.
+    // Python annotations already returned through the branch above, so the
+    // final identifier is the binding name for the typed Cython form.
+    let bytes = without_default.as_bytes();
+    let mut end = bytes.len();
+    while end > 0 && !is_word_byte(bytes[end - 1]) {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 && is_word_byte(bytes[start - 1]) {
+        start -= 1;
+    }
+    let name = without_default.get(start..end)?;
+    is_valid_identifier(name).then_some(name)
 }
 
-fn line_indent(line: &str) -> usize {
+pub(super) fn line_indent(line: &str) -> usize {
     line.chars().take_while(|ch| ch.is_whitespace()).count()
 }
 

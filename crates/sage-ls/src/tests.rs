@@ -43,6 +43,120 @@ fn on_disk_navigation_cache_identity_tracks_unicode_source_content() {
 }
 
 #[test]
+fn navigation_link_support_is_negotiated_per_request_kind() {
+    let capabilities: ClientCapabilities = serde_json::from_value(json!({
+        "textDocument": {
+            "declaration": { "linkSupport": true },
+            "definition": { "linkSupport": false },
+            "implementation": { "linkSupport": true },
+            "typeDefinition": { "linkSupport": true }
+        }
+    }))
+    .unwrap();
+    assert_eq!(
+        NavigationLinkSupport::from_client_capabilities(&capabilities),
+        NavigationLinkSupport {
+            declaration: true,
+            definition: false,
+            implementation: true,
+        }
+    );
+    assert_eq!(
+        NavigationLinkSupport::from_client_capabilities(&ClientCapabilities::default()),
+        NavigationLinkSupport::default()
+    );
+}
+
+#[test]
+fn navigation_links_fall_back_to_ordered_exact_locations() {
+    let origin = Range::new(Position::new(4, 10), Position::new(4, 16));
+    let first_uri = Url::parse("file:///workspace/first.py").unwrap();
+    let second_uri = Url::parse("file:///workspace/second.py").unwrap();
+    let first_range = Range::new(Position::new(1, 8), Position::new(1, 14));
+    let second_range = Range::new(Position::new(7, 4), Position::new(7, 10));
+    let links = vec![
+        LocationLink {
+            origin_selection_range: Some(origin),
+            target_uri: first_uri.clone(),
+            target_range: Range::new(Position::new(1, 0), Position::new(2, 0)),
+            target_selection_range: first_range,
+        },
+        LocationLink {
+            origin_selection_range: Some(origin),
+            target_uri: second_uri.clone(),
+            target_range: Range::new(Position::new(7, 0), Position::new(8, 0)),
+            target_selection_range: second_range,
+        },
+    ];
+
+    assert_eq!(
+        navigation_response_for_links(links.clone(), true),
+        GotoDefinitionResponse::Link(links)
+    );
+    assert_eq!(
+        navigation_response_for_links(
+            vec![
+                LocationLink {
+                    origin_selection_range: Some(origin),
+                    target_uri: first_uri.clone(),
+                    target_range: Range::default(),
+                    target_selection_range: first_range,
+                },
+                LocationLink {
+                    origin_selection_range: Some(origin),
+                    target_uri: second_uri.clone(),
+                    target_range: Range::default(),
+                    target_selection_range: second_range,
+                },
+            ],
+            false,
+        ),
+        GotoDefinitionResponse::Array(vec![
+            Location {
+                uri: first_uri,
+                range: first_range,
+            },
+            Location {
+                uri: second_uri,
+                range: second_range,
+            },
+        ])
+    );
+
+    let implementation_response: GotoImplementationResponse = navigation_response_for_links(
+        vec![LocationLink {
+            origin_selection_range: Some(origin),
+            target_uri: Url::parse("file:///workspace/implementation.py").unwrap(),
+            target_range: Range::new(Position::new(3, 0), Position::new(4, 0)),
+            target_selection_range: Range::new(Position::new(3, 4), Position::new(3, 10)),
+        }],
+        false,
+    );
+    assert!(matches!(
+        implementation_response,
+        GotoImplementationResponse::Array(_)
+    ));
+}
+
+#[test]
+fn call_hierarchy_only_falls_back_to_the_enclosing_item_without_a_target_word() {
+    let source = "def caller():\n    result = unknown.shared()\n    return result\n";
+
+    assert!(
+        !may_fallback_to_enclosing_call_hierarchy(source, Position::new(1, 23)),
+        "an unresolved member token must not be replaced by the enclosing function"
+    );
+    assert!(
+        !may_fallback_to_enclosing_call_hierarchy(source, Position::new(1, 14)),
+        "an unresolved owner token is still an explicit navigation target"
+    );
+    assert!(
+        may_fallback_to_enclosing_call_hierarchy(source, Position::new(2, 2)),
+        "ordinary indentation has no explicit target and may use the enclosing function"
+    );
+}
+
+#[test]
 fn reference_candidates_are_scoped_to_the_resolved_definition() {
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
@@ -514,6 +628,143 @@ fn import_alias_rename_candidates_stay_in_the_alias_binding_scope() {
         &other_reference.range,
         &target,
     ));
+}
+
+#[test]
+fn source_definition_references_and_rename_include_aliased_import_source_names_only() {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let root = std::env::temp_dir().join(format!(
+        "sage-ls-aliased-source-reference-{}-{nonce}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let provider_path = root.join("provider.py");
+    let other_provider_path = root.join("other_provider.py");
+    let first_consumer_path = root.join("first_consumer.py");
+    let second_consumer_path = root.join("second_consumer.py");
+    let unrelated_consumer_path = root.join("unrelated_consumer.py");
+    let provider_source = "def target():\n    return 1\n";
+    let other_provider_source = "def target():\n    return 2\n";
+    let first_consumer_source =
+        "from provider import target as first_alias\nvalue = first_alias()\n";
+    let second_consumer_source = [
+        "from provider import (",
+        "    target as second_alias,",
+        ")",
+        "value = second_alias()",
+    ]
+    .join("\n");
+    let unrelated_consumer_source =
+        "from other_provider import target as unrelated_alias\nvalue = unrelated_alias()\n";
+    for (path, source) in [
+        (&provider_path, provider_source),
+        (&other_provider_path, other_provider_source),
+        (&first_consumer_path, first_consumer_source),
+        (&second_consumer_path, second_consumer_source.as_str()),
+        (&unrelated_consumer_path, unrelated_consumer_source),
+    ] {
+        std::fs::write(path, source).unwrap();
+    }
+
+    let root = root.canonicalize().unwrap();
+    let provider_path = provider_path.canonicalize().unwrap();
+    let other_provider_path = other_provider_path.canonicalize().unwrap();
+    let first_consumer_path = first_consumer_path.canonicalize().unwrap();
+    let second_consumer_path = second_consumer_path.canonicalize().unwrap();
+    let unrelated_consumer_path = unrelated_consumer_path.canonicalize().unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join("cache"),
+        enable_pyx: true,
+    });
+    index.preload_indexed_files(vec![
+        parse_source("provider", &provider_path, provider_source),
+        parse_source(
+            "other_provider",
+            &other_provider_path,
+            other_provider_source,
+        ),
+        parse_source(
+            "first_consumer",
+            &first_consumer_path,
+            first_consumer_source,
+        ),
+        parse_source(
+            "second_consumer",
+            &second_consumer_path,
+            &second_consumer_source,
+        ),
+        parse_source(
+            "unrelated_consumer",
+            &unrelated_consumer_path,
+            unrelated_consumer_source,
+        ),
+    ]);
+
+    let definition_query = index.query_source_at_navigation(
+        &provider_path,
+        provider_source,
+        QueryPosition {
+            line: 0,
+            character: 5,
+        },
+    );
+    assert_eq!(
+        definition_query.resolution_confidence.as_deref(),
+        Some("high")
+    );
+    let definition = definition_query
+        .definition
+        .expect("definition should resolve");
+    let target = ResolvedReferenceTarget {
+        word: "target".to_string(),
+        range: Range::new(Position::new(0, 4), Position::new(0, 10)),
+        definition_ranges: vec![definition.range.clone()],
+        definition,
+        declaration: None,
+        local_import_alias: None,
+    };
+    let open_paths = BTreeSet::new();
+    let collect_closed_locations = |mode| {
+        indexed_reference_locations(&index, &target, mode, &open_paths)
+            .into_iter()
+            .map(|location| {
+                (
+                    uri_to_path(&location.uri).unwrap(),
+                    location.range.start.line,
+                    location.range.start.character,
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let accepted = collect_closed_locations(ReferenceCollectionMode::References);
+    let rename_accepted = collect_closed_locations(ReferenceCollectionMode::Rename);
+
+    assert_eq!(rename_accepted, accepted);
+    assert_eq!(
+        accepted,
+        vec![
+            (first_consumer_path.clone(), 0, 21),
+            (provider_path.clone(), 0, 4),
+            (second_consumer_path.clone(), 1, 4),
+        ]
+    );
+    assert!(accepted
+        .iter()
+        .all(|(path, _, _)| path != &other_provider_path && path != &unrelated_consumer_path));
+    assert!(!accepted.iter().any(|(path, line, character)| {
+        path == &first_consumer_path && *line == 0 && *character == 31
+    }));
+    assert!(!accepted
+        .iter()
+        .any(|(path, line, _)| path == &first_consumer_path && *line == 1));
+
+    std::fs::remove_dir_all(root).ok();
 }
 
 #[test]
@@ -1465,6 +1716,30 @@ fn call_hierarchy_scanner_includes_members_and_skips_non_code_calls() {
     assert_eq!(
         names,
         vec!["helper", "rank", "PolynomialRing", "zero_matrix"]
+    );
+}
+
+#[test]
+fn call_hierarchy_scanner_skips_calls_in_multiline_strings() {
+    let source = [
+        "def main():",
+        "    description = \"\"\"",
+        "    hidden_call()",
+        "    and_hidden()",
+        "    \"\"\"",
+        "    return visible_call()",
+    ]
+    .join("\n");
+    let calls = call_ranges_in_range(
+        &source,
+        Range::new(Position::new(0, 0), Position::new(5, 25)),
+    );
+    assert_eq!(
+        calls
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["visible_call"]
     );
 }
 

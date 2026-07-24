@@ -219,7 +219,7 @@ test("release scripts cover packaged Rust binaries and real Sage smoke gates", (
   const releaseGate = rootPackage.scripts?.["test:release"] ?? "";
   for (const expected of [
     "cargo clippy --locked --all-targets --all-features -- -D warnings",
-    "npm run test:lsp-shutdown",
+    "npm run test:lsp-protocol",
     "npm run test:generated-assets",
     "npm run package:rust-binary",
     "npm run test:vsix-contents",
@@ -284,7 +284,7 @@ test("macOS CI gate is public-repository safe", () => {
     "npm run lint",
     "npm run build",
     "npm run test",
-    "npm run test:lsp-shutdown",
+    "npm run test:lsp-protocol",
     "npm run test:generated-assets",
     "npm run package:rust-binary",
     "npm run test:vsix-contents",

@@ -180,6 +180,13 @@ impl WorkspaceIndex {
     ) -> Option<QueryDefinition> {
         let query_path = normalize_path(path.to_path_buf());
         let (word, range) = word_at_source_position(source, position.line, position.character)?;
+        let source_map = CodeMap::new(source);
+        let target_is_code = source_map
+            .offset(range.start_line, range.start_character)
+            .is_some_and(|offset| source_map.is_code_offset(offset));
+        if !target_is_code {
+            return None;
+        }
         let owner_type = infer_owner_type_before_strict(source, &word, "", position.line)?;
         let parsed = self.parse_source_for_query(&query_path, source);
         if !self.owner_type_has_reliable_sage_binding(
@@ -340,6 +347,36 @@ impl WorkspaceIndex {
             .collect()
     }
 
+    pub fn query_source_definitions_for_named_ranges_with_symbols(
+        &self,
+        path: &Path,
+        source: &str,
+        queries: &[(String, SourceRange)],
+        local_symbols: &[SymbolRecord],
+    ) -> Vec<QueryResult> {
+        let source_map = CodeMap::new(source);
+        queries
+            .iter()
+            .map(|(symbol, range)| {
+                self.query_source_symbol_with_options_and_symbols(
+                    path,
+                    source,
+                    symbol,
+                    Some(range.clone()),
+                    QueryExecutionOptions {
+                        rename_to: None,
+                        diagnostics: Vec::new(),
+                        features: QueryFeatures::definition_only(),
+                    },
+                    PreparedQueryContext {
+                        local_symbols: Some(local_symbols),
+                        source_map: Some(&source_map),
+                    },
+                )
+            })
+            .collect()
+    }
+
     fn query_source_symbol_with_options_and_symbols(
         &self,
         path: &Path,
@@ -355,9 +392,6 @@ impl WorkspaceIndex {
             features,
         } = options;
         let query_path = normalize_path(path.to_path_buf());
-        let target_range = known_range
-            .or_else(|| range_for_first_symbol(source, symbol))
-            .unwrap_or_default();
         let owned_source_map;
         let source_map = if let Some(source_map) = context.source_map {
             source_map
@@ -365,6 +399,10 @@ impl WorkspaceIndex {
             owned_source_map = CodeMap::new(source);
             &owned_source_map
         };
+        let target_range = known_range
+            .or_else(|| range_for_first_code_symbol(source, symbol, source_map))
+            .or_else(|| range_for_first_symbol(source, symbol))
+            .unwrap_or_default();
         let target_is_code = source_map
             .offset(target_range.start_line, target_range.start_character)
             .is_some_and(|offset| source_map.is_code_offset(offset));
@@ -407,47 +445,56 @@ impl WorkspaceIndex {
             .or_else(|| source_imported_sage_all_star_lookup(source, lookup_name));
         let implicit_sage_all_lookup =
             is_sage_source_path(&query_path) && dotted_symbol.is_none() && target_is_code;
-        let member_resolution = dotted_owner_member.map(|(owner, member)| {
-            if let Some(record) = local_receiver_member_symbol_from_symbols(
-                source,
-                local_symbols,
-                owner,
-                member,
-                &target_range,
-            ) {
-                return MemberResolution {
-                    record: Some(record),
-                    candidates: Vec::new(),
-                    owner_type: None,
-                    confidence: "high",
-                    reason: format!(
-                        "resolved local receiver member `{owner}.{member}` in the enclosing class"
-                    ),
-                    candidate_count: 1,
-                    suppress_global_fallback: true,
-                };
-            }
-            self.resolve_member_symbol(
-                source,
-                owner,
-                member,
-                MemberResolutionContext {
-                    module_hint: module_hint.as_deref(),
-                    query_path: &query_path,
-                    target_range: &target_range,
-                    local_symbols,
-                },
-            )
-        });
-        let mut suppress_global_fallback = member_resolution
-            .as_ref()
-            .is_some_and(|resolution| resolution.suppress_global_fallback);
+        let member_resolution =
+            dotted_owner_member
+                .filter(|_| target_is_code)
+                .map(|(owner, member)| {
+                    if let Some(record) = local_receiver_member_symbol_from_symbols(
+                        source,
+                        local_symbols,
+                        owner,
+                        member,
+                        &target_range,
+                    ) {
+                        return MemberResolution {
+                            record: Some(record),
+                            candidates: Vec::new(),
+                            owner_type: None,
+                            confidence: "high",
+                            reason: format!(
+                                "resolved local receiver member `{owner}.{member}` in the enclosing class"
+                            ),
+                            candidate_count: 1,
+                            suppress_global_fallback: true,
+                        };
+                    }
+                    self.resolve_member_symbol(
+                        source,
+                        owner,
+                        member,
+                        MemberResolutionContext {
+                            module_hint: module_hint.as_deref(),
+                            query_path: &query_path,
+                            target_range: &target_range,
+                            local_symbols,
+                        },
+                    )
+                });
+        let mut suppress_global_fallback = !target_is_code
+            || member_resolution
+                .as_ref()
+                .is_some_and(|resolution| resolution.suppress_global_fallback);
         let mut resolution_confidence = member_resolution
             .as_ref()
             .map(|resolution| resolution.confidence.to_string());
         let mut resolution_reason = member_resolution
             .as_ref()
             .map(|resolution| resolution.reason.clone());
+        if !target_is_code {
+            resolution_reason = Some(
+                "the selected symbol occurrence is inside a comment or string literal".to_string(),
+            );
+        }
         let owner_type = member_resolution
             .as_ref()
             .and_then(|resolution| resolution.owner_type)

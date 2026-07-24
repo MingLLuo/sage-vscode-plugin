@@ -272,7 +272,9 @@ npm run test:native-smoke
 npm run test:product-readiness
 npm run test:reference-export
 npm run test:performance
+npm run test:lsp-navigation
 npm run test:lsp-shutdown
+npm run test:lsp-protocol
 npm run test:lsp-latency
 npm run test:extension-host
 npm run test:release

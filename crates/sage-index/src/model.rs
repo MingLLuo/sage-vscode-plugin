@@ -128,6 +128,7 @@ pub(super) type SymbolLookupCache = Arc<Mutex<HashMap<String, Vec<SymbolRecord>>
 pub(super) type FileLookupCache = Arc<Mutex<HashMap<PathBuf, IndexedFile>>>;
 pub(super) type SageMethodLookupCache = Arc<Mutex<HashMap<(String, String), Option<SymbolRecord>>>>;
 pub(super) type ReferenceLookupCache = Arc<Mutex<HashMap<String, Vec<ReferenceRecord>>>>;
+pub(super) type IdentifierFilterCache = Arc<Mutex<Option<BTreeMap<PathBuf, Vec<u8>>>>>;
 pub(super) type PendingRefreshPaths = Arc<Mutex<BTreeMap<PathBuf, u64>>>;
 
 #[derive(Clone, Debug, Default)]
@@ -158,6 +159,9 @@ pub struct WorkspaceIndex {
     pub(super) file_lookup_cache: FileLookupCache,
     pub(super) sage_method_lookup_cache: SageMethodLookupCache,
     pub(super) reference_lookup_cache: ReferenceLookupCache,
+    pub(super) identifier_filter_cache: IdentifierFilterCache,
+    pub(super) identifier_filter_cache_was_ready: bool,
+    pub(super) pending_identifier_filter_updates: BTreeMap<PathBuf, Option<Vec<u8>>>,
     pub(super) pending_refresh_paths: PendingRefreshPaths,
     pub(super) completed_pending_refresh_versions: BTreeMap<PathBuf, u64>,
     pub(super) defer_pending_refresh_clear: bool,

@@ -37,7 +37,8 @@ pub use model::*;
 use query_support::*;
 pub use query_support::{
     function_call_at_position, local_import_alias_symbol_from_source,
-    local_import_alias_symbol_from_symbols, sage_prewarm_modules_for_source,
+    local_import_alias_symbol_from_source_name, local_import_alias_symbol_from_symbols,
+    sage_prewarm_modules_for_source,
 };
 use sage_specs::{
     SAGE_EXPORT_MAP, SAGE_METHOD_ALIAS_SPECS, SAGE_METHOD_SPECS, SAGE_OWNER_METHOD_MODULES,
@@ -45,8 +46,8 @@ use sage_specs::{
 use source_analysis::{
     dedupe_reference_records, diagnostics_for_source, is_sage_source_path, line_offsets,
     reference_spans_in_source, sage_load_attach_paths_before_line,
-    scope_references_for_resolved_symbol, source_import_from_at_range,
-    source_imported_sage_all_star_lookup, SourceImportLookup,
+    scope_references_for_resolved_symbol, source_aliased_import_at_range,
+    source_import_from_at_range, source_imported_sage_all_star_lookup, SourceImportLookup,
 };
 use source_paths::*;
 use symbol_support::*;
@@ -54,8 +55,12 @@ use syntax_support::*;
 
 pub use source_analysis::{
     collect_indexable_paths, is_code_reference_at_range, parse_file_for_roots, parse_source,
-    preprocess_sage_source, references_in_source, semantic_spans,
+    preprocess_sage_source, references_in_source, semantic_spans, CodeReferenceMap,
 };
+
+pub fn source_definition_header_end(source: &str, offset: usize) -> Option<usize> {
+    syntax_support::definition_header_end(source, offset)
+}
 
 const CACHE_FORMAT_VERSION: &str = "sage-index-v28-compatible-identifier-filter";
 const MAX_IMPORT_RESOLUTION_DEPTH: usize = 8;

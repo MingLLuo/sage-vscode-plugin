@@ -88,6 +88,22 @@ impl WorkspaceIndex {
         self.pending_refresh_paths = Arc::new(Mutex::new(pending));
         let completed = std::mem::take(&mut self.completed_pending_refresh_versions);
         self.clear_pending_refresh_versions(&completed);
+        if !self.pending_identifier_filter_updates.is_empty() {
+            let updates = std::mem::take(&mut self.pending_identifier_filter_updates);
+            self.identifier_filter_cache = current.identifier_filter_cache.clone();
+            if let Ok(mut cache) = self.identifier_filter_cache.lock() {
+                if let Some(filters) = cache.as_mut() {
+                    for (path, filter) in updates {
+                        if let Some(filter) = filter {
+                            filters.insert(path, filter);
+                        } else {
+                            filters.remove(&path);
+                        }
+                    }
+                }
+            }
+        }
+        self.identifier_filter_cache_was_ready = false;
         self.defer_pending_refresh_clear = false;
     }
 
@@ -121,6 +137,15 @@ impl WorkspaceIndex {
                 .map(|cache| cache.clone())
                 .unwrap_or_default(),
         ));
+        clone.identifier_filter_cache_was_ready = self
+            .identifier_filter_cache
+            .lock()
+            .map(|cache| cache.is_some())
+            .unwrap_or(false);
+        // Reconcile creates a fresh snapshot. Incremental refreshes stage their few changed
+        // filters and merge them into the current snapshot atomically during installation.
+        clone.identifier_filter_cache = Arc::new(Mutex::new(None));
+        clone.pending_identifier_filter_updates.clear();
         clone.pending_refresh_paths = Arc::new(Mutex::new(
             self.pending_refresh_paths
                 .lock()
@@ -167,6 +192,7 @@ impl WorkspaceIndex {
         self.cached_symbol_count = 0;
         self.cached_doc_count = 0;
         self.cached_root_fingerprint_mismatches.clear();
+        self.clear_identifier_filter_cache();
         self.clear_lookup_cache();
         self.last_error = None;
         let persist_started = Instant::now();
@@ -222,6 +248,7 @@ impl WorkspaceIndex {
                         self.last_persist_ms = 0;
                         let hot_started = Instant::now();
                         self.prewarm_hot_symbol_cache(false);
+                        self.prewarm_identifier_filter_cache();
                         self.last_hot_cache_ms = hot_started.elapsed().as_millis();
                         self.last_reconcile_ms = started.elapsed().as_millis();
                         self.last_index_ms = self.last_reconcile_ms;
@@ -269,6 +296,7 @@ impl WorkspaceIndex {
 
         self.files.clear();
         self.symbols_by_name.clear();
+        self.clear_identifier_filter_cache();
         self.clear_lookup_cache();
         self.loaded_roots = self.options.roots.clone();
         self.last_index_ms = started.elapsed().as_millis();
@@ -317,6 +345,7 @@ impl WorkspaceIndex {
             .saturating_add(changed_paths.len().saturating_add(deleted_paths.len()));
         let hot_started = Instant::now();
         self.prewarm_hot_symbol_cache(refresh_materialized);
+        self.prewarm_identifier_filter_cache();
         self.last_hot_cache_ms = hot_started.elapsed().as_millis();
         self.last_reconcile_ms = started.elapsed().as_millis();
         Ok(self.status())
@@ -372,6 +401,7 @@ impl WorkspaceIndex {
         }
         self.files.clear();
         self.symbols_by_name.clear();
+        self.clear_identifier_filter_cache();
         self.clear_lookup_cache();
         self.cached_file_count = file_count;
         self.cached_symbol_count = symbol_count;
@@ -514,6 +544,29 @@ impl WorkspaceIndex {
         if refresh_materialized {
             self.prewarm_hot_symbol_cache(true);
         }
+        if persisted && self.cached_file_count > 0 {
+            if self.identifier_filter_cache_was_ready {
+                for path in &deleted {
+                    self.pending_identifier_filter_updates
+                        .insert(normalize_path(path.clone()), None);
+                }
+                for file in &changed_files {
+                    self.pending_identifier_filter_updates.insert(
+                        normalize_path(file.path.clone()),
+                        Some(file.identifier_filter.clone()),
+                    );
+                }
+            } else if self
+                .identifier_filter_cache
+                .lock()
+                .map(|cache| cache.is_some())
+                .unwrap_or(false)
+            {
+                self.update_identifier_filter_cache(&changed_files, &deleted);
+            } else {
+                self.prewarm_identifier_filter_cache();
+            }
+        }
         self.last_hot_cache_ms = hot_started.elapsed().as_millis();
         Ok(self.status())
     }
@@ -550,6 +603,7 @@ impl WorkspaceIndex {
                 insert_file_symbol_names(&mut dirty_lookup_names, &previous);
             }
             insert_file_symbol_names(&mut dirty_lookup_names, &file);
+            self.update_identifier_filter_cache(std::slice::from_ref(&file), &[]);
             loaded += 1;
         }
         if loaded > 0 {

@@ -93,7 +93,13 @@ pushCheck("configure:workspace script is registered", scripts["configure:workspa
 pushCheck("doctor:mac script is registered", scripts["doctor:mac"] === "node scripts/macos-doctor.mjs", scripts["doctor:mac"]);
 pushCheck("export:reference script is registered", scripts["export:reference"] === "node scripts/export-reference.mjs", scripts["export:reference"]);
 pushCheck("test:reference-export script is registered", scripts["test:reference-export"] === "npm run build:debug-inspector && node scripts/reference-export-smoke.mjs", scripts["test:reference-export"]);
+pushCheck("test:lsp-navigation script is registered", scripts["test:lsp-navigation"] === "npm run build:rust && node scripts/lsp-navigation-smoke.mjs", scripts["test:lsp-navigation"]);
 pushCheck("test:lsp-shutdown script is registered", scripts["test:lsp-shutdown"] === "npm run build:rust && node scripts/lsp-shutdown-smoke.mjs", scripts["test:lsp-shutdown"]);
+pushCheck(
+  "test:lsp-protocol builds once and runs both protocol smokes",
+  scripts["test:lsp-protocol"] === "npm run build:rust && node scripts/lsp-navigation-smoke.mjs && node scripts/lsp-shutdown-smoke.mjs",
+  scripts["test:lsp-protocol"],
+);
 pushCheck(
   "packaging toolchain check is registered",
   scripts["check:package-toolchain"] === "node scripts/check-package-toolchain.mjs",
@@ -123,8 +129,8 @@ pushCheck("test:ci includes product readiness smoke", includesScript("test:ci", 
 pushCheck("test:release includes product readiness smoke", includesScript("test:release", "npm run test:product-readiness"), scripts["test:release"]);
 pushCheck("test:ci includes offline reference export smoke", includesScript("test:ci", "npm run test:reference-export"), scripts["test:ci"]);
 pushCheck("test:release includes offline reference export smoke", includesScript("test:release", "npm run test:reference-export"), scripts["test:release"]);
-pushCheck("test:ci includes LSP shutdown smoke", includesScript("test:ci", "npm run test:lsp-shutdown"), scripts["test:ci"]);
-pushCheck("test:release includes LSP shutdown smoke", includesScript("test:release", "npm run test:lsp-shutdown"), scripts["test:release"]);
+pushCheck("test:ci includes LSP protocol contracts", includesScript("test:ci", "npm run test:lsp-protocol"), scripts["test:ci"]);
+pushCheck("test:release includes LSP protocol contracts", includesScript("test:release", "npm run test:lsp-protocol"), scripts["test:release"]);
 
 for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:native-smoke", "test:extension-host"]) {
   pushCheck(`test:ci excludes local-only ${localOnly}`, !includesScript("test:ci", localOnly), scripts["test:ci"]);
@@ -212,6 +218,7 @@ for (const relativePath of requiredFiles) {
 
 for (const relativePath of [
   ".vscode/launch.json",
+  "ARCHITECTURE.md",
   "README.md",
   "CONTRIBUTING.md",
   "SUPPORT.md",
@@ -224,6 +231,9 @@ for (const relativePath of [
   "packages/extension-core/README.md",
   "packages/extension-core/CHANGELOG.md",
   "scripts/configure-workspace.mjs",
+  "scripts/lib/lsp-process.mjs",
+  "scripts/lsp-navigation-smoke.mjs",
+  "scripts/lsp-shutdown-smoke.mjs",
   "scripts/lsp-latency-smoke.mjs",
   "scripts/real-file-smoke.mjs",
   "scripts/macos-doctor.mjs",

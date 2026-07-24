@@ -160,44 +160,38 @@ function buildScenarios(filePath, text) {
         expects: { definitionPathIncludes: fileName, definitionName: "solve_demo_system" },
       },
       matrixMethod("rank", "sage/src/sage/matrix/matrix0.pyx"),
-      matrixMethod("solve_right", "sage/src/sage/matrix/matrix2.pyx"),
-      matrixMethod("right_kernel", "sage/src/sage/matrix/matrix2.pyx"),
-      polynomialMethod("derivative", "sage/src/sage/rings/polynomial/multi_polynomial.pyx", 1),
-      {
-        id: "polynomial-ring-ideal",
-        member: "ideal",
-        maxMs: 250,
-        expects: {
-          definitionPathIncludes: "sage/src/sage/rings/polynomial/multi_polynomial_libsingular.pyx",
-          ownerType: "PolynomialRing",
-          resolutionConfidence: "high",
-        },
-      },
-      {
-        id: "polynomial-ring-base-ring",
-        member: "base_ring",
-        maxMs: 250,
-        expects: {
-          definitionPathIncludes: "sage/src/sage/structure/category_object.pyx",
-          ownerType: "PolynomialRing",
-          resolutionConfidence: "high",
-        },
-      },
-      {
-        id: "ideal-variety",
-        member: "variety",
-        maxMs: 250,
-        expects: {
-          definitionPathIncludes: "sage/src/sage/rings/polynomial/multi_polynomial_ideal.py",
-          ownerType: "Ideal",
-          resolutionConfidence: "high",
-        },
-      },
-      polynomialMethod("resultant", "sage/src/sage/rings/polynomial/multi_polynomial_element.py"),
-      polynomialMethod("gcd", "sage/src/sage/rings/polynomial/multi_polynomial.pyx"),
+      ambiguousMethod("matrix-solve-right", "solve_right", "sage/src/sage/matrix/matrix2.pyx", 0, 1),
+      ambiguousMethod("matrix-right-kernel", "right_kernel", "sage/src/sage/matrix/matrix2.pyx", 0, 1),
+      ambiguousMethod(
+        "polynomial-derivative",
+        "derivative",
+        "sage/src/sage/rings/polynomial/multi_polynomial.pyx",
+        1,
+      ),
+      ambiguousMethod(
+        "polynomial-ring-ideal",
+        "ideal",
+        "sage/src/sage/rings/polynomial/multi_polynomial_libsingular.pyx",
+      ),
+      ambiguousMethod(
+        "polynomial-ring-base-ring",
+        "base_ring",
+        "sage/src/sage/structure/category_object.pyx",
+      ),
+      ambiguousMethod(
+        "ideal-variety",
+        "variety",
+        "sage/src/sage/rings/polynomial/multi_polynomial_ideal.py",
+      ),
+      ambiguousMethod(
+        "polynomial-resultant",
+        "resultant",
+        "sage/src/sage/rings/polynomial/multi_polynomial_element.py",
+      ),
+      ambiguousMethod("polynomial-gcd", "gcd", "sage/src/sage/rings/polynomial/multi_polynomial.pyx"),
       matrixMethod("det", "sage/src/sage/matrix/matrix2.pyx"),
-      matrixMethod("rows", "sage/src/sage/matrix/matrix1.pyx"),
-      matrixMethod("transpose", "sage/src/sage/matrix/matrix_dense.pyx"),
+      ambiguousMethod("matrix-rows", "rows", "sage/src/sage/matrix/matrix1.pyx"),
+      ambiguousMethod("matrix-transpose", "transpose", "sage/src/sage/matrix/matrix_dense.pyx"),
     ].filter((scenario) => scenarioExists(text, scenario));
   }
   if (fileName === "11_sage_object_methods.py") {
@@ -291,6 +285,28 @@ function matrixMethod(member, definitionPathIncludes, occurrence = 0) {
       definitionPathIncludes,
       ownerType: "Matrix",
       resolutionConfidence: "high",
+    },
+  };
+}
+
+function ambiguousMethod(
+  id,
+  member,
+  definitionCandidatePathIncludes,
+  occurrence = 0,
+  minDefinitionCandidates = 2,
+) {
+  return {
+    id,
+    member,
+    occurrence,
+    maxMs: 250,
+    expects: {
+      noDefinition: true,
+      minDefinitionCandidates,
+      definitionCandidatePathIncludes,
+      resolutionConfidence: "ambiguous",
+      allowFallbackReason: true,
     },
   };
 }
@@ -458,6 +474,7 @@ function evaluateScenario(scenario, payload, elapsedMs) {
   const query = payload.query ?? {};
   const checks = [];
   const expects = scenario.expects ?? {};
+  const definitionCandidates = query.definitionCandidates ?? [];
   if (expects.noDiagnostics) {
     checks.push({ name: "no diagnostics", pass: (payload.diagnostics ?? []).length === 0, actual: payload.diagnostics ?? [] });
   }
@@ -476,6 +493,30 @@ function evaluateScenario(scenario, payload, elapsedMs) {
       actual: query.definition?.name ?? "none",
     });
   }
+  if (expects.noDefinition) {
+    checks.push({
+      name: "no forced single definition",
+      pass: !query.definition,
+      actual: query.definition?.path ?? "none",
+    });
+  }
+  if (expects.minDefinitionCandidates !== undefined) {
+    checks.push({
+      name: `definition candidates >= ${expects.minDefinitionCandidates}`,
+      pass: definitionCandidates.length >= expects.minDefinitionCandidates,
+      actual: definitionCandidates.length,
+    });
+  }
+  if (expects.definitionCandidatePathIncludes) {
+    const candidatePaths = definitionCandidates.map((candidate) => candidate?.definition?.path ?? "");
+    checks.push({
+      name: `definition candidates include ${expects.definitionCandidatePathIncludes}`,
+      pass: candidatePaths.some((candidatePath) =>
+        normalizePath(candidatePath).includes(expects.definitionCandidatePathIncludes)
+      ),
+      actual: candidatePaths.length > 0 ? candidatePaths : ["none"],
+    });
+  }
   if (expects.ownerType) {
     checks.push({ name: `owner type ${expects.ownerType}`, pass: query.ownerType === expects.ownerType, actual: query.ownerType ?? "none" });
   }
@@ -489,7 +530,9 @@ function evaluateScenario(scenario, payload, elapsedMs) {
   if (scenario.maxMs) {
     checks.push({ name: `elapsed <= ${scenario.maxMs}ms`, pass: elapsedMs <= scenario.maxMs, actual: elapsedMs });
   }
-  checks.push({ name: "no wrong fallback", pass: !query.fallback_reason, actual: query.fallback_reason ?? "none" });
+  if (!expects.allowFallbackReason) {
+    checks.push({ name: "no wrong fallback", pass: !query.fallback_reason, actual: query.fallback_reason ?? "none" });
+  }
   return checks;
 }
 

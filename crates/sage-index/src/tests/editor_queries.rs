@@ -277,6 +277,149 @@ fn references_fail_open_when_identifier_filter_lags_external_edit() {
 }
 
 #[test]
+fn reconciled_identifier_filter_snapshot_serves_references_without_reloading_database_blobs() {
+    let root = test_root("reference-filter-snapshot");
+    let source_path = root.join("demo.py");
+    fs::write(
+        &source_path,
+        "def snapshot_target():\n    return 1\n\nvalue = snapshot_target()\n",
+    )
+    .unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    let mut built = WorkspaceIndex::new(options.clone());
+    built.rebuild().unwrap();
+
+    let mut hydrated = WorkspaceIndex::new(options);
+    hydrated.hydrate_from_cache().unwrap();
+    hydrated.reconcile_with_cache().unwrap();
+    assert!(hydrated.files.is_empty());
+    assert_eq!(
+        hydrated
+            .identifier_filter_cache
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(BTreeMap::len),
+        Some(1)
+    );
+
+    let db_path = hydrated.db_path().to_path_buf();
+    let parked_db_path = db_path.with_extension("sqlite.parked");
+    fs::rename(&db_path, &parked_db_path).unwrap();
+    let references = hydrated.references("snapshot_target");
+    fs::rename(&parked_db_path, &db_path).unwrap();
+
+    assert_eq!(references.len(), 2);
+    assert!(references
+        .iter()
+        .all(|reference| reference.path == normalize_path(source_path.clone())));
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn refreshed_identifier_filter_snapshot_tracks_new_reference_names() {
+    let root = test_root("reference-filter-refresh");
+    let source_path = root.join("demo.py");
+    fs::write(
+        &source_path,
+        "def original_target():\n    return original_target()\n",
+    )
+    .unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    let mut built = WorkspaceIndex::new(options.clone());
+    built.rebuild().unwrap();
+
+    let mut hydrated = WorkspaceIndex::new(options);
+    hydrated.hydrate_from_cache().unwrap();
+    hydrated.reconcile_with_cache().unwrap();
+    fs::write(
+        &source_path,
+        "def refreshed_target():\n    return refreshed_target()\n",
+    )
+    .unwrap();
+    hydrated.mark_paths_pending_refresh(std::slice::from_ref(&source_path), &[]);
+    hydrated
+        .refresh_paths(std::slice::from_ref(&source_path), &[])
+        .unwrap();
+
+    let db_path = hydrated.db_path().to_path_buf();
+    let parked_db_path = db_path.with_extension("sqlite.parked");
+    fs::rename(&db_path, &parked_db_path).unwrap();
+    let refreshed_references = hydrated.references("refreshed_target");
+    let stale_references = hydrated.references("original_target");
+    fs::rename(&parked_db_path, &db_path).unwrap();
+
+    assert_eq!(refreshed_references.len(), 2);
+    assert!(stale_references.is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn background_refresh_merges_only_changed_identifier_filters_at_install() {
+    let root = test_root("reference-filter-background-refresh");
+    let source_path = root.join("demo.py");
+    fs::write(
+        &source_path,
+        "def original_target():\n    return original_target()\n",
+    )
+    .unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    let mut built = WorkspaceIndex::new(options.clone());
+    built.rebuild().unwrap();
+
+    let mut current = WorkspaceIndex::new(options);
+    current.hydrate_from_cache().unwrap();
+    current.reconcile_with_cache().unwrap();
+    current.mark_paths_pending_refresh(std::slice::from_ref(&source_path), &[]);
+    let mut background = current.clone_for_background_work();
+
+    fs::write(
+        &source_path,
+        "def refreshed_target():\n    return refreshed_target()\n",
+    )
+    .unwrap();
+    background
+        .refresh_paths(std::slice::from_ref(&source_path), &[])
+        .unwrap();
+    assert!(background.identifier_filter_cache.lock().unwrap().is_none());
+    assert_eq!(background.pending_identifier_filter_updates.len(), 1);
+
+    background.finalize_pending_refresh_install(&current);
+    assert!(Arc::ptr_eq(
+        &background.identifier_filter_cache,
+        &current.identifier_filter_cache
+    ));
+    assert!(background.pending_identifier_filter_updates.is_empty());
+
+    let db_path = background.db_path().to_path_buf();
+    let parked_db_path = db_path.with_extension("sqlite.parked");
+    fs::rename(&db_path, &parked_db_path).unwrap();
+    let references = background.references("refreshed_target");
+    fs::rename(&parked_db_path, &db_path).unwrap();
+    assert_eq!(references.len(), 2);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn discarded_background_refresh_result_preserves_pending_path() {
     let root = test_root("discarded-background-refresh");
     let source_path = root.join("demo.py");
@@ -531,6 +674,370 @@ fn navigation_uses_enclosing_class_for_self_and_cls_members() {
         assert_eq!(definition.detail, expected_detail);
         assert_eq!(definition.range.start_line, expected_line);
         assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+    }
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn navigation_uses_the_last_self_and_cls_method_binding() {
+    let root = test_root("receiver-member-last-binding");
+    let source_path = root.join("receivers.py");
+    let source = "class First:\n    def target(self):\n        return 'old first'\n\n    def target(self):\n        return 'active first'\n\n    def call(self):\n        return self.target()\n\nclass Second:\n    @classmethod\n    def target(cls):\n        return 'old second'\n\n    @classmethod\n    def target(cls):\n        return 'active second'\n\n    @classmethod\n    def call(cls):\n        return cls.target()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    for (occurrence, expected_detail, expected_line) in [
+        (0, "Method First.target", 4),
+        (1, "Method Second.target", 16),
+    ] {
+        let (line, character) = nth_member_position(source, "target", occurrence);
+        let query = index.query_source_at_navigation(
+            &source_path,
+            source,
+            QueryPosition { line, character },
+        );
+        let definition = query
+            .definition
+            .unwrap_or_else(|| panic!("receiver occurrence {occurrence} should resolve"));
+        assert_eq!(definition.detail, expected_detail);
+        assert_eq!(definition.range.start_line, expected_line);
+        assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+    }
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn receiver_member_navigation_does_not_promote_an_overwritten_method() {
+    let root = test_root("receiver-member-overwritten");
+    let source_path = root.join("receiver.py");
+    let source = "class Example:\n    def target(self):\n        return 'method'\n\n    target = None\n\n    def call(self):\n        return self.target()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+    let (line, character) = member_position(source, "target");
+
+    let query =
+        index.query_source_at_navigation(&source_path, source, QueryPosition { line, character });
+
+    assert!(query.definition.is_none());
+    assert_ne!(query.resolution_confidence.as_deref(), Some("high"));
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn receiver_member_navigation_requires_the_active_self_or_cls_binding() {
+    let root = test_root("receiver-member-binding");
+    let source_path = root.join("receiver.py");
+    let source = "class Other:\n    def target(self):\n        return 'other'\n\nclass Example:\n    def target(self):\n        return 'example'\n\n    def missing_receiver(other):\n        return self.target()\n\n    def closure(self):\n        def inner():\n            return self.target()\n        return inner()\n\n    def shadowed(self):\n        def inner(self):\n            return self.target()\n        return inner(self)\n\n    def rebound(self):\n        self = Other()\n        return self.target()\n\n    def rebound_later(self):\n        value = self.target()\n        self = Other()\n        return value\n\n    @staticmethod\n    def static_shadowed(self):\n        return self.target()\n\n    @classmethod\n    def class_shadowed(cls):\n        def inner(cls):\n            return cls.target()\n        return inner(cls)\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    for (occurrence, expected_detail) in [
+        (0, None),
+        (1, Some("Method Example.target")),
+        (2, None),
+        (3, Some("Method Other.target")),
+        (4, Some("Method Example.target")),
+        (5, None),
+        (6, None),
+    ] {
+        let (line, character) = nth_member_position(source, "target", occurrence);
+        let query = index.query_source_at_navigation(
+            &source_path,
+            source,
+            QueryPosition { line, character },
+        );
+        if let Some(expected_detail) = expected_detail {
+            assert_eq!(
+                query
+                    .definition
+                    .as_ref()
+                    .map(|definition| definition.detail.as_str()),
+                Some(expected_detail),
+                "receiver occurrence {occurrence} resolved to the wrong binding"
+            );
+            assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+        } else {
+            assert!(
+                query.definition.is_none(),
+                "shadowed receiver occurrence {occurrence} must not navigate"
+            );
+            assert_ne!(query.resolution_confidence.as_deref(), Some("high"));
+        }
+    }
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn receiver_member_navigation_rejects_expression_and_scope_shadowing() {
+    let root = test_root("receiver-expression-shadowing");
+    let source_path = root.join("receiver.py");
+    let source = "class Example:\n    def target(self):\n        return 1\n\n    def lambda_shadowed(self, other):\n        return (lambda self: self.target())(other)\n\n    def lambda_unrelated(self, other):\n        return (lambda value: self.target())(other)\n\n    def comprehension_shadowed(self, values):\n        return [self.target() for self in values]\n\n    def comprehension_unrelated(self, values):\n        return [self.target() for value in values]\n\n    def global_shadowed(self):\n        def inner():\n            global self\n            return self.target()\n        return inner()\n\n    def nonlocal_shadowed(self):\n        def inner():\n            nonlocal self\n            return self.target()\n        return inner()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    for (occurrence, should_resolve) in [
+        (0, false),
+        (1, true),
+        (2, false),
+        (3, true),
+        (4, false),
+        (5, false),
+    ] {
+        let (line, character) = nth_member_position(source, "target", occurrence);
+        let query = index.query_source_at_navigation(
+            &source_path,
+            source,
+            QueryPosition { line, character },
+        );
+        if should_resolve {
+            assert_eq!(
+                query
+                    .definition
+                    .as_ref()
+                    .map(|definition| definition.detail.as_str()),
+                Some("Method Example.target"),
+                "receiver occurrence {occurrence} should retain the method receiver"
+            );
+            assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+        } else {
+            assert!(
+                query.definition.is_none(),
+                "shadowed receiver occurrence {occurrence} must not navigate"
+            );
+            assert_ne!(query.resolution_confidence.as_deref(), Some("high"));
+        }
+    }
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn receiver_member_navigation_rejects_a_nested_future_local_binding() {
+    let root = test_root("receiver-future-local-binding");
+    let source_path = root.join("receiver.py");
+    let source = "class Other:\n    def target(self):\n        return 0\n\nclass Example:\n    def target(self):\n        return 1\n\n    def call(self):\n        def inner():\n            value = self.target()\n            self = Other()\n            return value\n        return inner()\n\n    def double_nested(self):\n        def outer():\n            def inner():\n                return self.target()\n            self = Other()\n            return inner()\n        return outer()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+    for occurrence in 0..2 {
+        let (line, character) = nth_member_position(source, "target", occurrence);
+        let query = index.query_source_at_navigation(
+            &source_path,
+            source,
+            QueryPosition { line, character },
+        );
+
+        assert!(query.definition.is_none());
+        assert_ne!(query.resolution_confidence.as_deref(), Some("high"));
+    }
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn receiver_member_navigation_accepts_a_typed_cython_self_binding() {
+    let root = test_root("typed-cython-receiver-member");
+    let source_path = root.join("receiver.pyx");
+    let source = "cdef class Example:\n    cpdef target(Example self):\n        return 1\n\n    cpdef call(Example self):\n        return self.target()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+    let (line, character) = member_position(source, "target");
+
+    let query =
+        index.query_source_at_navigation(&source_path, source, QueryPosition { line, character });
+
+    let definition = query
+        .definition
+        .expect("typed Cython self binding should resolve its class method");
+    assert_eq!(definition.detail, "Method Example.target");
+    assert_eq!(definition.range.start_line, 1);
+    assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn navigation_ignores_dotted_members_in_comments_and_strings() {
+    let root = test_root("non-code-receiver-member");
+    let source_path = root.join("receiver.py");
+    let source = "class Example:\n    def target(self):\n        return 1\n\n    def inspect(self):\n        text = \"self.target()\"\n        # self.target()\n        return text\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    for occurrence in 0..2 {
+        let (line, character) = nth_member_position(source, "target", occurrence);
+        let query = index.query_source_at_navigation(
+            &source_path,
+            source,
+            QueryPosition { line, character },
+        );
+        assert!(
+            query.definition.is_none(),
+            "non-code occurrence {occurrence} must not navigate"
+        );
+        assert_ne!(query.resolution_confidence.as_deref(), Some("high"));
+        assert!(query.definition_candidates.is_empty());
+    }
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn symbol_only_navigation_prefers_a_code_occurrence_over_docstrings() {
+    let root = test_root("symbol-only-prefers-code");
+    let first_provider = root.join("first_provider.py");
+    let second_provider = root.join("second_provider.py");
+    let source_path = root.join("consumer.py");
+    fs::write(&first_provider, "class Matrix:\n    pass\n").unwrap();
+    fs::write(&second_provider, "class Matrix:\n    pass\n").unwrap();
+    let source =
+        "\"\"\"Matrix is mentioned in documentation first.\"\"\"\nfrom first_provider import Matrix\nvalue = Matrix()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    let query = index.query_source_symbol(&source_path, source, "Matrix", None, None, Vec::new());
+
+    assert_eq!(
+        query.target.as_ref().map(|target| target.range.start_line),
+        Some(1),
+        "the import is the first code occurrence"
+    );
+    let definition = query
+        .definition
+        .expect("the explicit import should disambiguate indexed definitions");
+    assert_eq!(definition.path, normalize_path(first_provider));
+    assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+    assert!(query.definition_candidates.is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn navigation_ignores_plain_symbols_in_comments_and_strings() {
+    let root = test_root("non-code-plain-symbol");
+    let provider = root.join("provider.py");
+    let source_path = root.join("consumer.py");
+    fs::write(&provider, "def target():\n    return 1\n").unwrap();
+    let source = "text = \"target\"\n# target\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    for (line, character) in [
+        position_in_line(source, "text =", "target"),
+        position_in_line(source, "# target", "target"),
+    ] {
+        let query = index.query_source_at_navigation(
+            &source_path,
+            source,
+            QueryPosition { line, character },
+        );
+        assert!(query.definition.is_none());
+        assert!(query.definition_candidates.is_empty());
+    }
+
+    let symbol_only =
+        index.query_source_symbol(&source_path, source, "target", None, None, Vec::new());
+    assert!(symbol_only.definition.is_none());
+    assert!(symbol_only.definition_candidates.is_empty());
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn type_definition_ignores_dotted_members_in_comments_and_strings() {
+    let root = test_root("non-code-type-definition");
+    fs::create_dir_all(root.join("sage/graphs")).unwrap();
+    fs::write(
+        root.join("sage/graphs/graph.py"),
+        "class Graph:\n    pass\n",
+    )
+    .unwrap();
+    let source_path = root.join("consumer.py");
+    let source = "from sage.all import Graph\ngraph = Graph([(0, 1)])\nactual = graph.vertices()\ntext = \"graph.vertices()\"\n# graph.vertices()\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    let (line, character) = position_in_line(source, "actual =", "graph");
+    assert!(index
+        .type_definition_at_source(&source_path, source, QueryPosition { line, character },)
+        .is_some());
+
+    for line_needle in ["text =", "# graph"] {
+        let (line, character) = position_in_line(source, line_needle, "graph");
+        assert!(
+            index
+                .type_definition_at_source(&source_path, source, QueryPosition { line, character },)
+                .is_none(),
+            "type definition must ignore {line_needle:?}"
+        );
     }
 
     fs::remove_dir_all(root).ok();

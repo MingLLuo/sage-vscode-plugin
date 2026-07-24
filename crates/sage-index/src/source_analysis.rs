@@ -22,7 +22,7 @@ use import_capture::{
     capture_local_definition_alias_assignments, capture_static_member_aliases,
 };
 
-pub use diagnostics::{is_code_reference_at_range, references_in_source};
+pub use diagnostics::{is_code_reference_at_range, references_in_source, CodeReferenceMap};
 pub use discovery::{collect_indexable_paths, parse_file_for_roots};
 pub use preprocessing::preprocess_sage_source;
 pub use semantic_tokens::semantic_spans;
@@ -30,6 +30,11 @@ pub use semantic_tokens::semantic_spans;
 pub(super) struct SourceImportLookup {
     pub(super) import_module: String,
     pub(super) source_name: String,
+}
+
+pub(super) struct SourceAliasedImport {
+    pub(super) binding_name: String,
+    pub(super) binding_range: SourceRange,
 }
 
 pub fn parse_source(module: &str, path: &Path, source: &str) -> IndexedFile {
@@ -120,6 +125,14 @@ pub(super) fn source_import_from_at_range(
     range: &SourceRange,
 ) -> Option<String> {
     source_imports::source_import_from_at_range(source, binding_name, range)
+}
+
+pub(super) fn source_aliased_import_at_range(
+    source: &str,
+    source_name: &str,
+    range: &SourceRange,
+) -> Option<SourceAliasedImport> {
+    source_imports::source_aliased_import_at_range(source, source_name, range)
 }
 
 pub(super) fn is_sage_source_path(path: &Path) -> bool {

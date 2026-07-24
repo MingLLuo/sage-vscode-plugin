@@ -357,6 +357,29 @@ pub(super) fn import_binding_offset(
         .map(|(_, (_, start))| *start)
 }
 
+pub(super) fn aliased_import_binding_offset(
+    line: &str,
+    binding: &ImportedBinding,
+    source_offset: usize,
+) -> Option<usize> {
+    if binding.binding == binding.source_name {
+        return None;
+    }
+    let code = line.split('#').next().unwrap_or(line);
+    import_identifier_tokens(code)
+        .windows(3)
+        .find_map(|tokens| {
+            let (source_name, source_start) = tokens[0];
+            let (keyword, _) = tokens[1];
+            let (binding_name, binding_start) = tokens[2];
+            (source_name == binding.source_name
+                && source_start == source_offset
+                && keyword == "as"
+                && binding_name == binding.binding)
+                .then_some(binding_start)
+        })
+}
+
 fn import_identifier_tokens(line: &str) -> Vec<(&str, usize)> {
     let bytes = line.as_bytes();
     let mut tokens = Vec::new();

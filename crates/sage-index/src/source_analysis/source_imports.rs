@@ -76,6 +76,120 @@ pub(super) fn source_import_from_at_range(
     None
 }
 
+pub(super) fn source_aliased_import_at_range(
+    source: &str,
+    source_name: &str,
+    range: &SourceRange,
+) -> Option<SourceAliasedImport> {
+    if range.start_line != range.end_line
+        || range.end_character.saturating_sub(range.start_character) != source_name.len() as u32
+    {
+        return None;
+    }
+    let code_map = CodeMap::new(source);
+    let start = code_map.offset(range.start_line, range.start_character)?;
+    let end = code_map.offset(range.end_line, range.end_character)?;
+    if !code_map.is_code_offset(start)
+        || source.as_bytes().get(start..end) != Some(source_name.as_bytes())
+    {
+        return None;
+    }
+
+    let target_line = range.start_line as usize;
+    let target_character = range.start_character as usize;
+    let mut multiline_import = false;
+    for (line_index, line) in source.lines().enumerate().take(target_line + 1) {
+        let trimmed = line.trim_start();
+        if multiline_import {
+            if line_index == target_line {
+                return aliased_import_on_line(
+                    line,
+                    trimmed.trim_end_matches(')').trim(),
+                    source_name,
+                    target_character,
+                    range.start_line,
+                );
+            }
+            if trimmed.contains(')') {
+                multiline_import = false;
+            }
+            continue;
+        }
+
+        if let Some((_module, rest)) = parse_multiline_from_import_start(trimmed) {
+            if line_index == target_line {
+                return aliased_import_on_line(
+                    line,
+                    rest.trim_end_matches(')').trim(),
+                    source_name,
+                    target_character,
+                    range.start_line,
+                );
+            }
+            if !rest.contains(')') {
+                multiline_import = true;
+            }
+            continue;
+        }
+
+        if line_index != target_line {
+            continue;
+        }
+        let import =
+            parse_from_import(trimmed, false).or_else(|| parse_from_import(trimmed, true))?;
+        return import.bindings.into_iter().find_map(|binding| {
+            source_aliased_import_from_binding(
+                line,
+                binding,
+                source_name,
+                target_character,
+                range.start_line,
+            )
+        });
+    }
+    None
+}
+
+fn aliased_import_on_line(
+    original_line: &str,
+    entries: &str,
+    source_name: &str,
+    target_character: usize,
+    line: u32,
+) -> Option<SourceAliasedImport> {
+    entries.split(',').find_map(|entry| {
+        source_aliased_import_from_binding(
+            original_line,
+            parse_imported_binding(entry)?,
+            source_name,
+            target_character,
+            line,
+        )
+    })
+}
+
+fn source_aliased_import_from_binding(
+    line: &str,
+    binding: ImportedBinding,
+    source_name: &str,
+    target_character: usize,
+    line_number: u32,
+) -> Option<SourceAliasedImport> {
+    if binding.source_name != source_name {
+        return None;
+    }
+    let binding_start = aliased_import_binding_offset(line, &binding, target_character)?;
+    Some(SourceAliasedImport {
+        binding_range: SourceRange {
+            start_line: line_number,
+            start_character: binding_start as u32,
+            end_line: line_number,
+            end_character: (binding_start + binding.binding.len()) as u32,
+        },
+        binding_name: binding.binding,
+    })
+}
+
 fn from_import_target_on_line(
     original_line: &str,
     entries: &str,

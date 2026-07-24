@@ -43,23 +43,44 @@ pub(crate) fn range_for_first_symbol(source: &str, symbol: &str) -> Option<Sourc
     if symbol.is_empty() {
         return None;
     }
-    for (line_index, line) in source.lines().enumerate() {
-        for (start, _) in line.match_indices(symbol) {
-            let end = start + symbol.len();
-            let starts_at_boundary = start == 0 || !is_word_byte(line.as_bytes()[start - 1]);
-            let ends_at_boundary = end == line.len() || !is_word_byte(line.as_bytes()[end]);
-            if !starts_at_boundary || !ends_at_boundary {
-                continue;
-            }
-            return Some(SourceRange {
-                start_line: line_index as u32,
-                start_character: start as u32,
-                end_line: line_index as u32,
-                end_character: end as u32,
-            });
-        }
+    range_for_symbols(source, symbol).next()
+}
+
+pub(crate) fn range_for_first_code_symbol(
+    source: &str,
+    symbol: &str,
+    code_map: &CodeMap,
+) -> Option<SourceRange> {
+    if symbol.is_empty() {
+        return None;
     }
-    None
+    range_for_symbols(source, symbol).find(|range| {
+        code_map
+            .offset(range.start_line, range.start_character)
+            .is_some_and(|offset| code_map.is_code_offset(offset))
+    })
+}
+
+fn range_for_symbols<'a>(
+    source: &'a str,
+    symbol: &'a str,
+) -> impl Iterator<Item = SourceRange> + 'a {
+    source
+        .lines()
+        .enumerate()
+        .flat_map(move |(line_index, line)| {
+            line.match_indices(symbol).filter_map(move |(start, _)| {
+                let end = start + symbol.len();
+                let starts_at_boundary = start == 0 || !is_word_byte(line.as_bytes()[start - 1]);
+                let ends_at_boundary = end == line.len() || !is_word_byte(line.as_bytes()[end]);
+                (starts_at_boundary && ends_at_boundary).then_some(SourceRange {
+                    start_line: line_index as u32,
+                    start_character: start as u32,
+                    end_line: line_index as u32,
+                    end_character: end as u32,
+                })
+            })
+        })
 }
 
 pub(crate) fn dotted_symbol_at_range(source: &str, range: &SourceRange) -> Option<String> {
@@ -157,24 +178,53 @@ pub(crate) fn assignment_constructor_before_line(
     variable: &str,
     max_line: u32,
 ) -> Option<String> {
+    if expression_locally_binds_name_on_line(source, variable, max_line) {
+        return None;
+    }
+    let scope_map = LexicalScopeMap::new(source);
     let mut constructor = None;
+    let target_functions = scope_map.enclosing_function_lines(max_line);
+    let mut entered_functions = BTreeSet::new();
     for (line_index, line) in source.lines().enumerate() {
         if line_index as u32 > max_line {
             break;
         }
+        if !scope_map.is_code_line(line_index as u32) {
+            continue;
+        }
         let trimmed = line.trim_start();
-        if trimmed.starts_with('#') {
-            continue;
+        match scope_map.line_relation_to(line_index as u32, max_line) {
+            InferenceLineRelation::Hidden => continue,
+            InferenceLineRelation::Conditional => {
+                if line_rebinds_name(trimmed, variable) {
+                    constructor = None;
+                }
+                continue;
+            }
+            InferenceLineRelation::Dominates => {}
         }
-        let Some(captures) = assignment_constructor_re().captures(trimmed) else {
-            continue;
-        };
-        if captures
-            .name("name")
-            .is_some_and(|name| name.as_str() == variable)
+        for function_line in scope_map.enclosing_function_lines(line_index as u32) {
+            if target_functions.contains(&function_line)
+                && entered_functions.insert(function_line)
+                && scope_map.function_statically_binds_name(source, function_line, variable)
+            {
+                constructor = None;
+            }
+        }
+        if scope_map
+            .enclosing_function_parameters_at_line(line_index as u32, max_line)
+            .is_some_and(|parameters| parameters.contains(variable))
         {
-            constructor = captures.name("ctor").map(|ctor| ctor.as_str().to_string());
+            constructor = None;
+            continue;
         }
+        if !line_rebinds_name(trimmed, variable) {
+            continue;
+        }
+        constructor = assignment_constructor_re()
+            .captures(trimmed)
+            .and_then(|captures| captures.name("ctor"))
+            .map(|ctor| ctor.as_str().to_string());
     }
     constructor
 }

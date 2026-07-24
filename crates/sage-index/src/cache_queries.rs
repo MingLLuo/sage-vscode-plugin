@@ -42,6 +42,29 @@ pub(super) fn load_filtered_file_paths_from_db(
     Ok(Some(paths))
 }
 
+pub(super) fn load_identifier_filters_from_db(
+    db_path: &Path,
+    roots: &[PathBuf],
+) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
+    let connection = Connection::open(db_path)?;
+    let mut statement =
+        connection.prepare("select path, identifier_filter from files order by path")?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            PathBuf::from(row.get::<_, String>(0)?),
+            row.get::<_, Vec<u8>>(1)?,
+        ))
+    })?;
+    let mut filters = BTreeMap::new();
+    for row in rows {
+        let (path, filter) = row?;
+        if path_is_under_roots(&path, roots) {
+            filters.insert(path, filter);
+        }
+    }
+    Ok(filters)
+}
+
 pub(super) fn load_reference_spans_from_db(
     db_path: &Path,
     name: &str,
