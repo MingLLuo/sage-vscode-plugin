@@ -185,18 +185,34 @@ pub(crate) fn assignment_constructor_before_line(
     let mut constructor = None;
     let target_functions = scope_map.enclosing_function_lines(max_line);
     let mut entered_functions = BTreeSet::new();
-    for (line_index, line) in source.lines().enumerate() {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut preparser_continuation_end = None;
+    for (line_index, line) in lines.iter().enumerate() {
         if line_index as u32 > max_line {
             break;
+        }
+        if preparser_continuation_end.is_some_and(|end_line| line_index as u32 <= end_line) {
+            continue;
         }
         if !scope_map.is_code_line(line_index as u32) {
             continue;
         }
         let trimmed = line.trim_start();
+        let preparser_statement =
+            preparser_assignment_statement(&lines, line_index as u32, max_line);
+        if let Some(statement) = &preparser_statement {
+            preparser_continuation_end = Some(statement.end_line);
+        }
+        let preparser_assignment = preparser_statement
+            .as_ref()
+            .and_then(|statement| parse_preparser_assignment(&statement.text));
+        let preparser_walrus_rebinds = preparser_assignment
+            .as_ref()
+            .is_some_and(|assignment| walrus_binding_names(assignment.rhs).contains(variable));
         match scope_map.line_relation_to(line_index as u32, max_line) {
             InferenceLineRelation::Hidden => continue,
             InferenceLineRelation::Conditional => {
-                if line_rebinds_name(trimmed, variable) {
+                if line_rebinds_name(trimmed, variable) || preparser_walrus_rebinds {
                     constructor = None;
                 }
                 continue;
@@ -218,30 +234,45 @@ pub(crate) fn assignment_constructor_before_line(
             constructor = None;
             continue;
         }
+        if let Some(statement) = &preparser_statement {
+            let lhs_rebinds = preparser_assignment.as_ref().is_some_and(|assignment| {
+                assignment.parent == variable || assignment.generators.contains(&variable)
+            });
+            if preparser_walrus_rebinds || (!statement.complete && lhs_rebinds) {
+                constructor = None;
+            }
+            if !statement.complete {
+                continue;
+            }
+            let Some(assignment) = preparser_assignment else {
+                continue;
+            };
+            if lhs_rebinds {
+                constructor = if assignment.generators.contains(&variable) {
+                    Some(format!("{}.gen", assignment.parent))
+                } else {
+                    assignment
+                        .rhs
+                        .trim()
+                        .strip_suffix("[]")
+                        .map(|_| "PolynomialRing".to_string())
+                        .or_else(|| {
+                            assignment_call_re()
+                                .captures(assignment.rhs.trim())
+                                .and_then(|captures| captures.name("callee"))
+                                .map(|callee| callee.as_str().to_string())
+                        })
+                };
+            }
+            continue;
+        }
         if !line_rebinds_name(trimmed, variable) {
             continue;
         }
         constructor = assignment_constructor_re()
             .captures(trimmed)
             .and_then(|captures| captures.name("ctor"))
-            .map(|ctor| ctor.as_str().to_string())
-            .or_else(|| {
-                let assignment = parse_preparser_assignment(trimmed)?;
-                if assignment.generators.contains(&variable) {
-                    return Some(format!("{}.gen", assignment.parent));
-                }
-                (assignment.parent == variable)
-                    .then_some(assignment.rhs)?
-                    .trim()
-                    .strip_suffix("[]")
-                    .map(|_| "PolynomialRing".to_string())
-                    .or_else(|| {
-                        assignment_call_re()
-                            .captures(assignment.rhs.trim())
-                            .and_then(|captures| captures.name("callee"))
-                            .map(|callee| callee.as_str().to_string())
-                    })
-            });
+            .map(|ctor| ctor.as_str().to_string());
     }
     constructor
 }

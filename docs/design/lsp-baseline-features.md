@@ -44,7 +44,8 @@ variant-dependent calls remain unknown.
 ## Sage Source Support
 
 - `.sage` preprocessing preserves original source positions while recognizing caret exponents, ranges, empty ring
-  brackets, and `R.<x, y> = ...` generator assignments.
+  brackets, and `R.<x, y> = ...` generator assignments, including constructor right-hand sides continued across
+  physical lines.
 - Preparser parent and generator bindings participate in strict type flow and local-function return inference.
 - Python, Sage, and Cython imports support single-line and parenthesized forms, including multiline `cimport`.
 - `sage.all`, lazy imports, star re-exports, and source-derived method catalogs are materialized from the configured

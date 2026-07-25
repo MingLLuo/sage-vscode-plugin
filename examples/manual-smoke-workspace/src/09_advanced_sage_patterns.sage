@@ -76,3 +76,9 @@ advanced_sage_targets = [
 ]
 
 number_field_generator_polynomial = i.polynomial()
+
+K_multiline.<j> = NumberField(
+    w^2 + 2,
+    embedding=CC.gen(),
+)
+multiline_number_field_generator_polynomial = j.polynomial()

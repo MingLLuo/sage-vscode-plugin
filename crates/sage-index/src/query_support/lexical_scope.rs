@@ -585,24 +585,32 @@ pub(crate) fn line_rebinds_name(line: &str, target: &str) -> bool {
     assignment_left_hand_side(line).is_some_and(|targets| binding_targets_contain(targets, target))
 }
 
+pub(crate) fn walrus_binding_names(expression: &str) -> BTreeSet<String> {
+    let bytes = expression.as_bytes();
+    let code_map = CodeMap::new(expression);
+    let mut bindings = BTreeSet::new();
+    for (operator, _) in expression.match_indices(":=") {
+        if !code_map.is_code_offset(operator) || !code_map.is_code_offset(operator + 1) {
+            continue;
+        }
+        let mut end = operator;
+        while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+            end -= 1;
+        }
+        let mut start = end;
+        while start > 0 && is_word_byte(bytes[start - 1]) {
+            start -= 1;
+        }
+        let candidate = &expression[start..end];
+        if is_valid_identifier(candidate) && code_map.is_code_offset(start) {
+            bindings.insert(candidate.to_string());
+        }
+    }
+    bindings
+}
+
 fn contains_walrus_binding(line: &str, target: &str) -> bool {
-    let bytes = line.as_bytes();
-    line.match_indices(target).any(|(start, _)| {
-        let end = start + target.len();
-        let starts_at_boundary = start == 0 || !is_word_byte(bytes[start - 1]);
-        let ends_at_boundary = end >= bytes.len() || !is_word_byte(bytes[end]);
-        if !starts_at_boundary || !ends_at_boundary {
-            return false;
-        }
-        let mut operator = end;
-        while bytes
-            .get(operator)
-            .is_some_and(|byte| byte.is_ascii_whitespace())
-        {
-            operator += 1;
-        }
-        bytes.get(operator..operator + 2) == Some(b":=")
-    })
+    walrus_binding_names(line).contains(target)
 }
 
 fn contains_as_binding(clause: &str, target: &str) -> bool {

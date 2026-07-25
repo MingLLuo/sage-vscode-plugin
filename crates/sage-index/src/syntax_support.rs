@@ -184,16 +184,6 @@ pub(super) fn preparser_re() -> &'static Regex {
     })
 }
 
-pub(super) fn preparser_assignment_re() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(
-            r"^\s*(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.<(?P<symbols>[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)>\s*=\s*(?P<rhs>.+)$",
-        )
-        .unwrap()
-    })
-}
-
 pub(super) fn assignment_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {

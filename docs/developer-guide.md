@@ -162,6 +162,8 @@ Rust V2:
   Implements pure selection-range, folding-range, and inlay-hint derivation.
 - `crates/sage-ls/src/document_links.rs`
   Extracts and resolves Sage `load`/`attach` and Cython include links without mixing link parsing into request dispatch.
+- `crates/sage-ls/src/documentation.rs`
+  Owns source-position documentation extraction, runtime-source selection, and compact hover Markdown rendering.
 - `crates/sage-ls/src/signature_help.rs`
   Builds signature and parameter metadata, including UTF-16 parameter label offsets required by LSP.
 - `crates/sage-ls/src/runtime_docs.rs`
@@ -169,7 +171,8 @@ Rust V2:
   enabled and a usable Sage/Python runtime is configured; otherwise docs status reports a degraded or disabled state
   while static docs keep working.
 - `crates/sage-ls/src/tests.rs`
-  Holds protocol and cross-feature regression tests; focused module tests stay next to the implementation they exercise.
+  Holds protocol and cross-feature regression tests; navigation and reference suites live in the adjacent `tests/`
+  modules, while focused implementation tests stay next to the code they exercise.
 
 Navigation correctness depends on both boundaries above: identify a file by its canonical physical path, answer from the
 latest matching live buffer, return its original client URI, and convert byte columns to UTF-16 only at the LSP edge. Do
@@ -198,6 +201,9 @@ Rust index:
 - `crates/sage-index/src/source_analysis.rs` and `crates/sage-index/src/source_analysis/`
   Route file discovery, `.sage` preprocessing, declarations, imports/exports, diagnostics, semantic tokens, references,
   and source-import analysis through small parsing submodules.
+- `crates/sage-index/src/preparser_support.rs`
+  Collects logical multiline `R.<x> = ...` statements while respecting delimiters, strings, comments, and explicit
+  continuations. Query inference and `.sage` preprocessing share this boundary so neither can act before closure.
 - `crates/sage-index/src/query_support.rs` and `crates/sage-index/src/query_support/`
   Route pure call, completion, Sage-type, symbol, and syntax query helpers without expanding the workspace API modules.
   Sage domain catalogs remain in `sage_types.rs`; scope-aware type flow, assignment/RHS inference, and conservative

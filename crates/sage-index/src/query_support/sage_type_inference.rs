@@ -39,18 +39,35 @@ fn infer_owner_type_before_with_hints(
     {
         return None;
     }
-    for (line_index, line) in source.lines().enumerate() {
+    let lines: Vec<&str> = source.lines().collect();
+    let mut preparser_continuation_end = None;
+    for (line_index, line) in lines.iter().enumerate() {
         if line_index as u32 > max_line {
             break;
+        }
+        if preparser_continuation_end.is_some_and(|end_line| line_index as u32 <= end_line) {
+            continue;
         }
         if !scope_map.is_code_line(line_index as u32) {
             continue;
         }
         let trimmed = line.trim_start();
+        let preparser_statement =
+            preparser_assignment_statement(&lines, line_index as u32, max_line);
+        if let Some(statement) = &preparser_statement {
+            preparser_continuation_end = Some(statement.end_line);
+        }
+        let preparser_walrus_bindings = preparser_statement
+            .as_ref()
+            .and_then(|statement| parse_preparser_assignment(&statement.text))
+            .map(|assignment| walrus_binding_names(assignment.rhs))
+            .unwrap_or_default();
         match scope_map.line_relation_to(line_index as u32, max_line) {
             InferenceLineRelation::Hidden => continue,
             InferenceLineRelation::Conditional => {
-                known_types.retain(|name, _| !line_rebinds_name(trimmed, name));
+                known_types.retain(|name, _| {
+                    !line_rebinds_name(trimmed, name) && !preparser_walrus_bindings.contains(name)
+                });
                 continue;
             }
             InferenceLineRelation::Dominates => {}
@@ -68,14 +85,29 @@ fn infer_owner_type_before_with_hints(
         {
             known_types.retain(|name, _| !parameters.contains(name));
         }
-        if let Some(assignment) = parse_preparser_assignment(trimmed) {
+        if let Some(statement) = preparser_statement {
+            let assignment_text = if statement.complete {
+                statement.text.as_str()
+            } else {
+                trimmed
+            };
+            let Some(assignment) = parse_preparser_assignment(assignment_text) else {
+                continue;
+            };
             let assigned_names: BTreeSet<_> = std::iter::once(assignment.parent)
                 .chain(assignment.generators.iter().copied())
                 .collect();
             known_types.retain(|known_name, _| {
-                assigned_names.contains(known_name.as_str())
-                    || !line_rebinds_name(trimmed, known_name)
+                !preparser_walrus_bindings.contains(known_name)
+                    && (assigned_names.contains(known_name.as_str())
+                        || !line_rebinds_name(trimmed, known_name))
             });
+            if !statement.complete {
+                for name in &assigned_names {
+                    known_types.remove(*name);
+                }
+                continue;
+            }
             let parent_type = infer_preparser_parent_type(
                 assignment.rhs,
                 &known_types,

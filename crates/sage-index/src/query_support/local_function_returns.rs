@@ -72,8 +72,12 @@ fn infer_local_function_return_type(
     let mut saw_return = false;
     let mut saw_unconditional_return = false;
     let mut entered_function_scope = false;
+    let mut preparser_continuation_end = None;
     for (line_index, body_line) in lines.iter().enumerate().skip(function_line as usize + 1) {
         let line_index = line_index as u32;
+        if preparser_continuation_end.is_some_and(|end_line| line_index <= end_line) {
+            continue;
+        }
         if scope_map.is_within_function_scope(line_index, function_line) {
             entered_function_scope = true;
         } else if entered_function_scope {
@@ -85,6 +89,16 @@ fn infer_local_function_return_type(
             continue;
         }
         let body_trimmed = body_line.trim_start();
+        let preparser_statement =
+            preparser_assignment_statement(lines, line_index, lines.len() as u32 - 1);
+        if let Some(statement) = &preparser_statement {
+            preparser_continuation_end = Some(statement.end_line);
+        }
+        let preparser_walrus_bindings = preparser_statement
+            .as_ref()
+            .and_then(|statement| parse_preparser_assignment(&statement.text))
+            .map(|assignment| walrus_binding_names(assignment.rhs))
+            .unwrap_or_default();
         let return_expression = if body_trimmed == "return" {
             Some("")
         } else {
@@ -105,18 +119,36 @@ fn infer_local_function_return_type(
                     }
                     return_type = Some(owner_type);
                 }
-                known_types.retain(|name, _| !line_rebinds_name(body_trimmed, name));
+                known_types.retain(|name, _| {
+                    !line_rebinds_name(body_trimmed, name)
+                        && !preparser_walrus_bindings.contains(name)
+                });
             }
             continue;
         }
-        if let Some(assignment) = parse_preparser_assignment(body_trimmed) {
+        if let Some(statement) = preparser_statement {
+            let assignment_text = if statement.complete {
+                statement.text.as_str()
+            } else {
+                body_trimmed
+            };
+            let Some(assignment) = parse_preparser_assignment(assignment_text) else {
+                continue;
+            };
             let assigned_names: BTreeSet<_> = std::iter::once(assignment.parent)
                 .chain(assignment.generators.iter().copied())
                 .collect();
             known_types.retain(|known_name, _| {
-                assigned_names.contains(known_name.as_str())
-                    || !line_rebinds_name(body_trimmed, known_name)
+                !preparser_walrus_bindings.contains(known_name)
+                    && (assigned_names.contains(known_name.as_str())
+                        || !line_rebinds_name(body_trimmed, known_name))
             });
+            if !statement.complete {
+                for name in &assigned_names {
+                    known_types.remove(*name);
+                }
+                continue;
+            }
             let parent_type = infer_preparser_parent_type(
                 assignment.rhs,
                 &known_types,

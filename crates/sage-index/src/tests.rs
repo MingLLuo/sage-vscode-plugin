@@ -77,6 +77,8 @@ mod completion_aliases;
 mod diagnostics_semantics;
 mod editor_queries;
 mod import_resolution;
+mod multiline_preparser;
+mod navigation_candidates;
 mod parsing_preprocess;
 mod runtime_reconcile;
 mod sage_navigation;

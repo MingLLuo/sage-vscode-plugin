@@ -18,6 +18,7 @@ mod identifier_filter;
 mod lookup_state;
 mod materialized_cache;
 mod model;
+mod preparser_support;
 mod query_support;
 mod sage_specs;
 mod source_analysis;
@@ -34,6 +35,7 @@ use cache_queries::*;
 use identifier_filter::*;
 use materialized_cache::*;
 pub use model::*;
+use preparser_support::*;
 use query_support::*;
 pub use query_support::{
     function_call_at_position, local_import_alias_symbol_from_source,

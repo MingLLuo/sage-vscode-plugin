@@ -173,6 +173,13 @@ function buildScenarios(filePath, text) {
         "polynomial",
         "sage/src/sage/rings/number_field/number_field_element.pyx",
       ),
+      ownedMethod(
+        "multiline-preparser-number-field-element",
+        "NumberFieldElement",
+        "polynomial",
+        "sage/src/sage/rings/number_field/number_field_element.pyx",
+        1,
+      ),
     ].filter((scenario) => scenarioExists(text, scenario));
   }
   if (fileName === "10_sage_heavy_python.py") {

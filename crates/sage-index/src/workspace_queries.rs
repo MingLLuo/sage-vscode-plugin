@@ -732,7 +732,6 @@ impl WorkspaceIndex {
         }
         let definition_candidates: Vec<_> = navigation_candidates
             .iter()
-            .take(5)
             .filter_map(|candidate| {
                 Some(QueryDefinitionCandidate {
                     definition: query_definition_from_record(candidate)?,
@@ -745,6 +744,7 @@ impl WorkspaceIndex {
                         .and_then(documentation_summary),
                 })
             })
+            .take(5)
             .collect();
         let mut documentation = if features.presentation {
             resolved
