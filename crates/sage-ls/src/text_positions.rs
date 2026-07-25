@@ -17,13 +17,6 @@ pub(super) fn lsp_range_for_text(text: &str, range: &sage_index::SourceRange) ->
     }
 }
 
-pub(super) fn lsp_range_for_path(path: &Path, range: &sage_index::SourceRange) -> Range {
-    std::fs::read_to_string(path)
-        .ok()
-        .map(|text| lsp_range_for_text(&text, range))
-        .unwrap_or_else(|| raw_lsp_range(range))
-}
-
 pub(super) fn lsp_range_for_path_cached(
     source_text_by_path: &mut HashMap<PathBuf, Option<String>>,
     path: &Path,

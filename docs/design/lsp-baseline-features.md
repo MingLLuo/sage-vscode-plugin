@@ -35,6 +35,9 @@ Type ownership must come from visible imports, explicit constructors, verified a
 another identity-preserving source. A member name or variable-name resemblance alone is never sufficient for a
 high-confidence jump. Coarse catalog owners that span multiple implementation families remain candidate-only.
 
+Before emitting a location, the server revalidates the indexed identity against the latest open buffer or current disk
+text. Missing files, mismatched owners, and stale ranges with multiple indistinguishable matches produce no jump.
+
 Method return inference uses both the receiver type and method name. For example, `change_ring()` preserves a proven
 Matrix or Vector owner, `GF(...).gen()` yields a finite-field element, and a NumberField generator yields a distinct
 number-field element. Ordinary polynomial-ring parents are split into proven univariate and multivariate owners;
@@ -84,6 +87,8 @@ that its owner, confidence, and source path are correct.
 
 ## Follow-up Areas
 
+- Add role-aware Cython targets in the index query model so proven sibling `.pxd` declarations and `.pyx`
+  implementations can diverge by request; duplicate or structurally unproved sites must remain ordered candidates.
 - Complete element and constructor variants where Sage behavior differs: univariate versus multivariate polynomial
   elements, Laurent/power-series/Boolean rings, Graph versus DiGraph, absolute versus relative number fields, and
   field-specific elliptic curves.

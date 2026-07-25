@@ -210,6 +210,8 @@ Rust index:
   local-function return inference live in `sage_type_inference.rs`, `sage_assignment_inference.rs`, and
   `local_function_returns.rs`. `logical_continuation.rs` identifies only complete bracket or explicit-backslash
   continuations so physical indentation inside a logical line cannot prematurely end a function or control-flow suite.
+  `local_scopes.rs` owns completion/reference-facing local bindings, parameter extraction, and lightweight definition
+  visibility; keep it separate from the stricter type-flow scope map in `lexical_scope.rs`.
 - `crates/sage-index/src/sage_specs.rs`, `source_paths.rs`, `symbol_support.rs`, and `syntax_support.rs`
   Hold static Sage mappings and shared path, ranking/deduplication, and syntax primitives.
 - `crates/sage-index/src/tests.rs` and `crates/sage-index/src/tests/`

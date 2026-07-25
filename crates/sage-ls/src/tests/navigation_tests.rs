@@ -339,3 +339,267 @@ fn open_document_definition_range_uses_method_owner_detail() {
     let live = live_definition_range(&definition, &text).expect("owned method should parse");
     assert_eq!(live.start_line, 5);
 }
+
+fn disk_definition(
+    path: PathBuf,
+    name: &str,
+    detail: &str,
+    range: sage_index::SourceRange,
+) -> QueryDefinition {
+    QueryDefinition {
+        name: name.to_string(),
+        path,
+        range,
+        detail: detail.to_string(),
+        module: "navigation_validation".to_string(),
+    }
+}
+
+fn parsed_disk_definition(
+    path: PathBuf,
+    text: &str,
+    name: &str,
+    kind: SageSymbolKind,
+) -> QueryDefinition {
+    let module = "navigation_validation";
+    let symbol = parse_source(module, &path, text)
+        .symbols
+        .into_iter()
+        .find(|symbol| symbol.name == name && symbol.kind == kind)
+        .expect("test source should contain the requested symbol");
+    QueryDefinition {
+        name: symbol.name,
+        path,
+        range: symbol.range,
+        detail: symbol.detail,
+        module: module.to_string(),
+    }
+}
+
+fn unique_navigation_test_path(label: &str) -> PathBuf {
+    let nonce = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    std::env::temp_dir().join(format!(
+        "sage-ls-navigation-{label}-{}-{nonce}.py",
+        std::process::id()
+    ))
+}
+
+#[test]
+fn unopened_definition_requires_a_readable_current_file() {
+    let path = unique_navigation_test_path("missing");
+    let definition = disk_definition(
+        path,
+        "target",
+        "Function target",
+        sage_index::SourceRange {
+            start_line: 0,
+            start_character: 4,
+            end_line: 0,
+            end_character: 10,
+        },
+    );
+
+    assert!(validated_disk_definition_location(&definition).is_none());
+}
+
+#[test]
+fn unopened_definition_requires_identity_detail() {
+    let path = unique_navigation_test_path("missing-detail");
+    std::fs::write(&path, "def target():\n    return 1\n").unwrap();
+    let definition = disk_definition(
+        path.clone(),
+        "target",
+        "",
+        sage_index::SourceRange {
+            start_line: 0,
+            start_character: 4,
+            end_line: 0,
+            end_character: 10,
+        },
+    );
+
+    assert!(validated_disk_definition_location(&definition).is_none());
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn unopened_definition_relocates_a_stale_index_range() {
+    let path = unique_navigation_test_path("moved");
+    std::fs::write(
+        &path,
+        "# definition moved after indexing\n\n\ndef target():\n    return 1\n",
+    )
+    .unwrap();
+    let definition = disk_definition(
+        path.clone(),
+        "target",
+        "Function target",
+        sage_index::SourceRange {
+            start_line: 0,
+            start_character: 4,
+            end_line: 0,
+            end_character: 10,
+        },
+    );
+
+    let location =
+        validated_disk_definition_location(&definition).expect("moved definition should relocate");
+    assert_eq!(location.uri, Url::from_file_path(&path).unwrap());
+    assert_eq!(
+        location.range,
+        Range::new(Position::new(3, 4), Position::new(3, 10))
+    );
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn unopened_definition_rejects_a_mismatched_method_owner() {
+    let path = unique_navigation_test_path("owner");
+    std::fs::write(
+        &path,
+        "class First:\n    def target(self):\n        return 1\n",
+    )
+    .unwrap();
+    let definition = disk_definition(
+        path.clone(),
+        "target",
+        "Method Second.target",
+        sage_index::SourceRange {
+            start_line: 1,
+            start_character: 8,
+            end_line: 1,
+            end_character: 14,
+        },
+    );
+
+    assert!(validated_disk_definition_location(&definition).is_none());
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn stale_definition_does_not_guess_between_duplicate_identities() {
+    let path = unique_navigation_test_path("duplicates");
+    let text = [
+        "def target():",
+        "    return 1",
+        "",
+        "def wrapper():",
+        "    def target():",
+        "        return 2",
+        "    return target()",
+        "",
+    ]
+    .join("\n");
+    std::fs::write(&path, &text).unwrap();
+    let definition = disk_definition(
+        path.clone(),
+        "target",
+        "Function target",
+        sage_index::SourceRange {
+            start_line: 20,
+            start_character: 4,
+            end_line: 20,
+            end_character: 10,
+        },
+    );
+
+    assert!(live_definition_range(&definition, &text).is_none());
+    assert!(validated_disk_definition_location(&definition).is_none());
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn unopened_definition_uses_utf16_for_a_verified_unicode_target() {
+    let path = unique_navigation_test_path("unicode");
+    let text = "def caller(π='🚀', target=1):\n    return target\n";
+    std::fs::write(&path, text).unwrap();
+    let byte_start = text.find("target").unwrap() as u32;
+    let definition = disk_definition(
+        path.clone(),
+        "target",
+        "Local parameter target",
+        sage_index::SourceRange {
+            start_line: 0,
+            start_character: byte_start,
+            end_line: 0,
+            end_character: byte_start + "target".len() as u32,
+        },
+    );
+
+    let location =
+        validated_disk_definition_location(&definition).expect("unicode target should validate");
+    let utf16_start = text[..byte_start as usize].encode_utf16().count() as u32;
+    assert_ne!(utf16_start, byte_start);
+    assert_eq!(
+        location.range,
+        Range::new(
+            Position::new(0, utf16_start),
+            Position::new(0, utf16_start + "target".encode_utf16().count() as u32),
+        )
+    );
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn unopened_definition_preserves_a_valid_current_target() {
+    let path = unique_navigation_test_path("valid");
+    std::fs::write(&path, "def target():\n    return 1\n").unwrap();
+    let expected = sage_index::SourceRange {
+        start_line: 0,
+        start_character: 4,
+        end_line: 0,
+        end_character: 10,
+    };
+    let definition = disk_definition(path.clone(), "target", "Function target", expected);
+
+    let location =
+        validated_disk_definition_location(&definition).expect("current target should validate");
+    assert_eq!(
+        location.range,
+        Range::new(Position::new(0, 4), Position::new(0, 10))
+    );
+    std::fs::remove_file(path).ok();
+}
+
+#[test]
+fn unopened_definition_validation_keeps_import_variable_and_cython_targets() {
+    let cases = [
+        (
+            unique_navigation_test_path("import"),
+            "from unavailable.provider import external\n",
+            "external",
+            SageSymbolKind::Import,
+        ),
+        (
+            unique_navigation_test_path("variable"),
+            "value = 1\n",
+            "value",
+            SageSymbolKind::Variable,
+        ),
+        (
+            unique_navigation_test_path("cython").with_extension("pyx"),
+            "cpdef int target(int value):\n    return value\n",
+            "target",
+            SageSymbolKind::CythonDeclaration,
+        ),
+        (
+            unique_navigation_test_path("module"),
+            "value = 1\n",
+            "navigation_validation",
+            SageSymbolKind::Module,
+        ),
+    ];
+
+    for (path, text, name, kind) in cases {
+        std::fs::write(&path, text).unwrap();
+        let definition = parsed_disk_definition(path.clone(), text, name, kind);
+        let location = validated_disk_definition_location(&definition)
+            .expect("verified source symbol should remain navigable");
+        assert_eq!(location.uri, Url::from_file_path(&path).unwrap());
+        assert_eq!(location.range, lsp_range_for_text(text, &definition.range));
+        std::fs::remove_file(path).ok();
+    }
+}

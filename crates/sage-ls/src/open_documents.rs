@@ -111,7 +111,16 @@ pub(super) fn uri_to_path(uri: &Url) -> Option<PathBuf> {
 }
 
 pub(super) fn canonical_path_for_comparison(path: &Path) -> PathBuf {
-    std::fs::canonicalize(path).unwrap_or_else(|_| normalize_path_lexically(path.to_path_buf()))
+    if let Ok(canonical) = std::fs::canonicalize(path) {
+        return canonical;
+    }
+    let lexical = normalize_path_lexically(path.to_path_buf());
+    if let (Some(parent), Some(file_name)) = (lexical.parent(), lexical.file_name()) {
+        if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+            return canonical_parent.join(file_name);
+        }
+    }
+    lexical
 }
 
 pub(super) fn source_text_fingerprint(text: &str) -> u64 {
@@ -176,6 +185,39 @@ mod tests {
         let live = live_document_for_path(&documents, &physical_path).unwrap();
         assert_eq!(live.uri, client_uri);
         assert_eq!(live.document.text, "value = 2\n");
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn nonexistent_live_file_uses_its_canonical_parent_identity() {
+        let root = unique_test_dir("nonexistent-canonical-parent");
+        let physical_parent = root.join("physical");
+        let aliased_parent = root.join("alias");
+        fs::create_dir_all(&physical_parent).unwrap();
+        symlink(&physical_parent, &aliased_parent).unwrap();
+
+        let client_path = aliased_parent.join("unsaved.sage");
+        let indexed_path = physical_parent.join("unsaved.sage");
+        assert!(!client_path.exists());
+        assert_eq!(
+            canonical_path_for_comparison(&client_path),
+            fs::canonicalize(&physical_parent)
+                .unwrap()
+                .join("unsaved.sage")
+        );
+
+        let client_uri = Url::from_file_path(&client_path).unwrap();
+        let mut documents = OpenDocumentMap::new();
+        documents.insert(
+            client_uri.clone(),
+            OpenDocument::live(&client_uri, "value = 1\n".into(), 2),
+        );
+
+        let live = live_document_for_path(&documents, &indexed_path)
+            .expect("canonical index path should find the unsaved live buffer");
+        assert_eq!(live.uri, client_uri);
+        assert_eq!(live.document.text, "value = 1\n");
 
         fs::remove_dir_all(root).unwrap();
     }

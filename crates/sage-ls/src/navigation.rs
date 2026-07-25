@@ -9,14 +9,9 @@ use super::call_hierarchy::is_identifier_start;
 use super::editor_features::code_before_comment;
 use super::open_documents::{live_document_for_path, uri_to_path, OpenDocument};
 use super::source_symbols::module_name_for_path;
-use super::text_positions::{
-    lsp_range_for_path, lsp_range_for_text, query_position_from_lsp, word_at_position,
-};
+use super::text_positions::{lsp_range_for_text, query_position_from_lsp, word_at_position};
 use super::Backend;
-use sage_index::{
-    is_code_reference_at_range, parse_source, QueryDefinition, QueryResult,
-    SymbolKind as SageSymbolKind,
-};
+use sage_index::{is_code_reference_at_range, parse_source, QueryDefinition, QueryResult};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 use tower_lsp::jsonrpc::Result;
@@ -274,11 +269,7 @@ impl Backend {
                 range: lsp_range_for_text(&document.text, &range),
             });
         }
-        let uri = Url::from_file_path(&definition.path).ok()?;
-        Some(Location {
-            uri,
-            range: lsp_range_for_path(&definition.path, &definition.range),
-        })
+        validated_disk_definition_location(definition)
     }
 
     pub(super) async fn open_document_for_path(&self, path: &Path) -> Option<(Url, OpenDocument)> {
@@ -343,28 +334,45 @@ impl Backend {
     }
 }
 
+pub(super) fn validated_disk_definition_location(definition: &QueryDefinition) -> Option<Location> {
+    if definition.detail.is_empty() {
+        return None;
+    }
+    let uri = Url::from_file_path(&definition.path).ok()?;
+    let text = std::fs::read_to_string(&definition.path).ok()?;
+    let range = live_definition_range(definition, &text)?;
+    Some(Location {
+        uri,
+        range: lsp_range_for_text(&text, &range),
+    })
+}
+
 pub(super) fn live_definition_range(
     definition: &QueryDefinition,
     text: &str,
 ) -> Option<sage_index::SourceRange> {
-    parse_source(
-        module_name_for_path(&definition.path),
-        &definition.path,
-        text,
-    )
-    .symbols
-    .into_iter()
-    .filter(|symbol| symbol.name == definition.name)
-    .filter(|symbol| !matches!(symbol.kind, SageSymbolKind::Module | SageSymbolKind::Import))
-    .filter(|symbol| definition.detail.is_empty() || symbol.detail == definition.detail)
-    .min_by_key(|symbol| {
-        symbol
-            .range
-            .start_line
-            .abs_diff(definition.range.start_line)
-    })
-    .map(|symbol| symbol.range)
-    .or_else(|| live_parameter_definition_range(definition, text))
+    let module = if definition.module.is_empty() {
+        module_name_for_path(&definition.path)
+    } else {
+        definition.module.as_str()
+    };
+    let matches = parse_source(module, &definition.path, text)
+        .symbols
+        .into_iter()
+        .filter(|symbol| symbol.name == definition.name)
+        .filter(|symbol| definition.detail.is_empty() || symbol.detail == definition.detail)
+        .collect::<Vec<_>>();
+    if let Some(symbol) = matches
+        .iter()
+        .find(|symbol| symbol.range == definition.range)
+    {
+        return Some(symbol.range.clone());
+    }
+    match matches.as_slice() {
+        [symbol] => Some(symbol.range.clone()),
+        [] => live_parameter_definition_range(definition, text),
+        _ => None,
+    }
 }
 
 fn live_parameter_definition_range(
