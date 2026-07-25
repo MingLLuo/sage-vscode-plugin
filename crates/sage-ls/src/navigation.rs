@@ -11,7 +11,9 @@ use super::open_documents::{live_document_for_path, uri_to_path, OpenDocument};
 use super::source_symbols::module_name_for_path;
 use super::text_positions::{lsp_range_for_text, query_position_from_lsp, word_at_position};
 use super::Backend;
-use sage_index::{is_code_reference_at_range, parse_source, QueryDefinition, QueryResult};
+use sage_index::{
+    is_code_reference_at_range, parse_source, NavigationTargetRole, QueryDefinition, QueryResult,
+};
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
 use tower_lsp::jsonrpc::Result;
@@ -84,6 +86,30 @@ impl NavigationRequestKind {
                 path, text, position, definition,
             )
     }
+
+    fn cache_flavor(self) -> NavigationQueryCacheFlavor {
+        match self {
+            Self::Declaration => NavigationQueryCacheFlavor::Declaration,
+            Self::Definition => NavigationQueryCacheFlavor::Definition,
+            Self::Implementation => NavigationQueryCacheFlavor::Implementation,
+        }
+    }
+
+    pub(super) fn index_role(self) -> NavigationTargetRole {
+        match self {
+            Self::Declaration => NavigationTargetRole::Declaration,
+            Self::Definition => NavigationTargetRole::Definition,
+            Self::Implementation => NavigationTargetRole::Implementation,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) enum NavigationQueryCacheFlavor {
+    Hover,
+    Declaration,
+    Definition,
+    Implementation,
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -94,6 +120,7 @@ pub(super) struct NavigationQueryCacheKey {
     pub(super) line: u32,
     pub(super) character: u32,
     pub(super) index_generation: u64,
+    pub(super) flavor: NavigationQueryCacheFlavor,
 }
 
 #[derive(Debug, Default)]
@@ -137,6 +164,7 @@ pub(super) fn navigation_query_cache_key(
     document: &OpenDocument,
     position: Position,
     index_generation: u64,
+    flavor: NavigationQueryCacheFlavor,
 ) -> NavigationQueryCacheKey {
     NavigationQueryCacheKey {
         uri: uri.to_string(),
@@ -145,6 +173,7 @@ pub(super) fn navigation_query_cache_key(
         line: position.line,
         character: position.character,
         index_generation,
+        flavor,
     }
 }
 
@@ -225,7 +254,13 @@ impl Backend {
             return Ok(None);
         };
         let query = self
-            .navigation_query_for_document(uri, &document, &path, params.position)
+            .navigation_query_for_document_kind(
+                uri,
+                &document,
+                &path,
+                params.position,
+                request_kind,
+            )
             .await;
         if query.resolution_confidence.as_deref() == Some("high") {
             let Some(definition) = query.definition.as_ref() else {
@@ -285,6 +320,24 @@ impl Backend {
         path: &Path,
         position: Position,
     ) -> QueryResult {
+        self.navigation_query_for_document_kind(
+            uri,
+            document,
+            path,
+            position,
+            NavigationRequestKind::Definition,
+        )
+        .await
+    }
+
+    async fn navigation_query_for_document_kind(
+        &self,
+        uri: &Url,
+        document: &OpenDocument,
+        path: &Path,
+        position: Position,
+        request_kind: NavigationRequestKind,
+    ) -> QueryResult {
         let Some(query_position) = query_position_from_lsp(&document.text, position) else {
             return QueryResult {
                 fallback_reason: Some("invalid-lsp-position".to_string()),
@@ -293,14 +346,20 @@ impl Backend {
         };
         let index = self.index.read().await;
         let index_generation = index.status().generation;
-        let key = navigation_query_cache_key(uri, document, position, index_generation);
+        let flavor = request_kind.cache_flavor();
+        let key = navigation_query_cache_key(uri, document, position, index_generation, flavor);
         if let Some(query) = self.navigation_cache.read().await.get(&key) {
             drop(index);
             return query;
         }
-        let query = index.query_source_at_navigation(path, &document.text, query_position);
+        let query = index.query_source_at_navigation_for_role(
+            path,
+            &document.text,
+            query_position,
+            request_kind.index_role(),
+        );
         self.navigation_cache.write().await.insert(
-            navigation_query_cache_key(uri, document, position, index_generation),
+            navigation_query_cache_key(uri, document, position, index_generation, flavor),
             query.clone(),
         );
         drop(index);

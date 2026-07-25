@@ -137,7 +137,9 @@ Rust V2:
   execute commands. Keep navigation, text conversion, editor features, and background work in their modules below.
 - `crates/sage-ls/src/navigation.rs`
   Owns definition, declaration, type-definition, and implementation responses, including navigation caching, verified
-  live ranges, `LocationLink` capability negotiation, and ordered candidate links.
+  live ranges, `LocationLink` capability negotiation, and ordered candidate links. Cache identity includes hover plus
+  each navigation role; omitting that flavor can make sequential definition/declaration/implementation requests reuse
+  the wrong target.
 - `crates/sage-ls/src/references.rs`
   Owns high-confidence references, prepare-rename, rename edits, alias-binding identity, and workspace reference
   collection. Changes here must preserve the same identity threshold as navigation.
@@ -212,6 +214,9 @@ Rust index:
   continuations so physical indentation inside a logical line cannot prematurely end a function or control-flow suite.
   `local_scopes.rs` owns completion/reference-facing local bindings, parameter extraction, and lightweight definition
   visibility; keep it separate from the stricter type-flow scope map in `lexical_scope.rs`.
+  `navigation_targets.rs` proves exact `.pxd`/`.pyx` class and owned-method siblings before selecting a
+  declaration/implementation role; it loads only the two sibling files and requires owned-method signatures to match.
+  Do not widen it to name-only or cross-stem matches.
 - `crates/sage-index/src/sage_specs.rs`, `source_paths.rs`, `symbol_support.rs`, and `syntax_support.rs`
   Hold static Sage mappings and shared path, ranking/deduplication, and syntax primitives.
 - `crates/sage-index/src/tests.rs` and `crates/sage-index/src/tests/`

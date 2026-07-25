@@ -17,6 +17,10 @@ This note defines how the plugin should treat Sage-native library sources such a
 - Merge module records when the same logical module is represented by multiple files.
   Current precedence is `.py`/`.sage` over `.pyx` over `.pxd` over `.pxi`.
   This keeps implementation files authoritative while still exposing declarations that only exist in `.pxd`.
+- Distinguish physical Cython roles only when the index proves an exact sibling identity. Same-directory, same-stem
+  `.pxd`/`.pyx` class and owned-method pairs route declaration to `.pxd` and implementation to `.pyx`; duplicate or
+  structurally unproved sites are never collapsed into an arbitrary jump. Owned methods must also have matching
+  non-empty normalized signatures.
 
 ## Constraints
 

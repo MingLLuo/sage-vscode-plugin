@@ -12,7 +12,8 @@ reproducible while local release candidates still exercise real Sage-heavy workl
 - Syntax and extension lint.
 - TypeScript, debug workbench, and legacy Python regression tests through `npm run test`.
 - Repository-local LSP navigation contract smoke covering one-target high-confidence jumps, ordered ambiguous
-  `LocationLink` candidates, explanatory hover content, and safety gates for weak references, rename, and call hierarchy.
+  `LocationLink` candidates, exact `.pxd` declaration/`.pyx` implementation role selection, explanatory hover content,
+  and safety gates for weak references, rename, and call hierarchy.
 - LSP shutdown smoke proving rebuild and cache-reconcile work cannot block restart or process exit.
 - Generated asset drift smoke for extension-local syntax assets, stale generated syntax files, and the deterministic
   package icon.

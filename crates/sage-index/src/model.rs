@@ -359,6 +359,19 @@ pub struct QueryDefinitionCandidate {
     pub summary: Option<String>,
 }
 
+/// Selects which physical source role a navigation query should prefer.
+///
+/// Role-specific queries may return different definitions and candidates for
+/// the same document position, so callers must include this value in any query
+/// cache key.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub enum NavigationTargetRole {
+    #[default]
+    Definition,
+    Declaration,
+    Implementation,
+}
+
 pub(super) fn query_definition_from_record(record: &SymbolRecord) -> Option<QueryDefinition> {
     if record.path.as_os_str().is_empty() {
         return None;

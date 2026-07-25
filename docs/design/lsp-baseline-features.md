@@ -38,6 +38,12 @@ high-confidence jump. Coarse catalog owners that span multiple implementation fa
 Before emitting a location, the server revalidates the indexed identity against the latest open buffer or current disk
 text. Missing files, mismatched owners, and stale ranges with multiple indistinguishable matches produce no jump.
 
+For a proven Cython class or owned method represented by exact same-directory, same-stem `.pxd` and `.pyx` siblings,
+declaration selects the `.pxd` site and implementation selects the `.pyx` site. The module, name, owner detail, and symbol
+kind must all match, and owned methods additionally require the same non-empty normalized signature. Multiple sites
+remain ordered candidates; top-level Cython functions, `.pxi`, cross-stem matches, and any structurally unproved pairing
+keep the ordinary conservative result.
+
 Method return inference uses both the receiver type and method name. For example, `change_ring()` preserves a proven
 Matrix or Vector owner, `GF(...).gen()` yields a finite-field element, and a NumberField generator yields a distinct
 number-field element. Ordinary polynomial-ring parents are split into proven univariate and multivariate owners;
@@ -53,6 +59,8 @@ variant-dependent calls remain unknown.
   physical line is dedented; malformed or unfinished continuations remain conservative and cannot authorize a jump.
 - Preparser parent and generator bindings participate in strict type flow and local-function return inference.
 - Python, Sage, and Cython imports support single-line and parenthesized forms, including multiline `cimport`.
+- Definition, declaration, and implementation queries are cached independently so sequential requests at one cursor
+  cannot reuse a target selected for another role.
 - `sage.all`, lazy imports, star re-exports, and source-derived method catalogs are materialized from the configured
   Sage checkout.
 - Known Sage owners include matrices, vectors, free modules, polynomial rings/elements/ideals, finite fields/elements,
@@ -87,8 +95,6 @@ that its owner, confidence, and source path are correct.
 
 ## Follow-up Areas
 
-- Add role-aware Cython targets in the index query model so proven sibling `.pxd` declarations and `.pyx`
-  implementations can diverge by request; duplicate or structurally unproved sites must remain ordered candidates.
 - Complete element and constructor variants where Sage behavior differs: univariate versus multivariate polynomial
   elements, Laurent/power-series/Boolean rings, Graph versus DiGraph, absolute versus relative number fields, and
   field-specific elliptic curves.

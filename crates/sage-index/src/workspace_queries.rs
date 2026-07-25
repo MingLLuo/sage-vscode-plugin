@@ -5,6 +5,7 @@ use crate::symbol_resolution::MemberResolutionContext;
 struct PreparedQueryContext<'a> {
     local_symbols: Option<&'a [SymbolRecord]>,
     source_map: Option<&'a CodeMap>,
+    navigation_role: NavigationTargetRole,
 }
 
 impl WorkspaceIndex {
@@ -121,12 +122,33 @@ impl WorkspaceIndex {
         source: &str,
         position: QueryPosition,
     ) -> QueryResult {
-        self.query_source_at_with_features(
+        self.query_source_at_navigation_for_role(
+            path,
+            source,
+            position,
+            NavigationTargetRole::Definition,
+        )
+    }
+
+    pub fn query_source_at_navigation_for_role(
+        &self,
+        path: &Path,
+        source: &str,
+        position: QueryPosition,
+        role: NavigationTargetRole,
+    ) -> QueryResult {
+        // This result is role-specific. Protocol layers caching it must key by
+        // `role` in addition to document content, position, and index generation.
+        self.query_source_at_with_features_and_context(
             path,
             source,
             position,
             None,
             QueryFeatures::navigation(),
+            PreparedQueryContext {
+                navigation_role: role,
+                ..PreparedQueryContext::default()
+            },
         )
     }
 
@@ -137,13 +159,34 @@ impl WorkspaceIndex {
         position: QueryPosition,
         local_symbols: &[SymbolRecord],
     ) -> QueryResult {
-        self.query_source_at_with_features_and_symbols(
+        self.query_source_at_navigation_with_symbols_for_role(
+            path,
+            source,
+            position,
+            local_symbols,
+            NavigationTargetRole::Definition,
+        )
+    }
+
+    pub fn query_source_at_navigation_with_symbols_for_role(
+        &self,
+        path: &Path,
+        source: &str,
+        position: QueryPosition,
+        local_symbols: &[SymbolRecord],
+        role: NavigationTargetRole,
+    ) -> QueryResult {
+        self.query_source_at_with_features_and_context(
             path,
             source,
             position,
             None,
             QueryFeatures::navigation(),
-            Some(local_symbols),
+            PreparedQueryContext {
+                local_symbols: Some(local_symbols),
+                navigation_role: role,
+                ..PreparedQueryContext::default()
+            },
         )
     }
 
@@ -245,6 +288,28 @@ impl WorkspaceIndex {
         features: QueryFeatures,
         local_symbols: Option<&[SymbolRecord]>,
     ) -> QueryResult {
+        self.query_source_at_with_features_and_context(
+            path,
+            source,
+            position,
+            rename_to,
+            features,
+            PreparedQueryContext {
+                local_symbols,
+                ..PreparedQueryContext::default()
+            },
+        )
+    }
+
+    fn query_source_at_with_features_and_context(
+        &self,
+        path: &Path,
+        source: &str,
+        position: QueryPosition,
+        rename_to: Option<&str>,
+        features: QueryFeatures,
+        context: PreparedQueryContext<'_>,
+    ) -> QueryResult {
         let diagnostics = if features.diagnostics {
             self.diagnostics_for_source(path, source)
         } else {
@@ -269,10 +334,7 @@ impl WorkspaceIndex {
                 diagnostics,
                 features,
             },
-            PreparedQueryContext {
-                local_symbols,
-                source_map: None,
-            },
+            context,
         )
     }
 
@@ -341,6 +403,7 @@ impl WorkspaceIndex {
                     PreparedQueryContext {
                         local_symbols: Some(local_symbols),
                         source_map: Some(&source_map),
+                        ..PreparedQueryContext::default()
                     },
                 )
             })
@@ -371,6 +434,7 @@ impl WorkspaceIndex {
                     PreparedQueryContext {
                         local_symbols: Some(local_symbols),
                         source_map: Some(&source_map),
+                        ..PreparedQueryContext::default()
                     },
                 )
             })
@@ -386,6 +450,7 @@ impl WorkspaceIndex {
         options: QueryExecutionOptions<'_>,
         context: PreparedQueryContext<'_>,
     ) -> QueryResult {
+        let navigation_role = context.navigation_role;
         let QueryExecutionOptions {
             rename_to,
             diagnostics,
@@ -718,13 +783,28 @@ impl WorkspaceIndex {
                 }
             }
         }
-        let precise_lookup = resolution_reason.as_deref().is_some_and(|reason| {
+        let mut precise_lookup = resolution_reason.as_deref().is_some_and(|reason| {
             reason.contains("sage.all")
                 || reason.contains("explicit import target")
                 || reason.contains("shadows Sage import/export")
                 || reason.contains("load/attach target")
                 || reason.contains("resolved Sage ")
         });
+        let role_resolution = resolve_navigation_target_role(
+            self,
+            navigation_role,
+            resolved,
+            navigation_candidates,
+            candidate_count,
+            resolution_confidence,
+            resolution_reason,
+        );
+        resolved = role_resolution.resolved;
+        navigation_candidates = role_resolution.candidates;
+        candidate_count = role_resolution.candidate_count;
+        resolution_confidence = role_resolution.confidence;
+        resolution_reason = role_resolution.reason;
+        precise_lookup |= role_resolution.exact_role_target;
         if features.presentation && !precise_lookup {
             if let Some(record) = &resolved {
                 candidate_count = candidate_count.max(self.symbol_candidates(&record.name).len());

@@ -61,6 +61,8 @@ async function runSmoke() {
   await fs.mkdir(cacheRoot, { recursive: true });
   const providerPath = path.join(workspaceRoot, "provider.py");
   const consumerPath = path.join(workspaceRoot, "consumer.py");
+  const nativeDeclarationPath = path.join(workspaceRoot, "native_provider.pxd");
+  const nativeImplementationPath = path.join(workspaceRoot, "native_provider.pyx");
   const providerText = [
     "class First:",
     "    def shared(self):",
@@ -86,9 +88,25 @@ async function runSmoke() {
     "    ambiguous = unknown.shared()",
     "    weak = unknown.solitary()",
   ].join("\n");
+  const nativeDeclarationText = [
+    "cdef class NativeThing:",
+    "    cpdef compute(self)",
+  ].join("\n");
+  const nativeImplementationText = [
+    "cdef class NativeThing:",
+    "    cpdef compute(self):",
+    "        return 5",
+    "",
+    "    cpdef caller(self):",
+    "        return self.compute()",
+  ].join("\n");
   await fs.writeFile(providerPath, providerText, "utf8");
   await fs.writeFile(consumerPath, consumerText, "utf8");
+  await fs.writeFile(nativeDeclarationPath, nativeDeclarationText, "utf8");
+  await fs.writeFile(nativeImplementationPath, nativeImplementationText, "utf8");
   const providerUri = pathToFileURL(await fs.realpath(providerPath)).toString();
+  const nativeDeclarationUri = pathToFileURL(await fs.realpath(nativeDeclarationPath)).toString();
+  const nativeImplementationUri = pathToFileURL(await fs.realpath(nativeImplementationPath)).toString();
 
   const server = new LspProcess(serverPath, { cwd: repositoryRoot });
   let started = false;
@@ -144,11 +162,24 @@ async function runSmoke() {
         text: providerText,
       },
     });
+    server.notify("textDocument/didOpen", {
+      textDocument: {
+        uri: nativeImplementationUri,
+        languageId: "sagemath-cython",
+        version: 1,
+        text: nativeImplementationText,
+      },
+    });
     const indexStatus = await waitForIndex(server);
 
     const exactPosition = positionInLine(consumerText, "result =", "exact");
     const sharedPosition = positionOf(consumerText, "shared");
     const solitaryPosition = positionOf(consumerText, "solitary");
+    const nativeMethodPosition = positionInLine(
+      nativeImplementationText,
+      "return self.compute",
+      "compute",
+    );
     const requestAtDocument = (method, uri, position, extra = {}) => server.requestWithTimeout(method, {
       textDocument: { uri },
       position,
@@ -183,6 +214,44 @@ async function runSmoke() {
       "high-confidence implementation must be scalar",
     );
     assert.deepEqual(exactImplementation, exactDefinition);
+
+    const nativeDefinition = await requestAtDocument(
+      "textDocument/definition",
+      nativeImplementationUri,
+      nativeMethodPosition,
+    );
+    assert.equal(Array.isArray(nativeDefinition), false);
+    assert.equal(nativeDefinition?.uri, nativeImplementationUri);
+    const nativeDeclaration = await requestAtDocument(
+      "textDocument/declaration",
+      nativeImplementationUri,
+      nativeMethodPosition,
+    );
+    assert.equal(Array.isArray(nativeDeclaration), false);
+    assert.equal(nativeDeclaration?.uri, nativeDeclarationUri);
+    const nativeImplementation = await requestAtDocument(
+      "textDocument/implementation",
+      nativeImplementationUri,
+      nativeMethodPosition,
+    );
+    assert.equal(Array.isArray(nativeImplementation), false);
+    assert.equal(nativeImplementation?.uri, nativeImplementationUri);
+    assert.deepEqual(
+      nativeDeclaration?.range,
+      {
+        start: { line: 1, character: 10 },
+        end: { line: 1, character: 17 },
+      },
+      "declaration must select the exact sibling .pxd method",
+    );
+    assert.deepEqual(
+      nativeImplementation?.range,
+      {
+        start: { line: 1, character: 10 },
+        end: { line: 1, character: 17 },
+      },
+      "implementation must select the exact sibling .pyx method",
+    );
 
     const ambiguousDefinition = await requestAt("textDocument/definition", sharedPosition);
     assert.equal(Array.isArray(ambiguousDefinition), true, "ambiguous definition must return links");
@@ -298,6 +367,8 @@ async function runSmoke() {
       weakTarget: weakDefinition,
       weakDeclarationTarget: weakDeclaration,
       weakImplementationTarget: weakImplementation,
+      nativeDeclarationTarget: nativeDeclaration.uri,
+      nativeImplementationTarget: nativeImplementation.uri,
       sourceRenameConsumerEdits: consumerEdits.length,
     }, null, 2));
   } catch (error) {

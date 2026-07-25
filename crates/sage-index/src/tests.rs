@@ -79,6 +79,7 @@ mod editor_queries;
 mod import_resolution;
 mod multiline_preparser;
 mod navigation_candidates;
+mod navigation_roles;
 mod parsing_preprocess;
 mod runtime_reconcile;
 mod sage_navigation;

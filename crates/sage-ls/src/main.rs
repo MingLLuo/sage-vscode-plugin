@@ -48,7 +48,10 @@ use navigation::{
     should_defer_python_import_definition_to_python_provider, validated_disk_definition_location,
     NavigationQueryCacheKey, NavigationRequestKind,
 };
-use navigation::{navigation_query_cache_key, NavigationLinkSupport, NavigationQueryCache};
+use navigation::{
+    navigation_query_cache_key, NavigationLinkSupport, NavigationQueryCache,
+    NavigationQueryCacheFlavor,
+};
 #[cfg(test)]
 use open_documents::source_text_fingerprint;
 use open_documents::{
@@ -515,7 +518,13 @@ impl LanguageServer for Backend {
         };
         let index = self.index.read().await;
         let index_generation = index.status().generation;
-        let key = navigation_query_cache_key(uri, &document, position, index_generation);
+        let key = navigation_query_cache_key(
+            uri,
+            &document,
+            position,
+            index_generation,
+            NavigationQueryCacheFlavor::Hover,
+        );
         let cached_query = self.navigation_cache.read().await.get(&key);
         let query = if let Some(query) = cached_query {
             drop(index);
@@ -529,7 +538,13 @@ impl LanguageServer for Backend {
                 QueryFeatures::hover(),
             );
             self.navigation_cache.write().await.insert(
-                navigation_query_cache_key(uri, &document, position, index_generation),
+                navigation_query_cache_key(
+                    uri,
+                    &document,
+                    position,
+                    index_generation,
+                    NavigationQueryCacheFlavor::Hover,
+                ),
                 query.clone(),
             );
             drop(index);

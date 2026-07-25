@@ -10,6 +10,7 @@ fn navigation_cache_entries_are_scoped_to_index_generation() {
         line: 2,
         character: 4,
         index_generation: 7,
+        flavor: NavigationQueryCacheFlavor::Definition,
     };
     cache.insert(base.clone(), QueryResult::default());
 
@@ -20,6 +21,34 @@ fn navigation_cache_entries_are_scoped_to_index_generation() {
             ..base
         })
         .is_none());
+}
+
+#[test]
+fn navigation_cache_entries_are_scoped_to_request_flavor() {
+    let mut cache = NavigationQueryCache::default();
+    let definition = NavigationQueryCacheKey {
+        uri: "file:///workspace/demo.sage".to_string(),
+        version: 1,
+        content_fingerprint: None,
+        line: 2,
+        character: 4,
+        index_generation: 7,
+        flavor: NavigationQueryCacheFlavor::Definition,
+    };
+    cache.insert(definition.clone(), QueryResult::default());
+
+    for flavor in [
+        NavigationQueryCacheFlavor::Hover,
+        NavigationQueryCacheFlavor::Declaration,
+        NavigationQueryCacheFlavor::Implementation,
+    ] {
+        assert!(cache
+            .get(&NavigationQueryCacheKey {
+                flavor,
+                ..definition.clone()
+            })
+            .is_none());
+    }
 }
 
 #[test]
@@ -66,6 +95,18 @@ fn navigation_link_support_is_negotiated_per_request_kind() {
     assert!(NavigationRequestKind::Declaration.link_support(support));
     assert!(!NavigationRequestKind::Definition.link_support(support));
     assert!(NavigationRequestKind::Implementation.link_support(support));
+    assert_eq!(
+        NavigationRequestKind::Declaration.index_role(),
+        sage_index::NavigationTargetRole::Declaration
+    );
+    assert_eq!(
+        NavigationRequestKind::Definition.index_role(),
+        sage_index::NavigationTargetRole::Definition
+    );
+    assert_eq!(
+        NavigationRequestKind::Implementation.index_role(),
+        sage_index::NavigationTargetRole::Implementation
+    );
 }
 
 #[test]
