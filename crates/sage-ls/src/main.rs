@@ -46,6 +46,7 @@ use linked_document_prewarm::LinkedDocumentPrewarmer;
 use navigation::{
     live_definition_range, navigation_response_for_links,
     should_defer_python_import_definition_to_python_provider, NavigationQueryCacheKey,
+    NavigationRequestKind,
 };
 use navigation::{navigation_query_cache_key, NavigationLinkSupport, NavigationQueryCache};
 #[cfg(test)]

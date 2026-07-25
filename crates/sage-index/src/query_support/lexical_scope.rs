@@ -1,3 +1,4 @@
+use super::logical_continuation::complete_logical_continuation_lines;
 use super::*;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -62,6 +63,7 @@ impl LexicalScopeMap {
     pub(crate) fn new(source: &str) -> Self {
         let code_map = CodeMap::new(source);
         let lines = line_offsets(source);
+        let continuation_lines = complete_logical_continuation_lines(&lines, &code_map);
         let mut line_scopes = Vec::with_capacity(lines.len());
         let mut line_blocks = Vec::with_capacity(lines.len());
         let mut code_lines = Vec::with_capacity(lines.len());
@@ -76,9 +78,10 @@ impl LexicalScopeMap {
             let indent = line.len().saturating_sub(trimmed.len());
             let is_code =
                 !trimmed.is_empty() && code_map.is_code_offset(line_start.saturating_add(indent));
+            let is_continuation = continuation_lines.get(line_index).copied().unwrap_or(false);
             let mut closed_sibling_block = None;
 
-            if is_code {
+            if is_code && !is_continuation {
                 while active
                     .last()
                     .is_some_and(|(_, scope_indent)| *scope_indent >= indent)
@@ -120,6 +123,9 @@ impl LexicalScopeMap {
             code_lines.push(is_code);
 
             if !is_code {
+                continue;
+            }
+            if is_continuation {
                 continue;
             }
             let lexical_kind = lexical_scope_kind(trimmed);

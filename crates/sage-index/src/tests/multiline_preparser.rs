@@ -110,6 +110,17 @@ fn local_return_inference_understands_multiline_preparser_assignments() {
 }
 
 #[test]
+fn dedented_closing_delimiter_preserves_function_local_preparser_inference() {
+    let source = "def generator():\n    K.<a> = QuadraticField(\n        2 +\n        1\n)\n    return a\n\nvalue = generator()\nresult = value.polynomial()\n";
+
+    assert_eq!(
+        infer_owner_type_before_strict(source, "value", "polynomial", 8),
+        Some(SageOwnerType::NumberFieldElement),
+        "a closing delimiter may be physically dedented without ending the function suite"
+    );
+}
+
+#[test]
 fn unclosed_multiline_preparser_never_leaks_constructor_confidence() {
     let source = "K.<a> = QuadraticField(\n    2 + 1\nvalue = a.polynomial()\nresult = K.gen()\n";
 

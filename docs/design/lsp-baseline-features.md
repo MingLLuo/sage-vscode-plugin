@@ -46,6 +46,8 @@ variant-dependent calls remain unknown.
 - `.sage` preprocessing preserves original source positions while recognizing caret exponents, ranges, empty ring
   brackets, and `R.<x, y> = ...` generator assignments, including constructor right-hand sides continued across
   physical lines.
+- Complete bracket and explicit-backslash continuations preserve their enclosing lexical suite even when a closing
+  physical line is dedented; malformed or unfinished continuations remain conservative and cannot authorize a jump.
 - Preparser parent and generator bindings participate in strict type flow and local-function return inference.
 - Python, Sage, and Cython imports support single-line and parenthesized forms, including multiline `cimport`.
 - `sage.all`, lazy imports, star re-exports, and source-derived method catalogs are materialized from the configured

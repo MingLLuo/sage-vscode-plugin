@@ -208,7 +208,8 @@ Rust index:
   Route pure call, completion, Sage-type, symbol, and syntax query helpers without expanding the workspace API modules.
   Sage domain catalogs remain in `sage_types.rs`; scope-aware type flow, assignment/RHS inference, and conservative
   local-function return inference live in `sage_type_inference.rs`, `sage_assignment_inference.rs`, and
-  `local_function_returns.rs`.
+  `local_function_returns.rs`. `logical_continuation.rs` identifies only complete bracket or explicit-backslash
+  continuations so physical indentation inside a logical line cannot prematurely end a function or control-flow suite.
 - `crates/sage-index/src/sage_specs.rs`, `source_paths.rs`, `symbol_support.rs`, and `syntax_support.rs`
   Hold static Sage mappings and shared path, ranking/deduplication, and syntax primitives.
 - `crates/sage-index/src/tests.rs` and `crates/sage-index/src/tests/`

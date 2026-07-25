@@ -104,6 +104,7 @@ async function runSmoke() {
         textDocument: {
           declaration: { linkSupport: false },
           definition: { linkSupport: true },
+          implementation: { linkSupport: true },
           typeDefinition: { linkSupport: true },
         },
       },
@@ -168,6 +169,21 @@ async function runSmoke() {
       end: { line: 12, character: 9 },
     });
 
+    const exactDeclaration = await requestAt("textDocument/declaration", exactPosition);
+    assert.deepEqual(
+      exactDeclaration,
+      exactDefinition,
+      "high-confidence declaration must preserve the exact scalar target",
+    );
+
+    const exactImplementation = await requestAt("textDocument/implementation", exactPosition);
+    assert.equal(
+      Array.isArray(exactImplementation),
+      false,
+      "high-confidence implementation must be scalar",
+    );
+    assert.deepEqual(exactImplementation, exactDefinition);
+
     const ambiguousDefinition = await requestAt("textDocument/definition", sharedPosition);
     assert.equal(Array.isArray(ambiguousDefinition), true, "ambiguous definition must return links");
     assert.equal(ambiguousDefinition.length, 2);
@@ -199,6 +215,16 @@ async function runSmoke() {
       "clients without declaration linkSupport must receive ordered exact Locations",
     );
 
+    const ambiguousImplementation = await requestAt(
+      "textDocument/implementation",
+      sharedPosition,
+    );
+    assert.deepEqual(
+      ambiguousImplementation,
+      ambiguousDefinition,
+      "implementation linkSupport must independently preserve ordered candidate links",
+    );
+
     const ambiguousHover = await requestAt("textDocument/hover", sharedPosition);
     const hoverMarkdown = ambiguousHover?.contents?.value ?? "";
     assert.match(hoverMarkdown, /Top indexed candidates/i);
@@ -207,6 +233,18 @@ async function runSmoke() {
 
     const weakDefinition = await requestAt("textDocument/definition", solitaryPosition);
     assert.equal(weakDefinition, null, "one weak candidate must not be forced into a jump");
+    const weakDeclaration = await requestAt("textDocument/declaration", solitaryPosition);
+    assert.equal(
+      weakDeclaration,
+      null,
+      "one weak declaration candidate must not be forced into a jump",
+    );
+    const weakImplementation = await requestAt("textDocument/implementation", solitaryPosition);
+    assert.equal(
+      weakImplementation,
+      null,
+      "one weak implementation candidate must not be forced into a jump",
+    );
 
     const ambiguousReferences = await requestAt("textDocument/references", sharedPosition, {
       context: { includeDeclaration: true },
@@ -253,8 +291,13 @@ async function runSmoke() {
       indexedSymbols: indexStatus.symbol_count,
       exactTargetLine: exactDefinition.range.start.line,
       ambiguousTargetLines: ambiguousDefinition.map((link) => link.targetSelectionRange.start.line),
+      ambiguousImplementationTargetLines: ambiguousImplementation.map(
+        (link) => link.targetSelectionRange.start.line,
+      ),
       fallbackDeclarationLines: ambiguousDeclaration.map((location) => location.range.start.line),
       weakTarget: weakDefinition,
+      weakDeclarationTarget: weakDeclaration,
+      weakImplementationTarget: weakImplementation,
       sourceRenameConsumerEdits: consumerEdits.length,
     }, null, 2));
   } catch (error) {

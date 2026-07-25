@@ -57,6 +57,15 @@ fn navigation_link_support_is_negotiated_per_request_kind() {
         NavigationLinkSupport::from_client_capabilities(&ClientCapabilities::default()),
         NavigationLinkSupport::default()
     );
+
+    let support = NavigationLinkSupport {
+        declaration: true,
+        definition: false,
+        implementation: true,
+    };
+    assert!(NavigationRequestKind::Declaration.link_support(support));
+    assert!(!NavigationRequestKind::Definition.link_support(support));
+    assert!(NavigationRequestKind::Implementation.link_support(support));
 }
 
 #[test]
@@ -167,6 +176,30 @@ fn python_sage_import_items_are_detected_for_duplicate_navigation_suppression() 
         Position::new(5, 6),
         &definition,
     ));
+    assert!(
+        NavigationRequestKind::Implementation.should_defer_python_import(
+            &path,
+            &source,
+            Position::new(2, 8),
+            &definition,
+        )
+    );
+    assert!(
+        !NavigationRequestKind::Declaration.should_defer_python_import(
+            &path,
+            &source,
+            Position::new(2, 8),
+            &definition,
+        )
+    );
+    assert!(
+        !NavigationRequestKind::Definition.should_defer_python_import(
+            &path,
+            &source,
+            Position::new(2, 8),
+            &definition,
+        )
+    );
 }
 
 #[test]

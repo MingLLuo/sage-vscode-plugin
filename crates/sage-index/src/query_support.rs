@@ -4,6 +4,7 @@ mod calls;
 mod completion;
 mod lexical_scope;
 mod local_function_returns;
+mod logical_continuation;
 mod receiver_resolution;
 mod sage_assignment_inference;
 mod sage_type_inference;

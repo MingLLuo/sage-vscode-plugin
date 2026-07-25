@@ -26,7 +26,7 @@ use tower_lsp::lsp_types::request::{
 };
 use tower_lsp::lsp_types::{
     ClientCapabilities, GotoDefinitionParams, GotoDefinitionResponse, Location, LocationLink,
-    Position, Range, Url,
+    Position, Range, TextDocumentPositionParams, Url,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -58,6 +58,36 @@ impl NavigationLinkSupport {
                 .and_then(|capability| capability.link_support)
                 .unwrap_or(false),
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum NavigationRequestKind {
+    Declaration,
+    Definition,
+    Implementation,
+}
+
+impl NavigationRequestKind {
+    pub(super) fn link_support(self, support: NavigationLinkSupport) -> bool {
+        match self {
+            Self::Declaration => support.declaration,
+            Self::Definition => support.definition,
+            Self::Implementation => support.implementation,
+        }
+    }
+
+    pub(super) fn should_defer_python_import(
+        self,
+        path: &Path,
+        text: &str,
+        position: Position,
+        definition: &QueryDefinition,
+    ) -> bool {
+        self == Self::Implementation
+            && should_defer_python_import_definition_to_python_provider(
+                path, text, position, definition,
+            )
     }
 }
 
@@ -128,84 +158,22 @@ impl Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let Some(document) = self.document_for_uri(uri).await else {
-            return Ok(None);
-        };
-        let Some(path) = uri_to_path(uri) else {
-            return Ok(None);
-        };
-        let query = self
-            .navigation_query_for_document(
-                uri,
-                &document,
-                &path,
-                params.text_document_position_params.position,
-            )
-            .await;
-        if query.resolution_confidence.as_deref() == Some("high") {
-            let Some(definition) = query.definition.as_ref() else {
-                return Ok(None);
-            };
-            let Some(location) = self.location_for_query_definition(definition).await else {
-                return Ok(None);
-            };
-            return Ok(Some(GotoDefinitionResponse::Scalar(location)));
-        }
-        let origin_range = query
-            .target
-            .as_ref()
-            .map(|target| lsp_range_for_text(&document.text, &target.range));
-        let links = self
-            .links_for_navigation_candidates(&query, origin_range)
-            .await;
-        if links.len() < 2 {
-            return Ok(None);
-        }
-        let link_support = self.navigation_link_support.read().await.definition;
-        Ok(Some(navigation_response_for_links(links, link_support)))
+        self.goto_navigation_response(
+            params.text_document_position_params,
+            NavigationRequestKind::Definition,
+        )
+        .await
     }
 
     pub(super) async fn goto_declaration_response(
         &self,
         params: GotoDeclarationParams,
     ) -> Result<Option<GotoDeclarationResponse>> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let Some(document) = self.document_for_uri(uri).await else {
-            return Ok(None);
-        };
-        let Some(path) = uri_to_path(uri) else {
-            return Ok(None);
-        };
-        let query = self
-            .navigation_query_for_document(
-                uri,
-                &document,
-                &path,
-                params.text_document_position_params.position,
-            )
-            .await;
-        if query.resolution_confidence.as_deref() == Some("high") {
-            let Some(definition) = query.definition.as_ref() else {
-                return Ok(None);
-            };
-            let Some(location) = self.location_for_query_definition(definition).await else {
-                return Ok(None);
-            };
-            return Ok(Some(GotoDeclarationResponse::Scalar(location)));
-        }
-        let origin_range = query
-            .target
-            .as_ref()
-            .map(|target| lsp_range_for_text(&document.text, &target.range));
-        let links = self
-            .links_for_navigation_candidates(&query, origin_range)
-            .await;
-        if links.len() < 2 {
-            return Ok(None);
-        }
-        let link_support = self.navigation_link_support.read().await.declaration;
-        Ok(Some(navigation_response_for_links(links, link_support)))
+        self.goto_navigation_response(
+            params.text_document_position_params,
+            NavigationRequestKind::Declaration,
+        )
+        .await
     }
 
     pub(super) async fn goto_type_definition_response(
@@ -242,7 +210,19 @@ impl Backend {
         &self,
         params: GotoImplementationParams,
     ) -> Result<Option<GotoImplementationResponse>> {
-        let uri = &params.text_document_position_params.text_document.uri;
+        self.goto_navigation_response(
+            params.text_document_position_params,
+            NavigationRequestKind::Implementation,
+        )
+        .await
+    }
+
+    async fn goto_navigation_response(
+        &self,
+        params: TextDocumentPositionParams,
+        request_kind: NavigationRequestKind,
+    ) -> Result<Option<GotoDefinitionResponse>> {
+        let uri = &params.text_document.uri;
         let Some(document) = self.document_for_uri(uri).await else {
             return Ok(None);
         };
@@ -250,21 +230,16 @@ impl Backend {
             return Ok(None);
         };
         let query = self
-            .navigation_query_for_document(
-                uri,
-                &document,
-                &path,
-                params.text_document_position_params.position,
-            )
+            .navigation_query_for_document(uri, &document, &path, params.position)
             .await;
         if query.resolution_confidence.as_deref() == Some("high") {
             let Some(definition) = query.definition.as_ref() else {
                 return Ok(None);
             };
-            if should_defer_python_import_definition_to_python_provider(
+            if request_kind.should_defer_python_import(
                 &path,
                 &document.text,
-                params.text_document_position_params.position,
+                params.position,
                 definition,
             ) {
                 return Ok(None);
@@ -272,7 +247,7 @@ impl Backend {
             let Some(location) = self.location_for_query_definition(definition).await else {
                 return Ok(None);
             };
-            return Ok(Some(GotoImplementationResponse::Scalar(location)));
+            return Ok(Some(GotoDefinitionResponse::Scalar(location)));
         }
         let origin_range = query
             .target
@@ -284,7 +259,7 @@ impl Backend {
         if links.len() < 2 {
             return Ok(None);
         }
-        let link_support = self.navigation_link_support.read().await.implementation;
+        let link_support = request_kind.link_support(*self.navigation_link_support.read().await);
         Ok(Some(navigation_response_for_links(links, link_support)))
     }
 
