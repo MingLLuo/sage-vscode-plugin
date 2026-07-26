@@ -10,7 +10,7 @@ const repositoryRoot = path.resolve(__dirname, "..");
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sage-reference-export-"));
 const workspaceRoot = path.join(tmpRoot, "workspace");
 const outputRoot = path.join(workspaceRoot, ".sage-reference");
-const sourceRoot = path.resolve(repositoryRoot, "..", "sage", "src");
+const sourceRoot = resolveSourceRoot();
 const checks = [];
 
 fs.mkdirSync(path.join(workspaceRoot, "src"), { recursive: true });
@@ -38,7 +38,7 @@ const args = [
   "--out",
   outputRoot,
 ];
-if (fs.existsSync(sourceRoot)) {
+if (sourceRoot) {
   args.push("--source-root", sourceRoot);
 }
 
@@ -93,7 +93,7 @@ const report = {
   schema_version: 1,
   status: failures.length ? "failed" : "passed",
   output: outputRoot,
-  source_root_used: fs.existsSync(sourceRoot),
+  source_root_used: sourceRoot !== null,
   checks,
 };
 console.log(JSON.stringify(report, null, 2));
@@ -138,4 +138,23 @@ function pushCheck(name, pass, actual) {
     pass: Boolean(pass),
     actual,
   });
+}
+
+function resolveSourceRoot() {
+  const configured = (process.env.SAGE_SOURCE_ROOT ?? "")
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const candidates = [
+    ...configured,
+    path.resolve(repositoryRoot, "sage", "src"),
+    path.resolve(repositoryRoot, "..", "sage", "src"),
+  ];
+  for (const candidate of candidates) {
+    const resolved = path.resolve(candidate);
+    if (fs.existsSync(path.join(resolved, "sage"))) {
+      return resolved;
+    }
+  }
+  return null;
 }

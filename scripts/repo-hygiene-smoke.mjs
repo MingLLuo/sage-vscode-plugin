@@ -297,6 +297,7 @@ for (const relativePath of [
 }
 
 const referenceExporter = readText("scripts/export-reference.mjs");
+const referenceExportSmoke = readText("scripts/reference-export-smoke.mjs");
 const referenceViewerHtml = readText("scripts/reference-viewer/index.html");
 const referenceViewerJs = readText("scripts/reference-viewer/viewer.js");
 const referenceViewerCss = readText("scripts/reference-viewer/viewer.css");
@@ -307,6 +308,7 @@ pushCheck("reference exporter writes static viewer entrypoint", referenceExporte
   && referenceExporter.includes("symbols.js"), "scripts/export-reference.mjs");
 pushCheck("reference exporter strips local home paths", referenceExporter.includes("sanitizeText")
   && referenceExporter.includes("assertNoPrivatePaths"), "scripts/export-reference.mjs");
+pushCheck("reference export smoke honors the CI Sage source root", referenceExportSmoke.includes("process.env.SAGE_SOURCE_ROOT"), "scripts/reference-export-smoke.mjs");
 pushCheck("reference viewer is kept in maintainable static assets", referenceExporter.includes("reference-viewer")
   && referenceViewerHtml.includes("mobile-tabs")
   && referenceViewerJs.includes("restoreFromHash")
