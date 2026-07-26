@@ -85,4 +85,7 @@ a machine where GUI automation is acceptable.
   test:vsix-package` rebuilds under both normal and restrictive umasks and verifies the archive hash remains identical.
 - `npm run test:repo-hygiene` must pass after changing issue templates, PR templates, `SECURITY.md`, `SUPPORT.md`,
   `CONTRIBUTING.md`, `.gitattributes`, `.editorconfig`, or CI/release scripts.
+- Local index-performance defaults remain 1500 ms for parse and internal rebuild. GitHub's shared macOS runner uses a
+  bounded 2000 ms ceiling for those two checks to absorb host variance without weakening the 5000 ms end-to-end rebuild
+  or 300 ms hydrate budgets.
 - New public gates should be added here, in `CONTRIBUTING.md`, and in the package metadata tests in the same change.

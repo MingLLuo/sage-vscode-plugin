@@ -187,6 +187,8 @@ pushCheck("GitHub workflow checks out the latest Sage source without a ref pin",
   && /sparse-checkout:\s*\|\s*\n\s+src\/sage/.test(sageCheckout)
   && !/^\s*ref:/m.test(sageCheckout), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow exposes the sparse Sage source root to all CI gates", /SAGE_SOURCE_ROOT:\s*\$\{\{\s*github\.workspace\s*\}\}\/sage\/src/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow gives shared-runner index benchmarks bounded headroom", /SAGE_PERF_PARSE_MS:\s*["']2000["']/.test(workflow)
+  && /SAGE_PERF_REBUILD_INTERNAL_MS:\s*["']2000["']/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow packages on macOS with Node 26 and npm 12", /macos-package-compatibility:[\s\S]*?node-version:\s*["']26\.x["'][\s\S]*?npm install --global npm@12[\s\S]*?npm run package:vsix/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow enables setup-node npm cache", /cache:\s*["']?npm["']?/.test(workflow)
   && /cache-dependency-path:\s*package-lock\.json/.test(workflow), ".github/workflows/ci.yml");
