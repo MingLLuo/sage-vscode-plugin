@@ -10,8 +10,10 @@ manual plus automated smoke tests.
 
 Install and use the current local macOS build:
 
-Release packaging uses the exact Node version in `.node-version`, npm version in `package.json`, and Rust toolchain in
-`rust-toolchain.toml`. Select those versions before running the packaging commands.
+Development and release packaging support Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer. The
+`engines` ranges enforce only those minimums; `.node-version` selects the rolling Node 22 development/CI baseline
+without pinning a patch release. Packaging also verifies that the installed npm release declares the selected Node.js
+runtime compatible. CI packages on macOS with Node.js 26 and npm 12. Rust remains pinned by `rust-toolchain.toml`.
 
 ```bash
 npm ci
@@ -95,7 +97,7 @@ home paths are not leaked.
 
 - `deep-research-report.md` in the sibling `sage-src` workspace defines the target product direction.
 - A sibling Sage checkout such as `../sage` can be used as a local source calibration checkout; alternatively set
-  `SAGE_SOURCE_ROOT` explicitly for performance and release smokes.
+  `SAGE_SOURCE_ROOT` explicitly for the real-Sage UX matrix, CI-equivalent checks, performance, and release smokes.
 - Nearby repositories may be consulted for patterns, but this repository remains independently owned.
 
 ## Development Workflow

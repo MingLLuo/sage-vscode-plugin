@@ -45,6 +45,7 @@
   CI/release gate definitions, `.gitattributes`, or `.editorconfig`.
 - Use `npm run test:release` for local release candidates. It additionally exercises persistent LSP latency and
   real-file Sage-heavy smoke against the configured local Sage checkout and local research fixtures.
-- Use the exact Node/npm/Rust versions declared by `.node-version`, `package.json`, and `rust-toolchain.toml` for release
-  packaging. The packaging command rejects a different Node patch version.
+- Use Node.js 22.9 or newer and npm 11 or newer for release packaging; Node.js 26 is covered by CI. `.node-version`
+  records the Node 22 baseline without rejecting newer releases. The packaging check rejects Node/npm combinations
+  outside the installed npm release's own Node.js engine range. Rust remains pinned by `rust-toolchain.toml`.
 - Use `npm run test:full` only when the machine may launch the VS Code Extension Host.

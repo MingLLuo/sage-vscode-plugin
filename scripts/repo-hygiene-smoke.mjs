@@ -3,10 +3,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  assertPinnedNodeVersion,
-  assertPinnedNpmVersion,
-  pinnedNodeVersion,
-  pinnedNpmVersion,
+  assertNpmSupportsNodeVersion,
+  assertSupportedNodeVersion,
+  assertSupportedNpmVersion,
 } from "./package-toolchain.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -40,38 +39,65 @@ for (const relativePath of requiredFiles) {
 
 const packageJson = readJson("package.json");
 const scripts = packageJson.scripts ?? {};
-pushCheck("Node package manager is pinned", packageJson.packageManager === "npm@11.17.0", packageJson.packageManager);
-const expectedNpmVersion = pinnedNpmVersion(repositoryRoot);
-let rejectsMismatchedNpm = false;
+pushCheck("npm supported range is declared", packageJson.engines?.npm === ">=11", packageJson.engines?.npm);
+let rejectsUnsupportedNpm = false;
 try {
-  assertPinnedNpmVersion(repositoryRoot, "0.0.0");
-} catch (error) {
-  rejectsMismatchedNpm = String(error).includes(`requires npm ${expectedNpmVersion}`);
-}
-pushCheck("packaging rejects a mismatched npm runtime", rejectsMismatchedNpm, expectedNpmVersion);
-let acceptsPinnedNpm = true;
-try {
-  assertPinnedNpmVersion(repositoryRoot, expectedNpmVersion);
+  assertSupportedNpmVersion(repositoryRoot, "10.9.0");
 } catch {
-  acceptsPinnedNpm = false;
+  rejectsUnsupportedNpm = true;
 }
-pushCheck("packaging accepts the exact pinned npm runtime", acceptsPinnedNpm, expectedNpmVersion);
-const expectedNodeVersion = pinnedNodeVersion(repositoryRoot);
-pushCheck("Node runtime is pinned", expectedNodeVersion === "22.23.1", expectedNodeVersion);
-let rejectsMismatchedNode = false;
-try {
-  assertPinnedNodeVersion(repositoryRoot, "0.0.0");
-} catch (error) {
-  rejectsMismatchedNode = String(error).includes(`requires Node ${expectedNodeVersion}`);
+pushCheck("packaging rejects npm below the supported range", rejectsUnsupportedNpm, packageJson.engines?.npm);
+let acceptsSupportedNpm = true;
+for (const version of ["11.0.0", "12.0.0"]) {
+  try {
+    assertSupportedNpmVersion(repositoryRoot, version);
+  } catch {
+    acceptsSupportedNpm = false;
+  }
 }
-pushCheck("packaging rejects a mismatched Node runtime", rejectsMismatchedNode, expectedNodeVersion);
-let acceptsPinnedNode = true;
+pushCheck("packaging accepts supported npm runtimes", acceptsSupportedNpm, packageJson.engines?.npm);
+let rejectsIncompatibleNodeNpmPair = false;
 try {
-  assertPinnedNodeVersion(repositoryRoot, expectedNodeVersion);
+  assertNpmSupportsNodeVersion(
+    "22.9.0",
+    "12.0.1",
+    "^22.22.2 || ^24.15.0 || >=26.0.0",
+  );
 } catch {
-  acceptsPinnedNode = false;
+  rejectsIncompatibleNodeNpmPair = true;
 }
-pushCheck("packaging accepts the exact pinned Node runtime", acceptsPinnedNode, expectedNodeVersion);
+pushCheck("packaging rejects incompatible Node/npm pairs", rejectsIncompatibleNodeNpmPair, "Node 22.9.0 / npm 12.0.1");
+let acceptsCompatibleNodeNpmPairs = true;
+for (const nodeVersion of ["22.22.2", "24.15.0", "26.0.0"]) {
+  try {
+    assertNpmSupportsNodeVersion(
+      nodeVersion,
+      "12.0.1",
+      "^22.22.2 || ^24.15.0 || >=26.0.0",
+    );
+  } catch {
+    acceptsCompatibleNodeNpmPairs = false;
+  }
+}
+pushCheck("packaging accepts compatible modern Node/npm pairs", acceptsCompatibleNodeNpmPairs, "npm 12.0.1");
+pushCheck("Node supported range is declared", packageJson.engines?.node === ">=22.9.0", packageJson.engines?.node);
+pushCheck("Node baseline is declared", readText(".node-version").trim() === "22", readText(".node-version").trim());
+let rejectsUnsupportedNode = false;
+try {
+  assertSupportedNodeVersion(repositoryRoot, "22.8.0");
+} catch {
+  rejectsUnsupportedNode = true;
+}
+pushCheck("packaging rejects Node below the supported range", rejectsUnsupportedNode, packageJson.engines?.node);
+let acceptsSupportedNode = true;
+for (const version of ["22.9.0", "26.0.0"]) {
+  try {
+    assertSupportedNodeVersion(repositoryRoot, version);
+  } catch {
+    acceptsSupportedNode = false;
+  }
+}
+pushCheck("packaging accepts supported Node runtimes, including Node 26", acceptsSupportedNode, packageJson.engines?.node);
 const rustToolchain = readText("rust-toolchain.toml");
 pushCheck("Rust runtime is pinned", /channel\s*=\s*["']1\.92\.0["']/.test(rustToolchain), "rust-toolchain.toml");
 pushCheck(
@@ -80,6 +106,11 @@ pushCheck(
   "rust-toolchain.toml",
 );
 const packageLock = readJson("package-lock.json");
+pushCheck(
+  "package-lock root engines match package.json",
+  JSON.stringify(packageLock.packages?.[""]?.engines) === JSON.stringify(packageJson.engines),
+  packageLock.packages?.[""]?.engines,
+);
 const remoteLockEntries = Object.values(packageLock.packages ?? {}).filter(
   (entry) => typeof entry?.resolved === "string" && entry.resolved.startsWith("https://"),
 );
@@ -112,7 +143,7 @@ pushCheck(
   scripts["package:rust-binary"],
 );
 pushCheck(
-  "VSIX packaging checks the pinned toolchain before building",
+  "VSIX packaging checks supported toolchain ranges before building",
   scripts["package:vsix"]?.startsWith("npm run check:package-toolchain &&") === true,
   scripts["package:vsix"],
 );
@@ -131,16 +162,32 @@ pushCheck("test:ci includes offline reference export smoke", includesScript("tes
 pushCheck("test:release includes offline reference export smoke", includesScript("test:release", "npm run test:reference-export"), scripts["test:release"]);
 pushCheck("test:ci includes LSP protocol contracts", includesScript("test:ci", "npm run test:lsp-protocol"), scripts["test:ci"]);
 pushCheck("test:release includes LSP protocol contracts", includesScript("test:release", "npm run test:lsp-protocol"), scripts["test:release"]);
+pushCheck("default debug workbench smoke is fixture-only", scripts["test:debug-web"]?.includes("--smoke --fixture-only") === true, scripts["test:debug-web"]);
+pushCheck("strict debug workbench smoke requires Sage source", scripts["test:debug-web:sage"]?.includes("--smoke --require-sage-source") === true, scripts["test:debug-web:sage"]);
 
 for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:native-smoke", "test:extension-host"]) {
   pushCheck(`test:ci excludes local-only ${localOnly}`, !includesScript("test:ci", localOnly), scripts["test:ci"]);
 }
 
 const workflow = readText(".github/workflows/ci.yml");
-pushCheck("GitHub workflow installs locked Node dependencies", /npm ci/.test(workflow), ".github/workflows/ci.yml");
-pushCheck("GitHub workflow pins the declared npm version", /npm install --global npm@11\.17\.0/.test(workflow), ".github/workflows/ci.yml");
-pushCheck("GitHub workflow uses the pinned Node runtime", /node-version-file:\s*["']?\.node-version["']?/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow installs locked npm dependencies", /npm ci/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow selects a supported npm major", /npm install --global npm@11(?:\s|$)/m.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow uses the Node baseline", /node-version-file:\s*["']?\.node-version["']?/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow uses the pinned Rust runtime", /toolchain:\s*["']?1\.92\.0["']?/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow covers Node 22/npm 11 and Node 26/npm 12", /node-version:\s*["']22\.x["'][\s\S]*?npm-version:\s*["']11["']/.test(workflow)
+  && /node-version:\s*["']26\.x["'][\s\S]*?npm-version:\s*["']12["']/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow uses current official action majors", /actions\/checkout@v7/.test(workflow)
+  && /actions\/setup-node@v7/.test(workflow)
+  && /actions\/setup-python@v7/.test(workflow), ".github/workflows/ci.yml");
+const sageCheckout = workflow.match(
+  /- name:\s*Check out latest Sage source([\s\S]*?)(?=\n\s+- name:|\n\s*$)/,
+)?.[1] ?? "";
+pushCheck("GitHub workflow checks out the latest Sage source without a ref pin", /repository:\s*sagemath\/sage/.test(sageCheckout)
+  && /path:\s*sage/.test(sageCheckout)
+  && /sparse-checkout:\s*\|\s*\n\s+src\/sage/.test(sageCheckout)
+  && !/^\s*ref:/m.test(sageCheckout), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow exposes the sparse Sage source root to all CI gates", /SAGE_SOURCE_ROOT:\s*\$\{\{\s*github\.workspace\s*\}\}\/sage\/src/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow packages on macOS with Node 26 and npm 12", /macos-package-compatibility:[\s\S]*?node-version:\s*["']26\.x["'][\s\S]*?npm install --global npm@12[\s\S]*?npm run package:vsix/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow enables setup-node npm cache", /cache:\s*["']?npm["']?/.test(workflow)
   && /cache-dependency-path:\s*package-lock\.json/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow runs on macOS for the maintained release target", /runs-on:\s*macos-latest/.test(workflow), ".github/workflows/ci.yml");

@@ -2,7 +2,9 @@
 
 This is the shortest path to use the Sage VS Code extension from this repository.
 
-Select the exact Node version in `.node-version` before packaging; the repository's `rust-toolchain.toml` pins Rust.
+Use Node.js 22.9 or newer (Node.js 26 is supported) and npm 11 or newer. `.node-version` selects the Node 22 baseline
+without capping newer releases. Packaging verifies the installed npm release supports the selected Node.js runtime;
+the repository's `rust-toolchain.toml` pins Rust.
 
 ## Use the Extension Locally
 

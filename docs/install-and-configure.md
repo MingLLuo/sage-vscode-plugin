@@ -11,8 +11,10 @@ npm run configure:workspace -- --workspace /path/to/your/project --profile auto
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
 
-This packaging path requires the exact Node version in `.node-version`; `rust-toolchain.toml` selects the matching Rust
-compiler automatically.
+This packaging path supports Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer. `.node-version` selects the
+Node 22 CI/development baseline without rejecting newer supported releases; `rust-toolchain.toml` selects the matching
+Rust compiler automatically. The packaging check also validates the selected Node/npm pair against npm's own engine
+declaration.
 
 Open your Sage workspace in VS Code, then run:
 
@@ -45,8 +47,9 @@ Sage library. Leave it empty only when you want automatic nearby/runtime discove
 
 ## Development Bootstrap
 
-1. Select the exact Node.js version from `.node-version` and the Rust/Cargo toolchain from `rust-toolchain.toml`; install
-   Python 3.9 or newer. The npm version is pinned by the root `packageManager` field.
+1. Select any Node.js 22.9-or-newer runtime and the Rust/Cargo toolchain from `rust-toolchain.toml`; install Python 3.9
+   or newer. Node.js 26 is supported. Use npm 11 or newer; no exact Node/npm patch version is required, but npm must
+   declare the selected Node.js runtime compatible.
 2. From the repository root, run `npm ci`.
 3. Build the Rust language server with `npm run build:rust`.
 4. Sync syntax assets with `npm run sync:syntax`.
@@ -66,8 +69,10 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
 - Run `npm run configure:workspace -- --workspace /path/to/project --profile auto` when you want a cross-platform
   command-line setup for `.sage`, Sage-heavy Python, Cython, or mixed research workspaces before opening VS Code. Add
   `-- --sage /path/to/sage --source-root /path/to/sage/src` when Sage is not on `PATH`.
-- Development commands require Node 22 or newer. Release packaging is stricter and accepts only the exact version in
-  `.node-version`, keeping compressed VSIX output reproducible across release runs.
+- Development commands and release packaging require Node.js 22.9 or newer and npm 11 or newer. `.node-version` records
+  the rolling Node 22 baseline. The packaging check validates their compatibility using npm's installed package
+  metadata. Fixed archive metadata and normalized file modes keep repeated packages reproducible within a supported
+  runtime; package-content tests cover runtime-independent structure and modes.
 
 ## Extension Development Host
 

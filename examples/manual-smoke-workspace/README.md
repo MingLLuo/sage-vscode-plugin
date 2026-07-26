@@ -1,7 +1,8 @@
 # Manual Smoke Workspace
 
-This workspace is a self-contained set of `.sage`, `.py`, `.pyx`, `.pxd`, and `.pxi` files for testing the current Sage VS Code
-plugin baseline without depending on a full Sage source checkout.
+This workspace contains a self-contained fixture baseline of `.sage`, `.py`, `.pyx`, `.pxd`, and `.pxi` files. The
+fixture-only smoke does not need a Sage checkout; the extended Sage-library navigation matrix additionally indexes a
+nearby checkout or `SAGE_SOURCE_ROOT`.
 
 ## What It Covers
 

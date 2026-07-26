@@ -11,11 +11,14 @@ import { promisify } from "node:util";
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
+const args = new Set(process.argv.slice(2));
 const smokeRoot = path.join(repositoryRoot, "examples", "manual-smoke-workspace");
 const smokeSrc = path.join(smokeRoot, "src");
 const smokeVendor = path.join(smokeRoot, "vendor");
-const nearbySageRoots = discoverNearbySageSourceRoots(smokeRoot);
-const indexRoots = dedupe([smokeSrc, smokeVendor, ...nearbySageRoots]);
+const configuredSageRoots = args.has("--fixture-only") ? [] : configuredSageSourceRoots();
+const nearbySageRoots = args.has("--fixture-only") ? [] : discoverNearbySageSourceRoots(smokeRoot);
+const sageSourceRoots = dedupe([...configuredSageRoots, ...nearbySageRoots]);
+const indexRoots = dedupe([smokeSrc, smokeVendor, ...sageSourceRoots]);
 const editableRoots = [smokeRoot];
 const grammarPath = path.join(repositoryRoot, "packages", "syntax-pack", "syntaxes", "sagemath.tmLanguage.json");
 const debugInspector = path.join(repositoryRoot, "target", "debug", process.platform === "win32" ? "sage-debug-inspect.exe" : "sage-debug-inspect");
@@ -108,6 +111,7 @@ const uxScenarios = [
     title: "Sage internal library docs and navigation",
     file: "06_runtime_graphs_and_number_theory.sage",
     symbol: "graphs.PetersenGraph",
+    requiresSageSource: true,
     expects: {
       hoverIncludes: ["Petersen Graph"],
       docsIncludes: ["Petersen Graph"],
@@ -121,6 +125,7 @@ const uxScenarios = [
     title: "Sage highlighting structures",
     file: "08_highlighting_structures.sage",
     symbol: "PolynomialRing",
+    requiresSageSource: true,
     expects: {
       hoverIncludes: ["PolynomialRing"],
       docsIncludes: ["PolynomialRing"],
@@ -140,6 +145,7 @@ const uxScenarios = [
     title: "Sage catalog namespace member navigation",
     file: "08_highlighting_structures.sage",
     symbol: "codes",
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       hoverIncludes: ["Hamming"],
@@ -155,6 +161,7 @@ const uxScenarios = [
     title: "Advanced Sage implementation patterns",
     file: "09_advanced_sage_patterns.sage",
     symbol: "FunctionField",
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       grammarScopes: [
@@ -185,6 +192,7 @@ const uxScenarios = [
     title: "Sage-heavy Python constructor resolution",
     file: "10_sage_heavy_python.py",
     symbol: "PolynomialRing",
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       hoverIncludes: ["PolynomialRing"],
@@ -199,6 +207,7 @@ const uxScenarios = [
     file: "10_sage_heavy_python.py",
     line: 22,
     character: 14,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       definitionPathIncludes: "sage/src/sage/matrix/matrix0.pyx",
@@ -213,6 +222,7 @@ const uxScenarios = [
     file: "10_sage_heavy_python.py",
     line: 109,
     character: 18,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       noDefinition: true,
@@ -229,6 +239,7 @@ const uxScenarios = [
     file: "10_sage_heavy_python.py",
     line: 87,
     character: 21,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       noDefinition: true,
@@ -245,6 +256,7 @@ const uxScenarios = [
     file: "10_sage_heavy_python.py",
     line: 115,
     character: 17,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       noDefinition: true,
@@ -261,6 +273,7 @@ const uxScenarios = [
     file: "10_sage_heavy_python.py",
     line: 105,
     character: 33,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       noDefinition: true,
@@ -277,6 +290,7 @@ const uxScenarios = [
     file: "11_sage_object_methods.py",
     line: 26,
     character: 26,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       definitionPathIncludes: "sage/src/sage/graphs/generic_graph.py",
@@ -290,6 +304,7 @@ const uxScenarios = [
     file: "11_sage_object_methods.py",
     line: 43,
     character: 31,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       definitionPathIncludes: "sage/src/sage/schemes/elliptic_curves/ell_finite_field.py",
@@ -303,6 +318,7 @@ const uxScenarios = [
     file: "11_sage_object_methods.py",
     line: 67,
     character: 26,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       definitionPathIncludes: "sage/src/sage/rings/number_field/number_field_base.pyx",
@@ -316,6 +332,7 @@ const uxScenarios = [
     file: "11_sage_object_methods.py",
     line: 79,
     character: 31,
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       definitionPathIncludes: "sage/src/sage/geometry/polyhedron/base0.py",
@@ -328,6 +345,7 @@ const uxScenarios = [
     title: "Implicit .sage sage.all combinatorics constructor resolution",
     file: "07_symbolic_and_combinatorics.sage",
     symbol: "Combinations",
+    requiresSageSource: true,
     expects: {
       noDiagnostics: true,
       hoverIncludes: ["Combinations"],
@@ -396,9 +414,13 @@ const uxScenarios = [
   },
 ];
 
-const args = new Set(process.argv.slice(2));
 if (args.has("--smoke")) {
-  await runSmoke();
+  const fixtureOnly = args.has("--fixture-only");
+  const requireSageSource = args.has("--require-sage-source");
+  if (fixtureOnly && requireSageSource) {
+    throw new Error("--fixture-only and --require-sage-source cannot be used together");
+  }
+  await runSmoke({ fixtureOnly, requireSageSource });
 } else {
   const port = Number(process.env.SAGE_DEBUG_WEB_PORT ?? 8765);
   const server = http.createServer(handleRequest);
@@ -570,10 +592,23 @@ function clearResponseCaches() {
   responseCaches.query.clear();
 }
 
-async function runUxMatrix() {
+async function runUxMatrix(options = {}) {
+  const includeSageScenarios = options.includeSageScenarios ?? sageSourceRoots.length > 0;
   const rows = [];
   let needsRebuild = true;
   for (const scenario of uxScenarios) {
+    if (scenario.requiresSageSource && !includeSageScenarios) {
+      rows.push({
+        id: scenario.id,
+        title: scenario.title,
+        file: scenario.file,
+        target: scenario.symbol,
+        status: "skip",
+        reason: "Sage source root is unavailable",
+        checks: [],
+      });
+      continue;
+    }
     const inspection = await inspectSmokeFile(scenario.file, { rebuild: needsRebuild });
     needsRebuild = false;
     const queryResult = await querySmokeFile(scenario.file, {
@@ -598,7 +633,8 @@ async function runUxMatrix() {
     summary: {
       total: rows.length,
       passed: rows.filter((row) => row.status === "pass").length,
-      failed: rows.filter((row) => row.status !== "pass").length,
+      failed: rows.filter((row) => row.status === "fail").length,
+      skipped: rows.filter((row) => row.status === "skip").length,
     },
   };
 }
@@ -785,6 +821,16 @@ function discoverNearbySageSourceRoots(workspaceRoot) {
   return dedupe(roots.map((root) => path.resolve(root)));
 }
 
+function configuredSageSourceRoots() {
+  const configured = process.env.SAGE_SOURCE_ROOT ?? "";
+  return dedupe(configured
+    .split(path.delimiter)
+    .map((root) => root.trim())
+    .filter(Boolean)
+    .map((root) => path.resolve(root)))
+    .filter((root) => fsSync.existsSync(path.join(root, "sage")));
+}
+
 function dedupe(values) {
   return [...new Set(values)];
 }
@@ -878,7 +924,13 @@ function pushGrammarMatcher(matchers, repositoryName, name, pattern, captures) {
   }
 }
 
-async function runSmoke() {
+async function runSmoke(options = {}) {
+  if (options.requireSageSource && sageSourceRoots.length === 0) {
+    throw new Error(
+      "debug workbench Sage matrix requires a Sage source root; "
+      + "set SAGE_SOURCE_ROOT=/path/to/sage/src",
+    );
+  }
   const inspection = await inspectSmokeFile(defaultFile, { rebuild: true });
   const query = await querySmokeFile(defaultFile, {
     symbol: defaultQueries[defaultFile],
@@ -925,10 +977,17 @@ async function runSmoke() {
   if (!Array.isArray(query.query?.completions)) {
     throw new Error("debug workbench smoke expected completion list");
   }
-  const matrix = await runUxMatrix();
+  const matrix = await runUxMatrix({
+    includeSageScenarios: !options.fixtureOnly && sageSourceRoots.length > 0,
+  });
+  if (options.requireSageSource && matrix.summary.skipped > 0) {
+    throw new Error(
+      `debug workbench Sage matrix unexpectedly skipped ${matrix.summary.skipped} scenarios`,
+    );
+  }
   if (matrix.summary.failed > 0) {
     const failed = matrix.rows
-      .filter((row) => row.status !== "pass")
+      .filter((row) => row.status === "fail")
       .map((row) =>
         `${row.id}: ${row.checks
           .filter((check) => !check.pass)
@@ -945,7 +1004,10 @@ async function runSmoke() {
   await assertWarmQueryBudget("09_advanced_sage_patterns.sage", "I.groebner_basis", 1000);
   await assertWarmPositionBudget("09_advanced_sage_patterns.sage", 69, 35, 1000);
   await assertWarmQueryBudget("06_runtime_graphs_and_number_theory.sage", "graphs.PetersenGraph", 1000);
-  console.log("debug workbench smoke passed");
+  const skipped = matrix.summary.skipped > 0
+    ? `, ${matrix.summary.skipped} Sage-source scenarios skipped`
+    : "";
+  console.log(`debug workbench smoke passed (${matrix.summary.passed} scenarios${skipped})`);
 }
 
 async function assertWarmQueryBudget(fileName, symbol, budgetMs) {
@@ -1160,6 +1222,7 @@ function renderPage() {
     }
     .pass { color: #067647; font-weight: 600; }
     .fail { color: #b42318; font-weight: 600; }
+    .skip { color: var(--muted); font-weight: 600; }
     .matrix-summary {
       padding: 10px;
       border-bottom: 1px solid var(--line);
@@ -1344,16 +1407,19 @@ function renderPage() {
         '<span class="' + (summary.failed ? "fail" : "pass") + '">' +
         escapeHtml(String(summary.passed ?? 0)) + "/" + escapeHtml(String(summary.total ?? 0)) +
         " passing</span>" +
-        (summary.failed ? "  failed=" + escapeHtml(String(summary.failed)) : "");
+        (summary.failed ? "  failed=" + escapeHtml(String(summary.failed)) : "") +
+        (summary.skipped ? "  skipped=" + escapeHtml(String(summary.skipped)) : "");
       renderTable("#uxTable", ["status", "title", "file", "target", "checks"], (payload.rows ?? []).map((row) => ({
-        status: row.status === "pass" ? "PASS" : "FAIL",
+        status: row.status === "pass" ? "PASS" : row.status === "skip" ? "SKIP" : "FAIL",
         title: row.title,
         file: row.file,
         target: row.target,
-        checks: row.checks.map((check) => (check.pass ? "OK " : "FAIL ") + check.name + (check.pass ? "" : " -> " + check.actual)).join("\\n"),
+        checks: row.status === "skip"
+          ? row.reason
+          : row.checks.map((check) => (check.pass ? "OK " : "FAIL ") + check.name + (check.pass ? "" : " -> " + check.actual)).join("\\n"),
       })));
       for (const cell of document.querySelectorAll("#uxTable td:first-child")) {
-        cell.className = cell.textContent === "PASS" ? "pass" : "fail";
+        cell.className = cell.textContent === "PASS" ? "pass" : cell.textContent === "SKIP" ? "skip" : "fail";
       }
     }
 

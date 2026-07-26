@@ -36,8 +36,10 @@
 
 ## Maintained Boundaries
 
-- Rust and Node toolchains are pinned; CI uses repository-local fixtures and must not depend on maintainer-private paths
-  or an installed Sage tree.
+- Rust is pinned; Node.js 22.9+ and npm 11+ use minimum compatibility ranges, with their runtime pairing checked
+  against npm's own Node.js engine declaration and Node 22 and 26 covered in CI.
+  CI uses repository-local fixtures plus a sparse checkout of the latest public Sage source and must not depend on
+  maintainer-private paths or an installed Sage runtime.
 - Local release gates additionally validate the latest discovered Sage source checkout, real-file behavior, and
   persistent LSP latency.
 - Notebook and remote execution remain separate milestones; they must not weaken the source-navigation contract.

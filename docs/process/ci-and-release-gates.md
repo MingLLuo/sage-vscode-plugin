@@ -1,7 +1,7 @@
 # CI and Release Gates
 
 This repository has three intentionally different verification levels. Keep them separate so public GitHub checks stay
-reproducible while local release candidates still exercise real Sage-heavy workloads.
+portable while local release candidates still exercise real Sage-heavy workloads.
 
 ## `npm run test:ci`
 
@@ -11,6 +11,7 @@ reproducible while local release candidates still exercise real Sage-heavy workl
 - Locked Rust tests and `cargo clippy --locked --all-targets --all-features -- -D warnings`.
 - Syntax and extension lint.
 - TypeScript, debug workbench, and legacy Python regression tests through `npm run test`.
+- The full 23-scenario real-Sage debug-workbench matrix through `npm run test:debug-web:sage`.
 - Repository-local LSP navigation contract smoke covering one-target high-confidence jumps, ordered ambiguous
   `LocationLink` candidates, exact `.pxd` declaration/`.pyx` implementation role selection, explanatory hover content,
   and safety gates for weak references, rename, and call hierarchy.
@@ -25,11 +26,15 @@ reproducible while local release candidates still exercise real Sage-heavy workl
   future Sage update resilience, and maintainability.
 - Offline reference export smoke for the static `.sage-reference/` viewer, search index, source shards, and private-path
   stripping.
-- Performance smoke with `--skip-workbench`; this reports a structured skip when no Sage source checkout is present.
+- Performance smoke with `--skip-workbench`; GitHub supplies the sparse Sage source root, while direct script runs still
+  report a structured skip when no source checkout is present.
 - `git diff --check` for whitespace errors.
 
 Do not add `test:lsp-latency`, `test:real-file-smoke`, `test:native-smoke`, or `test:extension-host` to `test:ci`.
 Those gates intentionally depend on local Sage/source/VS Code state.
+
+Running `test:ci` directly requires a nearby Sage checkout or `SAGE_SOURCE_ROOT=/path/to/sage/src`; the public workflow
+provides this with a sparse checkout of the latest Sage default branch. A Sage executable is not required.
 
 ## `npm run test:release`
 
@@ -41,8 +46,9 @@ Those gates intentionally depend on local Sage/source/VS Code state.
 - Real Sage-heavy file smoke through the checked-in public synthetic fixture, or through `SAGE_REAL_FILE_SMOKE_PATH` /
   `SAGE_REAL_FILE_SMOKE_PATHS` when maintainers want to exercise private local projects.
 
-Use this before claiming a release candidate is ready. If a contributor does not have the local Sage checkout, Sage-root
-dependent smokes report explicit skipped status. If maintainers provide `SAGE_REAL_FILE_SMOKE_PATH` or
+Use this before claiming a release candidate is ready. A local Sage source checkout is required for the full UX matrix;
+set `SAGE_SOURCE_ROOT` when it is not discoverable nearby. Individual lower-level smokes still report explicit skipped
+status when their optional inputs are absent. If maintainers provide `SAGE_REAL_FILE_SMOKE_PATH` or
 `SAGE_REAL_FILE_SMOKE_PATHS`, every configured file path is treated as required and a missing file fails the smoke instead
 of being silently ignored.
 
@@ -53,9 +59,11 @@ a machine where GUI automation is acceptable.
 
 ## Workflow Rules
 
-- GitHub Actions runs on `macos-latest`, uses the exact Node and Rust versions declared by `.node-version` and
-  `rust-toolchain.toml`, installs Python dependencies, restores Cargo build/cache state, runs `cargo fetch --locked`,
-  then executes `npm run test:ci`.
+- GitHub Actions runs on `macos-latest`, uses the Node 22 baseline declared by `.node-version` and the exact Rust version
+  in `rust-toolchain.toml`, installs Python dependencies, restores Cargo build/cache state, runs `cargo fetch --locked`,
+  sparsely checks out the latest default-branch `sagemath/sage` sources for the real navigation UX matrix, then executes
+  `npm run test:ci`. A lightweight Linux matrix covers Node.js 22/npm 11 and Node.js 26/npm 12, while a second macOS
+  job packages the VSIX end to end with Node.js 26/npm 12.
 - Generated syntax assets must pass lint before build writes anything.
 - `npm run test:generated-assets` must pass after changing syntax resources, generated extension-local assets,
   `scripts/generate-extension-icon.mjs`, or package branding files. `npm run package:vsix` runs the same gate before
@@ -70,10 +78,11 @@ a machine where GUI automation is acceptable.
 - `npm run doctor:mac` is a local diagnostic check for the current Mac package, staged Rust server, VS Code CLI, Sage
   runtime, and Sage source root. It is intentionally not part of `test:ci` because a clean CI checkout may not have a
   user-installed Sage runtime or VS Code CLI.
-- VSIX packaging requires the exact Node runtime in `.node-version`, uses a fixed archive timestamp unless
-  `SOURCE_DATE_EPOCH` is set, normalizes regular-file modes to `0644` and `sage-ls` to `0755`, and enforces a 6 MiB
-  archive budget. `npm run test:vsix-package` rebuilds under both normal and restrictive umasks and verifies the archive
-  hash remains identical.
+- VSIX packaging requires Node.js 22.9 or newer and npm 11 or newer; `.node-version` records the Node 22 baseline instead
+  of an exact-version lock. The toolchain gate also reads the installed npm package's Node.js engine range and rejects
+  incompatible Node/npm pairings. Packaging uses a fixed archive timestamp unless `SOURCE_DATE_EPOCH` is set, normalizes
+  regular-file modes to `0644` and `sage-ls` to `0755`, and enforces a 6 MiB archive budget. `npm run
+  test:vsix-package` rebuilds under both normal and restrictive umasks and verifies the archive hash remains identical.
 - `npm run test:repo-hygiene` must pass after changing issue templates, PR templates, `SECURITY.md`, `SUPPORT.md`,
   `CONTRIBUTING.md`, `.gitattributes`, `.editorconfig`, or CI/release scripts.
 - New public gates should be added here, in `CONTRIBUTING.md`, and in the package metadata tests in the same change.

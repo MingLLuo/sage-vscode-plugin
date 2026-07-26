@@ -82,7 +82,10 @@ interface ExtensionManifest {
 }
 
 interface RootPackage {
-  packageManager?: string;
+  engines?: {
+    node?: string;
+    npm?: string;
+  };
   scripts?: Record<string, string>;
 }
 
@@ -241,22 +244,29 @@ test("release scripts cover packaged Rust binaries and real Sage smoke gates", (
   assert.match(fullGate, /npm run test:extension-host/);
 });
 
-test("VSIX packaging enforces a reproducible toolchain, modes, and private-path checks", () => {
+test("VSIX packaging enforces supported toolchain ranges, reproducible modes, and private-path checks", () => {
   const rootPackage = readRootPackage();
   assert.equal(rootPackage.scripts?.["check:package-toolchain"], "node scripts/check-package-toolchain.mjs");
+  assert.equal(rootPackage.engines?.node, ">=22.9.0");
+  assert.equal(rootPackage.engines?.npm, ">=11");
 
   const toolchainCheck = readRepositoryFile("scripts/package-toolchain.mjs");
   assert.match(toolchainCheck, /process\.versions\.node/);
-  assert.match(toolchainCheck, /actual !== expected/);
-  assert.match(toolchainCheck, /packageManager/);
-  assert.match(toolchainCheck, /requires npm/);
+  assert.match(toolchainCheck, /engines/);
+  assert.match(toolchainCheck, /minimum/);
+  assert.doesNotMatch(toolchainCheck, /packageManager/);
+  assert.match(toolchainCheck, /npm/);
 
   const toolchainCommand = readRepositoryFile("scripts/check-package-toolchain.mjs");
   assert.match(toolchainCommand, /npmCommand/);
-  assert.match(toolchainCommand, /assertPinnedNpmVersion/);
+  assert.match(toolchainCommand, /assertSupportedNodeVersion/);
+  assert.match(toolchainCommand, /assertSupportedNpmVersion/);
+  assert.match(toolchainCommand, /assertNpmSupportsNodeVersion/);
+  assert.match(toolchainCommand, /installed npm package#engines\.node/);
+  assert.match(toolchainCommand, /supportedRanges/);
 
   const packager = readRepositoryFile("scripts/package-vsix.mjs");
-  assert.match(packager, /assertPinnedNodeVersion\(repositoryRoot\)/);
+  assert.match(packager, /assertSupportedNodeVersion\(repositoryRoot\)/);
   assert.match(packager, /assertNoBuildMachinePaths/);
   assert.match(packager, /0o100755/);
   assert.match(packager, /0o100644/);
@@ -274,9 +284,18 @@ test("VSIX packaging enforces a reproducible toolchain, modes, and private-path 
 
 test("macOS CI gate is public-repository safe", () => {
   const rootPackage = readRootPackage();
-  assert.equal(rootPackage.packageManager, "npm@11.17.0");
-  assert.equal(readRepositoryFile(".node-version").trim(), "22.23.1");
+  assert.equal(rootPackage.engines?.node, ">=22.9.0");
+  assert.equal(rootPackage.engines?.npm, ">=11");
+  assert.equal(readRepositoryFile(".node-version").trim(), "22");
   assert.match(readRepositoryFile("rust-toolchain.toml"), /channel\s*=\s*"1\.92\.0"/);
+  assert.match(
+    rootPackage.scripts?.["test:debug-web"] ?? "",
+    /debug-workbench\.mjs --smoke --fixture-only/,
+  );
+  assert.match(
+    rootPackage.scripts?.["test:debug-web:sage"] ?? "",
+    /debug-workbench\.mjs --smoke --require-sage-source/,
+  );
   const ciGate = rootPackage.scripts?.["test:ci"] ?? "";
   for (const expected of [
     "cargo test --locked",
@@ -284,6 +303,7 @@ test("macOS CI gate is public-repository safe", () => {
     "npm run lint",
     "npm run build",
     "npm run test",
+    "npm run test:debug-web:sage",
     "npm run test:lsp-protocol",
     "npm run test:generated-assets",
     "npm run package:rust-binary",
@@ -304,10 +324,27 @@ test("macOS CI gate is public-repository safe", () => {
   const workflow = readCiWorkflow();
   assert.match(workflow, /runs-on:\s*macos-latest/);
   assert.match(workflow, /npm ci/);
-  assert.match(workflow, /npm install --global npm@11\.17\.0/);
+  assert.match(workflow, /npm install --global npm@11(?:\s|$)/m);
+  assert.match(workflow, /npm install --global npm@12(?:\s|$)/m);
   assert.match(workflow, /node-version-file:\s*"\.node-version"/);
+  assert.match(workflow, /"22\.x"/);
+  assert.match(workflow, /"26\.x"/);
+  assert.match(workflow, /npm-version:\s*"11"/);
+  assert.match(workflow, /npm-version:\s*"12"/);
   assert.match(workflow, /cache:\s*["']?npm["']?/);
   assert.match(workflow, /cache-dependency-path:\s*package-lock\.json/);
+  assert.match(workflow, /actions\/checkout@v7/);
+  assert.match(workflow, /actions\/setup-node@v7/);
+  assert.match(workflow, /actions\/setup-python@v7/);
+  const sageCheckout = workflow.match(
+    /- name:\s*Check out latest Sage source([\s\S]*?)(?=\n\s+- name:|\n\s*$)/,
+  )?.[1] ?? "";
+  assert.match(sageCheckout, /repository:\s*sagemath\/sage/);
+  assert.match(sageCheckout, /path:\s*sage/);
+  assert.match(sageCheckout, /sparse-checkout:\s*\|\s*\n\s+src\/sage/);
+  assert.doesNotMatch(sageCheckout, /^\s*ref:/m);
+  assert.match(workflow, /SAGE_SOURCE_ROOT:\s*\$\{\{\s*github\.workspace\s*\}\}\/sage\/src/);
+  assert.match(workflow, /macos-package-compatibility:[\s\S]*?npm run package:vsix/);
   assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
   assert.match(workflow, /toolchain:\s*"1\.92\.0"/);
   assert.match(workflow, /Swatinem\/rust-cache@v2/);

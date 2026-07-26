@@ -3,11 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { assertPinnedNodeVersion } from "./package-toolchain.mjs";
+import { assertSupportedNodeVersion } from "./package-toolchain.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
-assertPinnedNodeVersion(repositoryRoot);
+assertSupportedNodeVersion(repositoryRoot);
 
 const environment = releaseBuildEnvironment();
 run("cargo", ["build", "--locked", "--release", "-p", "sage-ls"], environment);

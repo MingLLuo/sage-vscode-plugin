@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateRawSync } from "node:zlib";
-import { assertPinnedNodeVersion } from "./package-toolchain.mjs";
+import { assertSupportedNodeVersion } from "./package-toolchain.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
-assertPinnedNodeVersion(repositoryRoot);
+assertSupportedNodeVersion(repositoryRoot);
 const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
 const outDir = path.resolve(argumentValue("--out-dir") ?? path.join(repositoryRoot, "dist"));
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));

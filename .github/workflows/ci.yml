@@ -15,25 +15,106 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  node-compatibility:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - node-version: "22.x"
+            npm-version: "11"
+          - node-version: "26.x"
+            npm-version: "12"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Select npm ${{ matrix.npm-version }}
+        run: npm install --global npm@${{ matrix.npm-version }}
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Check Node/npm compatibility
+        run: |
+          npm run check:package-toolchain
+          npm run lint
+          npm run build --workspace @sage-vscode/syntax-pack
+          npm run build --workspace sage-vscode-extension
+          npm run test --workspace @sage-vscode/syntax-pack
+          npm run test --workspace sage-vscode-extension
+
+  macos-package-compatibility:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js 26
+        uses: actions/setup-node@v7
+        with:
+          node-version: "26.x"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Select npm 12
+        run: npm install --global npm@12
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.92.0"
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Package VSIX with Node 26 and npm 12
+        run: npm run package:vsix
+
   macos-checks:
     runs-on: macos-latest
     timeout-minutes: 60
     env:
       CI: "1"
       SAGE_PERF_SKIP_WORKBENCH: "1"
+      SAGE_SOURCE_ROOT: ${{ github.workspace }}/sage/src
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+
+      - name: Check out latest Sage source
+        uses: actions/checkout@v7
+        with:
+          repository: sagemath/sage
+          path: sage
+          fetch-depth: 1
+          sparse-checkout: |
+            src/sage
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version-file: ".node-version"
           cache: "npm"
           cache-dependency-path: package-lock.json
 
-      - name: Pin npm toolchain
-        run: npm install --global npm@11.17.0
+      - name: Select supported npm
+        run: npm install --global npm@11
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -47,7 +128,7 @@ jobs:
           cache-on-failure: true
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.11"
 

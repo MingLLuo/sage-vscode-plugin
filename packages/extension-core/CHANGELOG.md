@@ -15,7 +15,9 @@
 - Split language-server initialization and extension-side workspace, external-source, run preparation, and lifecycle
   concerns into focused modules with regression coverage.
 - Hardened reproducible VSIX packaging with explicit content and dependency allowlists, executable-mode preservation,
-  exact Node/npm checks, and VS Code 1.97 API type compatibility.
+  Node/npm range and runtime-pair compatibility checks, and VS Code 1.97 API type compatibility.
+- Made the public CI self-contained by sparsely checking out the latest Sage source for the real navigation UX matrix,
+  while keeping a fixture-only debug smoke for ordinary Node test runs.
 
 ## 0.1.0 - 2026-05-24
 

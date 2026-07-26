@@ -60,6 +60,7 @@ coverage remains testable without maintaining parallel manuals.
 
 - `npm run test --workspace sage-vscode-extension`
 - `npm run test:debug-web`
+- `npm run test:debug-web:sage` (requires a Sage source checkout)
 - `npm run test:product-readiness`
 - `npm run test:lsp-latency`
 - `npm run test:real-file-smoke`

@@ -7,11 +7,11 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
-import { assertPinnedNodeVersion } from "./package-toolchain.mjs";
+import { assertSupportedNodeVersion } from "./package-toolchain.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
-assertPinnedNodeVersion(repositoryRoot);
+assertSupportedNodeVersion(repositoryRoot);
 const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
 const CRC32_TABLE = buildCrc32Table();

@@ -425,11 +425,14 @@ form deletes matching old SQLite cache files.
   package checks green.
 - Cache maintenance or release tooling changes should keep `npm run test:cache-maintenance` green.
 - Cross-cutting changes should keep the full `npm run test` path green before commit.
-- Browser-debug-facing changes should keep `npm run test:debug-web` green.
+- Browser-debug-facing changes should keep the fixture-only `npm run test:debug-web` green. Navigation or Sage-library
+  resolution changes should also keep `npm run test:debug-web:sage` green against a nearby checkout or
+  `SAGE_SOURCE_ROOT=/path/to/sage/src`.
 - Packaging-facing changes should keep `npm run package:vsix`, `npm run test:vsix-package`, and
-  `npm run test:vsix-install` green; use the exact `.node-version` runtime. `package:vsix` stages a locked, path-remapped
-  current-platform release `sage-ls` before archive checks, and the package smoke verifies normalized modes under
-  different umasks.
+  `npm run test:vsix-install` green; use Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer.
+  `.node-version` records the Node 22 baseline rather than an exact runtime lock; the toolchain gate verifies the
+  installed npm release supports that Node.js runtime. `package:vsix` stages a locked, path-remapped current-platform
+  release `sage-ls` before archive checks, and the package smoke verifies normalized modes under different umasks.
 - Release-candidate changes that do not need the desktop extension host should keep `npm run test:release` green. This
   runs locked Rust tests, clippy with `-D warnings`, TypeScript lint, the full non-desktop test suite, VSIX content/package
   install smoke, release index performance, persistent LSP latency, the real-file Sage-heavy smoke, and
@@ -440,4 +443,4 @@ form deletes matching old SQLite cache files.
 - The extension-host smoke suite now covers hover, definition, completion, references, rename, document/workspace
   symbols, native Cython navigation, managed restart stability, imported-helper save refresh, and optional native Sage
   source-tree lookups.
-- Use `npm run test:full` when you need the whole repository suite plus the extension-host smoke test in one command.
+- Use `npm run test:full` when you need the release suite plus the extension-host smoke test in one command.
