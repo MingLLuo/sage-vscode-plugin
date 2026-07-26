@@ -63,6 +63,8 @@ async function runSmoke() {
   const consumerPath = path.join(workspaceRoot, "consumer.py");
   const nativeDeclarationPath = path.join(workspaceRoot, "native_provider.pxd");
   const nativeImplementationPath = path.join(workspaceRoot, "native_provider.pyx");
+  const multiDeclarationPath = path.join(workspaceRoot, "multi_provider.pxd");
+  const multiImplementationPath = path.join(workspaceRoot, "multi_provider.pyx");
   const providerText = [
     "class First:",
     "    def shared(self):",
@@ -100,13 +102,30 @@ async function runSmoke() {
     "    cpdef caller(self):",
     "        return self.compute()",
   ].join("\n");
+  const multiDeclarationText = [
+    "cdef class MultiThing:",
+    "    cpdef compute(self)",
+    "    cpdef compute(self)",
+  ].join("\n");
+  const multiImplementationText = [
+    "cdef class MultiThing:",
+    "    cpdef compute(self):",
+    "        return 6",
+    "",
+    "    cpdef caller(self):",
+    "        return self.compute()",
+  ].join("\n");
   await fs.writeFile(providerPath, providerText, "utf8");
   await fs.writeFile(consumerPath, consumerText, "utf8");
   await fs.writeFile(nativeDeclarationPath, nativeDeclarationText, "utf8");
   await fs.writeFile(nativeImplementationPath, nativeImplementationText, "utf8");
+  await fs.writeFile(multiDeclarationPath, multiDeclarationText, "utf8");
+  await fs.writeFile(multiImplementationPath, multiImplementationText, "utf8");
   const providerUri = pathToFileURL(await fs.realpath(providerPath)).toString();
   const nativeDeclarationUri = pathToFileURL(await fs.realpath(nativeDeclarationPath)).toString();
   const nativeImplementationUri = pathToFileURL(await fs.realpath(nativeImplementationPath)).toString();
+  const multiDeclarationUri = pathToFileURL(await fs.realpath(multiDeclarationPath)).toString();
+  const multiImplementationUri = pathToFileURL(await fs.realpath(multiImplementationPath)).toString();
 
   const server = new LspProcess(serverPath, { cwd: repositoryRoot });
   let started = false;
@@ -170,6 +189,14 @@ async function runSmoke() {
         text: nativeImplementationText,
       },
     });
+    server.notify("textDocument/didOpen", {
+      textDocument: {
+        uri: multiImplementationUri,
+        languageId: "sagemath-cython",
+        version: 1,
+        text: multiImplementationText,
+      },
+    });
     const indexStatus = await waitForIndex(server);
 
     const exactPosition = positionInLine(consumerText, "result =", "exact");
@@ -177,6 +204,11 @@ async function runSmoke() {
     const solitaryPosition = positionOf(consumerText, "solitary");
     const nativeMethodPosition = positionInLine(
       nativeImplementationText,
+      "return self.compute",
+      "compute",
+    );
+    const multiMethodPosition = positionInLine(
+      multiImplementationText,
       "return self.compute",
       "compute",
     );
@@ -251,6 +283,42 @@ async function runSmoke() {
         end: { line: 1, character: 17 },
       },
       "implementation must select the exact sibling .pyx method",
+    );
+
+    const multiDeclaration = await requestAtDocument(
+      "textDocument/declaration",
+      multiImplementationUri,
+      multiMethodPosition,
+    );
+    assert.deepEqual(
+      multiDeclaration,
+      [1, 2].map((line) => ({
+        uri: multiDeclarationUri,
+        range: {
+          start: { line, character: 10 },
+          end: { line, character: 17 },
+        },
+      })),
+      "multiple proven declaration sites must remain ordered Locations",
+    );
+
+    await fs.writeFile(
+      multiDeclarationPath,
+      [
+        "cdef class MultiThing:",
+        "    cpdef compute(self)",
+      ].join("\n"),
+      "utf8",
+    );
+    const filteredMultiDeclaration = await requestAtDocument(
+      "textDocument/declaration",
+      multiImplementationUri,
+      multiMethodPosition,
+    );
+    assert.equal(
+      filteredMultiDeclaration,
+      null,
+      "revalidation leaving one declaration candidate must not force a single jump",
     );
 
     const ambiguousDefinition = await requestAt("textDocument/definition", sharedPosition);
@@ -369,6 +437,8 @@ async function runSmoke() {
       weakImplementationTarget: weakImplementation,
       nativeDeclarationTarget: nativeDeclaration.uri,
       nativeImplementationTarget: nativeImplementation.uri,
+      multiDeclarationLines: multiDeclaration.map((location) => location.range.start.line),
+      filteredMultiDeclarationTarget: filteredMultiDeclaration,
       sourceRenameConsumerEdits: consumerEdits.length,
     }, null, 2));
   } catch (error) {
