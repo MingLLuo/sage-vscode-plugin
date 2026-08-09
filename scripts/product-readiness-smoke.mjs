@@ -274,7 +274,8 @@ function checkMacPackagingReadiness() {
     && macDoctor.includes("packaged Rust language server")
     && macDoctor.includes("VS Code CLI")
     && macDoctor.includes("Sage runtime")
-    && macDoctor.includes("Sage source root"), "scripts/macos-doctor.mjs");
+    && macDoctor.includes("Sage source root")
+    && macDoctor.includes("probeSageRuntimeCandidates"), "scripts/macos-doctor.mjs");
   pushCheck("mac-packaging", "packaging supports Apple Silicon and Intel Mac", packageRust.includes("darwin-arm64")
     && packageRust.includes("darwin-x64"), "scripts/package-rust-binary.mjs");
   pushCheck("mac-packaging", "packaging rejects non-macOS release targets", packageRust.includes("This preview only stages macOS binaries")

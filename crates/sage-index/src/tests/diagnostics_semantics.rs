@@ -49,6 +49,40 @@ fn diagnostics_allow_preparser_assignment_rhs_operators() {
 }
 
 #[test]
+fn pep_695_sage_homset_headers_are_indexed_without_false_diagnostics() {
+    let source = "def Hom[DomainElementT: Parent, CodomainElementT: Parent](\n\
+    X: DomainElementT,\n\
+    Y: CodomainElementT,\n\
+) -> Homset[DomainElementT, CodomainElementT]:\n\
+    \"\"\"Create a homset.\"\"\"\n\
+    return Homset(X, Y)\n\
+\n\
+class Homset[DomainElementT: Parent, CodomainElementT: Parent](Set_generic):\n\
+    \"\"\"The class for collections of morphisms.\"\"\"\n\
+    pass\n";
+
+    let parsed = parse_source("sage.categories.homset", Path::new("homset.py"), source);
+    let hom = parsed
+        .symbols
+        .iter()
+        .find(|symbol| symbol.name == "Hom")
+        .expect("PEP 695 generic function should be indexed");
+    assert_eq!(hom.range.start_line, 0);
+    assert!(hom.signature.as_deref().is_some_and(|signature| {
+        signature.starts_with("Hom(")
+            && signature.contains("X: DomainElementT")
+            && signature.contains("Y: CodomainElementT")
+    }));
+    assert!(parsed
+        .symbols
+        .iter()
+        .any(|symbol| symbol.name == "Homset" && symbol.range.start_line == 7));
+
+    let diagnostics = diagnostics_for_source(Path::new("homset.py"), source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
 fn function_call_context_tracks_keyword_arguments() {
     let source = "result = trace_window(w^2 + 3*w + 1, width=7)\n";
     let character = source.find("width").unwrap() as u32 + 2;

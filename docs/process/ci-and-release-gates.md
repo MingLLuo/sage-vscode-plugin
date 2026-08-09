@@ -75,9 +75,10 @@ a machine where GUI automation is acceptable.
   source changes.
 - Release Rust staging uses `cargo build --locked` and remaps repository, Cargo-home, and user-home source prefixes before
   copying the binary. The VSIX smoke rejects binaries that retain build-machine home or repository paths.
-- `npm run doctor:mac` is a local diagnostic check for the current Mac package, staged Rust server, VS Code CLI, Sage
-  runtime, and Sage source root. It is intentionally not part of `test:ci` because a clean CI checkout may not have a
-  user-installed Sage runtime or VS Code CLI.
+- `npm run doctor:mac` is a local diagnostic check for the current Mac package, staged Rust server, VS Code CLI,
+  importable Sage runtime, and Sage source root. It is intentionally not part of `test:ci` because a clean CI checkout
+  may not have a user-installed Sage runtime or VS Code CLI. The probe itself has a fake-runtime contract test in the
+  default test suite so a version-only source checkout cannot regress to a false-ready result.
 - VSIX packaging requires Node.js 22.9 or newer and npm 11 or newer; `.node-version` records the Node 22 baseline instead
   of an exact-version lock. The toolchain gate also reads the installed npm package's Node.js engine range and rejects
   incompatible Node/npm pairings. Packaging uses a fixed archive timestamp unless `SOURCE_DATE_EPOCH` is set, normalizes

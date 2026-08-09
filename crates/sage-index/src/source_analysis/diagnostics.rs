@@ -6,6 +6,32 @@ fn parse_with_tree_sitter(source: &str) -> Option<tree_sitter::Tree> {
     parser.parse(source, None)
 }
 
+fn source_for_tree_sitter_diagnostics(source: &str) -> Option<String> {
+    static PEP_695_HEADER_RE: OnceLock<Regex> = OnceLock::new();
+    let header_re = PEP_695_HEADER_RE.get_or_init(|| {
+        Regex::new(
+            r"(?m)^\s*(?:async\s+def|def|class)\s+[A-Za-z_][A-Za-z0-9_]*(?P<parameters>\[[^\n]*\])\s*(?:\(|:)",
+        )
+        .unwrap()
+    });
+    let ranges = header_re
+        .captures_iter(source)
+        .filter_map(|captures| captures.name("parameters").map(|value| value.range()))
+        .collect::<Vec<_>>();
+    if ranges.is_empty() {
+        return None;
+    }
+
+    // The bundled tree-sitter-python grammar predates PEP 695. Mask only the
+    // type-parameter list and preserve every byte offset so diagnostics for
+    // the remainder of the document keep their original positions.
+    let mut normalized = source.as_bytes().to_vec();
+    for range in ranges {
+        normalized[range].fill(b' ');
+    }
+    String::from_utf8(normalized).ok()
+}
+
 pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<DiagnosticRecord> {
     if let Some(caret) = sage_trailing_caret_error(source) {
         return vec![DiagnosticRecord {
@@ -33,9 +59,16 @@ pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<Diagnosti
     } else {
         source.to_string()
     };
-    let Some(tree) = parse_with_tree_sitter(&generated) else {
+    let Some(mut tree) = parse_with_tree_sitter(&generated) else {
         return diagnostics;
     };
+    if tree.root_node().has_error() {
+        if let Some(normalized) = source_for_tree_sitter_diagnostics(&generated) {
+            if let Some(normalized_tree) = parse_with_tree_sitter(&normalized) {
+                tree = normalized_tree;
+            }
+        }
+    }
     if tree.root_node().has_error() {
         diagnostics.push(DiagnosticRecord {
             message: "Syntax error: source could not be parsed".to_string(),

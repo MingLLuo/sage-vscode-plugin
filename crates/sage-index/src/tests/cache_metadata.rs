@@ -303,12 +303,12 @@ fn cache_namespace_tracks_source_roots_for_future_sage_updates() {
 }
 
 #[test]
-fn cache_namespace_invalidates_pre_owner_domain_method_caches() {
-    let root = test_root("cache-owner-domain-version");
+fn cache_namespace_invalidates_pre_pep695_declaration_caches() {
+    let root = test_root("cache-pep695-version");
     let excludes = vec!["**/__pycache__/**".to_string()];
     let current = cache_namespace_digest(std::slice::from_ref(&root), &excludes, true);
     let previous = cache_namespace_digest_for_version(
-        "sage-index-v28-compatible-identifier-filter",
+        "sage-index-v29-owner-domain-classification",
         std::slice::from_ref(&root),
         &excludes,
         true,
@@ -316,7 +316,7 @@ fn cache_namespace_invalidates_pre_owner_domain_method_caches() {
 
     assert_ne!(
         current, previous,
-        "owner-domain materialization changes must not reuse polluted v28 caches"
+        "PEP 695 declaration parsing must not reuse incomplete v29 symbol caches"
     );
     fs::remove_dir_all(root).ok();
 }

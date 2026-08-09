@@ -158,9 +158,10 @@ shards, search index, keyboard/hash interactions, documentation rendering, and p
 `npm run package:vsix` rebuilds and stages the current macOS release `sage-ls` binary, verifies generated assets and
 package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`.
 
-`npm run doctor:mac` checks the local Mac package, staged Rust language server, VS Code CLI, Sage runtime, and Sage
-source root before you open a workspace. Use `-- --json` for a machine-readable report or `-- --strict` to fail when
-required packaged artifacts are missing.
+`npm run doctor:mac` checks the local Mac package, staged Rust language server, VS Code CLI, an importable Sage runtime,
+and the Sage source root before you open a workspace. A source checkout that prints its version but cannot import
+`sage.all` is reported as a warning instead of being treated as a usable runtime. Use `-- --json` for a machine-readable
+report or `-- --strict` to fail when required packaged artifacts are missing.
 
 `npm run configure:workspace -- --workspace /path/to/project --profile auto` writes cross-platform VS Code settings for
 Sage-heavy Python, `.sage`, mixed research, or Cython projects. Add `-- --sage /path/to/sage --source-root /path/to/sage/src`

@@ -122,6 +122,8 @@ pushCheck(
 pushCheck("test:repo-hygiene script is registered", scripts["test:repo-hygiene"] === "node scripts/repo-hygiene-smoke.mjs", scripts["test:repo-hygiene"]);
 pushCheck("configure:workspace script is registered", scripts["configure:workspace"] === "node scripts/configure-workspace.mjs", scripts["configure:workspace"]);
 pushCheck("doctor:mac script is registered", scripts["doctor:mac"] === "node scripts/macos-doctor.mjs", scripts["doctor:mac"]);
+pushCheck("Sage runtime probe tests are registered", scripts["test:sage-runtime-probe"] === "node --test scripts/lib/sage-runtime-probe.test.mjs"
+  && includesScript("test", "npm run test:sage-runtime-probe"), scripts["test:sage-runtime-probe"]);
 pushCheck("export:reference script is registered", scripts["export:reference"] === "node scripts/export-reference.mjs", scripts["export:reference"]);
 pushCheck("test:reference-export script is registered", scripts["test:reference-export"] === "npm run build:debug-inspector && node scripts/reference-export-smoke.mjs", scripts["test:reference-export"]);
 pushCheck("test:lsp-navigation script is registered", scripts["test:lsp-navigation"] === "npm run build:rust && node scripts/lsp-navigation-smoke.mjs", scripts["test:lsp-navigation"]);
@@ -281,6 +283,8 @@ for (const relativePath of [
   "packages/extension-core/CHANGELOG.md",
   "scripts/configure-workspace.mjs",
   "scripts/lib/lsp-process.mjs",
+  "scripts/lib/sage-runtime-probe.mjs",
+  "scripts/lib/sage-runtime-probe.test.mjs",
   "scripts/lsp-navigation-smoke.mjs",
   "scripts/lsp-shutdown-smoke.mjs",
   "scripts/lsp-latency-smoke.mjs",

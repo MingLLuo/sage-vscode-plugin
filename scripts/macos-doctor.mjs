@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { probeSageRuntimeCandidates } from "./lib/sage-runtime-probe.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
@@ -93,33 +94,17 @@ function pushHashChecks(binaryPath) {
 }
 
 function resolveSageRuntime() {
-  const candidates = [
-    args.sage,
-    process.env.SAGE_PATH,
-    "sage",
-    "/Applications/SageMath/sage",
-    "/Applications/SageMath.app/Contents/MacOS/sage",
-    "/Applications/Sage Math.app/Contents/MacOS/sage",
-  ].filter(Boolean);
-  for (const candidate of candidates) {
-    const result = spawnSync(candidate, ["--version"], {
-      encoding: "utf8",
-      timeout: 8000,
-      maxBuffer: 1024 * 1024,
-    });
-    if (result.status === 0) {
-      return {
-        path: candidate,
-        version: firstLine(result.stdout) || firstLine(result.stderr),
-      };
-    }
-  }
-  return {
-    path: null,
-    reason: args.sage
-      ? `configured Sage runtime did not execute: ${args.sage}`
-      : "Set SAGE_PATH or configure `sage.interpreter.path` in VS Code.",
-  };
+  const candidates = args.sage
+    ? [args.sage]
+    : process.env.SAGE_PATH
+      ? [process.env.SAGE_PATH]
+      : [
+          "sage",
+          "/Applications/SageMath/sage",
+          "/Applications/SageMath.app/Contents/MacOS/sage",
+          "/Applications/Sage Math.app/Contents/MacOS/sage",
+        ];
+  return probeSageRuntimeCandidates(candidates);
 }
 
 function resolveSourceRoot() {
@@ -311,10 +296,6 @@ function readJsonIfExists(filePath) {
 function relativeOrAbsolute(filePath) {
   const relative = path.relative(repositoryRoot, filePath);
   return relative.startsWith("..") ? filePath : relative;
-}
-
-function firstLine(text) {
-  return String(text ?? "").trim().split(/\r?\n/).find(Boolean) ?? "";
 }
 
 function formatActual(actual) {

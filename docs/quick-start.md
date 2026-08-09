@@ -54,6 +54,9 @@ explicitly when you want faster and more predictable indexing.
 
 Before opening VS Code, `npm run doctor:mac` should report `ready` or `usable-with-warnings`. If it reports
 `action-needed`, run the listed command, usually `npm run package:vsix`, then run the doctor again.
+The doctor verifies that the selected Sage command can import `sage.all`; printing a version alone is not considered a
+usable runtime. A source-only checkout can still provide accurate static navigation while runtime-backed help is shown
+as degraded until Sage is built.
 
 For projects outside this repository, the fastest fix is usually:
 

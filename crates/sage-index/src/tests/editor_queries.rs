@@ -1,6 +1,45 @@
 use super::*;
 
 #[test]
+fn pep_695_generic_function_usage_resolves_to_the_exact_local_definition() {
+    let root = test_root("pep695-homset-navigation");
+    let source_path = root.join("homset.py");
+    let source = "def Hom[DomainElementT: Parent, CodomainElementT: Parent](X, Y):\n\
+    return (X, Y)\n\
+\n\
+space = Hom(domain, codomain)\n";
+    fs::write(&source_path, source).unwrap();
+    let mut index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    index.rebuild().unwrap();
+
+    let query = index.query_source_at_navigation(
+        &source_path,
+        source,
+        QueryPosition {
+            line: 3,
+            character: 9,
+        },
+    );
+    assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+    assert!(query.definition_candidates.is_empty());
+    let definition = query
+        .definition
+        .expect("PEP 695 generic function usage should resolve exactly");
+    assert_eq!(definition.name, "Hom");
+    assert_eq!(definition.path, normalize_path(source_path));
+    assert_eq!(definition.range.start_line, 0);
+    assert_eq!(definition.range.start_character, 4);
+
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn query_returns_hover_docs_definition_references_rename_and_signature() {
     let root = test_root("query-api");
     let source_path = root.join("demo.sage");

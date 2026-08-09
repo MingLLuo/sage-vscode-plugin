@@ -217,8 +217,10 @@ Rust index:
   `navigation_targets.rs` proves exact `.pxd`/`.pyx` class and owned-method siblings before selecting a
   declaration/implementation role; it loads only the two sibling files and requires owned-method signatures to match.
   Do not widen it to name-only or cross-stem matches.
-- `crates/sage-index/src/sage_specs.rs`, `source_paths.rs`, `symbol_support.rs`, and `syntax_support.rs`
-  Hold static Sage mappings and shared path, ranking/deduplication, and syntax primitives.
+- `crates/sage-index/src/sage_specs/`, `source_paths.rs`, `symbol_support.rs`, and `syntax_support.rs`
+  Hold static Sage mappings and shared path, ranking/deduplication, and syntax primitives. The Sage catalog is split into
+  export, owner-module, method, and alias tables so updates can be reviewed and debugged independently; `mod.rs` owns
+  cross-table invariants.
 - `crates/sage-index/src/tests.rs` and `crates/sage-index/src/tests/`
   Keep shared fixtures/helpers in the test root and group cache, reconciliation, parsing, diagnostics, import resolution,
   completion, editor-query, and Sage-navigation regressions by domain.

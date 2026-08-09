@@ -18,6 +18,14 @@
   Node/npm range and runtime-pair compatibility checks, and VS Code 1.97 API type compatibility.
 - Made the public CI self-contained by sparsely checking out the latest Sage source for the real navigation UX matrix,
   while keeping a fixture-only debug smoke for ordinary Node test runs.
+- Added Sage 10.10.beta8 PEP 695 declaration support, including precise `Hom[...]` navigation without false whole-file
+  syntax diagnostics, and invalidated older indexes that omitted these declarations.
+- Fixed explicit imports being shadowed by earlier Sage `import *` bindings, preserving the exact imported definition
+  instead of returning unrelated ambiguous candidates.
+- Hardened runtime diagnostics so worker cache directories exist before Sage starts and the macOS doctor requires an
+  importable `sage.all` runtime instead of accepting a version-only source checkout.
+- Split the static Sage export, owner-module, method, and alias catalogs into focused modules with cross-table invariant
+  tests for easier review as Sage evolves.
 
 ## 0.1.0 - 2026-05-24
 

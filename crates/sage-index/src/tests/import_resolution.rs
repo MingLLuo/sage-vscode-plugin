@@ -700,6 +700,57 @@ fn query_resolves_the_visible_import_binding_at_each_position() {
 }
 
 #[test]
+fn query_prefers_explicit_import_binding_over_earlier_sage_star_import() {
+    let root = test_root("explicit-import-after-sage-star");
+    let combinat = root.join("sage/combinat");
+    fs::create_dir_all(combinat.join("chas")).unwrap();
+    let consumer = combinat.join("all.py");
+    let provider = combinat.join("quasi_ribbon_tableau.py");
+    let source = [
+        "from sage.combinat.chas.all import *",
+        "from sage.combinat.quasi_ribbon_tableau import QuasiRibbonTableau",
+    ]
+    .join("\n");
+    fs::write(&consumer, &source).unwrap();
+    fs::write(combinat.join("chas/all.py"), "__all__ = []\n").unwrap();
+    fs::write(
+        &provider,
+        "class QuasiRibbonTableau:\n    \"\"\"A quasi-ribbon tableau.\"\"\"\n",
+    )
+    .unwrap();
+    let index = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: Vec::new(),
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    let (line, character) = position_in_line(&source, "quasi_ribbon_tableau", "QuasiRibbonTableau");
+
+    let query =
+        index.query_source_at_navigation(&consumer, &source, QueryPosition { line, character });
+
+    assert_eq!(
+        query
+            .definition
+            .as_ref()
+            .map(|definition| definition.path.as_path()),
+        Some(normalize_path(provider).as_path()),
+        "the explicit import must not be shadowed by the earlier star import: {query:?}",
+    );
+    assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
+    assert_eq!(query.candidate_count, 1);
+    assert!(query.definition_candidates.is_empty());
+    assert_eq!(
+        query.resolution_reason.as_deref(),
+        Some(
+            "resolved `QuasiRibbonTableau` from explicit import target sage.combinat.quasi_ribbon_tableau"
+        )
+    );
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
 fn query_prefers_documented_python_constructor_over_pxd_declaration() {
     let root = test_root("python-constructor-over-pxd");
     let package = root.join("sage/rings/number_field");

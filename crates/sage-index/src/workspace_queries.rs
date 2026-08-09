@@ -500,14 +500,16 @@ impl WorkspaceIndex {
                 source_name: source_name.to_string(),
             })
         });
-        let sage_all_export_lookup = source_import_lookup
-            .as_ref()
-            .filter(|lookup| module_is_sage_all_export_module(&lookup.import_module))
-            .map(|lookup| SourceImportLookup {
-                import_module: lookup.import_module.clone(),
-                source_name: lookup.source_name.clone(),
-            })
-            .or_else(|| source_imported_sage_all_star_lookup(source, lookup_name));
+        let sage_all_export_lookup = match source_import_lookup.as_ref() {
+            Some(lookup) if module_is_sage_all_export_module(&lookup.import_module) => {
+                Some(SourceImportLookup {
+                    import_module: lookup.import_module.clone(),
+                    source_name: lookup.source_name.clone(),
+                })
+            }
+            Some(_) => None,
+            None => source_imported_sage_all_star_lookup(source, lookup_name),
+        };
         let implicit_sage_all_lookup =
             is_sage_source_path(&query_path) && dotted_symbol.is_none() && target_is_code;
         let member_resolution =

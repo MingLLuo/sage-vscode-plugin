@@ -3,8 +3,9 @@ use sage_index::{DocsStatus, DocumentationRecord, DocumentationSection};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -416,6 +417,7 @@ impl RuntimeDocsWorker {
             .stderr(Stdio::null());
         command.env("PYTHONUNBUFFERED", "1");
         let runtime_home = std::env::temp_dir().join("sage-vscode-runtime-home");
+        prepare_runtime_home(&runtime_home)?;
         command.env("HOME", &runtime_home);
         command.env("DOT_SAGE", runtime_home.join(".sage"));
         command.env("XDG_CACHE_HOME", runtime_home.join(".cache"));
@@ -486,6 +488,18 @@ impl RuntimeDocsWorker {
             .expect("runtime docs counters lock poisoned")
             .queue_depth = queue_depth;
     }
+}
+
+fn prepare_runtime_home(runtime_home: &Path) -> Result<()> {
+    for directory in [runtime_home.join(".sage"), runtime_home.join(".cache")] {
+        fs::create_dir_all(&directory).with_context(|| {
+            format!(
+                "create Sage runtime worker directory {}",
+                directory.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn looks_like_sage_command(path: &str) -> bool {
@@ -583,5 +597,19 @@ mod tests {
         assert_eq!(status.runtime_worker_state, "idle-static-fallback");
         assert_eq!(status.runtime_queue_depth, 0);
         assert_eq!(status.runtime_cache_misses, 0);
+    }
+
+    #[test]
+    fn runtime_home_is_created_before_starting_sage() {
+        let runtime_home =
+            std::env::temp_dir().join(format!("sage-ls-runtime-home-test-{}", std::process::id()));
+        fs::remove_dir_all(&runtime_home).ok();
+
+        prepare_runtime_home(&runtime_home).expect("runtime home should be prepared");
+
+        assert!(runtime_home.is_dir());
+        assert!(runtime_home.join(".sage").is_dir());
+        assert!(runtime_home.join(".cache").is_dir());
+        fs::remove_dir_all(runtime_home).ok();
     }
 }
