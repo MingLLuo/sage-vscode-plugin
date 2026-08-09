@@ -4,11 +4,15 @@ import path from "node:path";
 
 import { runTests } from "@vscode/test-electron";
 
+import { resolveVSCodeExecutablePath } from "./vscodeExecutable";
+
 async function main(): Promise<void> {
   const repositoryRoot = path.resolve(__dirname, "../../../..");
   const extensionDevelopmentPath = path.join(repositoryRoot, "packages/extension-core");
   const extensionTestsPath = path.join(extensionDevelopmentPath, "out", "test-host", "smoke.js");
-  const vscodeExecutablePath = await resolveVSCodeExecutablePath();
+  const vscodeExecutablePath = await resolveVSCodeExecutablePath({
+    override: process.env.SAGE_TEST_VSCODE_EXECUTABLE,
+  });
   const nativeSage = await discoverNativeSagePaths(repositoryRoot);
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "sgvsc-"));
   const smokeWorkspacePath = await cloneSmokeWorkspace(repositoryRoot, tempRoot);
@@ -94,40 +98,6 @@ async function runExtensionHostSuite(options: {
   }
 
   await assertCleanLogs(options.userDataDir);
-}
-
-async function resolveVSCodeExecutablePath(): Promise<string> {
-  const override = process.env.SAGE_TEST_VSCODE_EXECUTABLE;
-  if (override && (await pathExists(override))) {
-    return override;
-  }
-
-  const candidates =
-    process.platform === "darwin"
-      ? [
-          "/Applications/Visual Studio Code.app/Contents/MacOS/Electron",
-          "/Applications/Visual Studio Code - Insiders.app/Contents/MacOS/Electron",
-        ]
-      : process.platform === "win32"
-        ? [
-            "C:\\Program Files\\Microsoft VS Code\\Code.exe",
-            "C:\\Program Files\\Microsoft VS Code Insiders\\Code - Insiders.exe",
-          ]
-        : [
-            "/usr/share/code/code",
-            "/snap/bin/code",
-            "/usr/share/code-insiders/code-insiders",
-          ];
-
-  for (const candidate of candidates) {
-    if (await pathExists(candidate)) {
-      return candidate;
-    }
-  }
-
-  throw new Error(
-    "Could not locate a local VS Code executable. Set SAGE_TEST_VSCODE_EXECUTABLE to override the path.",
-  );
 }
 
 async function cloneSmokeWorkspace(repositoryRoot: string, tempRoot: string): Promise<string> {

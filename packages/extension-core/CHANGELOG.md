@@ -26,6 +26,12 @@
   importable `sage.all` runtime instead of accepting a version-only source checkout.
 - Split the static Sage export, owner-module, method, and alias catalogs into focused modules with cross-table invariant
   tests for easier review as Sage evolves.
+- Split language-client lifecycle and runtime source-root discovery out of the activation entrypoint, with race-focused
+  tests for queued restarts, shutdown during startup, stale discovery results, and discovery retry triggers. Runtime
+  probes are keyed and serialized across folder-scoped settings so editor switches neither lose roots nor repeat the
+  same Sage subprocess probe.
+- Updated the extension-host harness to recognize current macOS VS Code `Code` binaries while retaining compatibility
+  with older `Electron` and Insiders app layouts.
 
 ## 0.1.0 - 2026-05-24
 

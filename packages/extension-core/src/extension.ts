@@ -40,6 +40,8 @@ import {
   startLanguageClientWithTimeout,
   stopLanguageClientWithTimeout,
 } from "./languageClientOperations";
+import { LanguageClientLifecycleController } from "./languageClientLifecycleController";
+import { RuntimeSourceRootDiscoveryController } from "./runtimeSourceRootDiscoveryController";
 import { STATUS_MENU_COMMAND, statusMenuActions } from "./statusMenu";
 import {
   DEFAULT_INDEX_CACHE_KEEP_LATEST_DATABASES,
@@ -93,25 +95,13 @@ import {
 } from "./sourceRootPaths";
 import { LanguageServerStatusRefreshController } from "./statusRefreshController";
 
-let client: LanguageClient | undefined;
-let pendingLanguageClient: LanguageClient | undefined;
-let languageClientOperation: Promise<void> | undefined;
-let languageClientRestartQueued = false;
-let languageClientManagedShutdown = false;
-let languageClientLaunchCount = 0;
-let languageClientManagedCloseCount = 0;
-let languageClientUnexpectedCloseCount = 0;
+let languageClientLifecycleController: LanguageClientLifecycleController<LanguageClient> | undefined;
 let configurationProfileUpdateDepth = 0;
 let suppressedConfigurationRestartCount = 0;
 let lastIndexStatus: IndexStatusSummary | undefined;
 let lastDocsStatus: DocsStatusSummary | undefined;
 let languageServerStatusRefreshController: LanguageServerStatusRefreshController | undefined;
-let slowLanguageServerNoticeTimer: ReturnType<typeof setTimeout> | undefined;
-let slowLanguageServerNoticeShown = false;
-let runtimeDiscoveredSourceRoots: string[] = [];
-let runtimeSourceRootDiscoveryOperation: Promise<void> | undefined;
-let runtimeSourceRootDiscoveryGeneration = 0;
-let runtimeSourceRootDiscoveryOperationId = 0;
+let runtimeSourceRootDiscoveryController: RuntimeSourceRootDiscoveryController | undefined;
 let extensionDeactivating = false;
 const shownIndexMaintenanceNotices = new Set<string>();
 
@@ -169,7 +159,10 @@ function isExternalSageSourceDocument(document: vscode.TextDocument): boolean {
     .map((fingerprint) => fingerprint.root)
     .filter((root): root is string => Boolean(root));
   const roots = resolveEffectiveSourceRootPaths({
-    configuredRoots: [...configuredRoots, ...runtimeDiscoveredSourceRoots],
+    configuredRoots: [
+      ...configuredRoots,
+      ...(runtimeSourceRootDiscoveryController?.discoveredRoots ?? []),
+    ],
     indexedRoots,
     workspaceFolders: [],
   });
@@ -191,33 +184,25 @@ function effectiveSourceRootPaths(
 }
 
 function effectiveInitializationSourceRoots(settings: ReturnType<typeof readSettings>): string[] {
-  return dedupeStrings([...settings.sourceRoots, ...runtimeDiscoveredSourceRoots]);
-}
-
-function dedupeStrings(values: readonly string[]): string[] {
-  return [...new Set(values)];
+  return runtimeSourceRootDiscoveryController?.effectiveRoots(settings.sourceRoots)
+    ?? [...settings.sourceRoots];
 }
 
 function clearLanguageServerStatusRefresh(): void {
   languageServerStatusRefreshController?.clear();
 }
 
-function clearSlowLanguageServerNotice(): void {
-  if (slowLanguageServerNoticeTimer) {
-    clearTimeout(slowLanguageServerNoticeTimer);
-    slowLanguageServerNoticeTimer = undefined;
-  }
-}
-
 function languageClientLifecycleSnapshot(): Record<string, boolean | number> {
   return {
-    launchCount: languageClientLaunchCount,
-    managedCloseCount: languageClientManagedCloseCount,
-    unexpectedCloseCount: languageClientUnexpectedCloseCount,
-    managedShutdownActive: languageClientManagedShutdown,
-    restartQueued: languageClientRestartQueued,
-    operationInFlight: Boolean(languageClientOperation),
-    hasClient: Boolean(client),
+    ...(languageClientLifecycleController?.snapshot() ?? {
+      launchCount: 0,
+      managedCloseCount: 0,
+      unexpectedCloseCount: 0,
+      managedShutdownActive: false,
+      restartQueued: false,
+      operationInFlight: false,
+      hasClient: false,
+    }),
     configurationProfileUpdateDepth,
     suppressedConfigurationRestartCount,
   };
@@ -274,7 +259,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       pythonFilesEnabled: settings.pythonFilesEnabled,
       workspaceRuntimeState: currentWorkspaceRuntimeState(),
       languageServerStarting,
-      languageServerAvailable: Boolean(client),
+      languageServerAvailable: Boolean(languageClientLifecycleController?.activeClient),
     };
   };
 
@@ -419,9 +404,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
     }
     if (showCompletionMessage) {
-      startLanguageClientInBackground(reason, true);
+      languageClientLifecycleController?.startInBackground(reason, true);
     } else {
-      await startLanguageClient();
+      await languageClientLifecycleController?.start();
     }
 
     if (showCompletionMessage) {
@@ -444,30 +429,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return { profileId: profile.id, updates: applied };
   };
 
-  const scheduleSlowLanguageServerNotice = (reason: string): void => {
-    if (slowLanguageServerNoticeShown || slowLanguageServerNoticeTimer) {
-      return;
-    }
-    slowLanguageServerNoticeTimer = setTimeout(() => {
-      slowLanguageServerNoticeTimer = undefined;
-      if (client || !languageClientOperation) {
-        return;
-      }
-      slowLanguageServerNoticeShown = true;
-      logger.info("extension", "showing slow language-server startup notice", { reason });
-      void vscode.window
-        .showInformationMessage(
-          "Sage language features are starting in the background. You can keep editing; hover, completion, navigation, and indexing will appear when ready.",
-          "Show Sage Status",
-        )
-        .then((selection) => {
-          if (selection === "Show Sage Status") {
-            void vscode.commands.executeCommand("sage.showEnvironmentDetails");
-          }
-        });
-    }, SLOW_LANGUAGE_SERVER_NOTICE_MS);
-  };
-
   const updateStatusBar = (): void => {
     const policyInput = activationPolicyInput();
     if (!shouldExposeSageExperience(policyInput)) {
@@ -476,7 +437,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     const settings = activeEditorSettings();
     logger.setLevel(settings.loggingLevel);
-    const presentationInput = buildEnvironmentPresentationInput(Boolean(languageClientOperation && !client));
+    const presentationInput = buildEnvironmentPresentationInput(Boolean(
+      languageClientLifecycleController?.operation
+      && !languageClientLifecycleController.activeClient
+    ));
     statusBarItem.text = formatStatusBarText(presentationInput);
     statusBarItem.tooltip = formatStatusBarTooltip(presentationInput);
     statusBarItem.command = STATUS_MENU_COMMAND;
@@ -515,246 +479,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.debug("index", "cache maintenance completed without pruning", fields);
   };
 
-  const startLanguageClient = async (): Promise<void> => {
-    if (extensionDeactivating) {
-      return;
-    }
-    languageClientRestartQueued = true;
-    if (languageClientOperation) {
-      await languageClientOperation;
-      return;
-    }
-
-    languageClientOperation = (async () => {
-      while (languageClientRestartQueued && !extensionDeactivating) {
-        languageClientRestartQueued = false;
-        clearLanguageServerStatusRefresh();
-
-        if (client) {
-          const previousClient = client;
-          client = undefined;
-          languageClientManagedShutdown = true;
-          languageClientManagedCloseCount += 1;
-          try {
-            await stopLanguageClientWithTimeout(
-              previousClient,
-              LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
-              "Sage language client stop during restart",
-            );
-          } catch (error) {
-            logger.warn("extension", "language client stop did not complete before restart", {
-              error: String(error),
-            });
-          } finally {
-            languageClientManagedShutdown = false;
-          }
-        }
-        if (extensionDeactivating) {
-          break;
-        }
-
-        const workspaceRuntimeState = currentWorkspaceRuntimeState();
-        if (!isWorkspaceRuntimeAvailable(workspaceRuntimeState)) {
-          lastIndexStatus = undefined;
-          lastDocsStatus = undefined;
-          updateStatusBar();
-          logger.info("extension", "language client disabled by workspace runtime state", {
-            trusted: workspaceRuntimeState.trusted,
-            hasVirtualWorkspace: workspaceRuntimeState.hasVirtualWorkspace,
-          });
-          continue;
-        }
-
-        try {
-          await runIndexCacheMaintenance("language-client-start");
-          if (extensionDeactivating) {
-            break;
-          }
-          let nextClient: LanguageClient;
-          nextClient = createLanguageClient(context, languageOutputChannel, {
-            fileSystemWatcher: languageServerFileWatcher,
-            shouldAutoRestartOnClose: () => (
-              client === nextClient
-              && !languageClientManagedShutdown
-              && !extensionDeactivating
-            ),
-            runtimeDiscoveredSourceRoots,
-            onClose: ({ managedShutdown }) => {
-              if (!managedShutdown) {
-                languageClientUnexpectedCloseCount += 1;
-              }
-            },
-          });
-          languageClientLaunchCount += 1;
-          pendingLanguageClient = nextClient;
-          await startLanguageClientWithTimeout(nextClient, {
-            startTimeoutMs: LANGUAGE_SERVER_START_TIMEOUT_MS,
-            cleanupTimeoutMs: LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
-            label: "Sage language client start",
-            onCleanupError: (cleanupError) => {
-              logger.warn("extension", "failed to clean up a language client after startup failure", {
-                error: String(cleanupError),
-              });
-            },
-          });
-          if (extensionDeactivating) {
-            if (pendingLanguageClient !== nextClient) {
-              // deactivate() already took ownership of a startup that exceeded
-              // its bounded wait and stopped the best available client handle.
-              continue;
-            }
-            languageClientManagedShutdown = true;
-            languageClientManagedCloseCount += 1;
-            try {
-              await nextClient.stop();
-            } finally {
-              languageClientManagedShutdown = false;
-              if (pendingLanguageClient === nextClient) {
-                pendingLanguageClient = undefined;
-              }
-            }
-            continue;
-          }
-          client = nextClient;
-          pendingLanguageClient = undefined;
-          await refreshLanguageServerStatus();
-          scheduleLanguageServerStatusRefresh();
-          logger.info("extension", "language client started", { launchCount: languageClientLaunchCount });
-        } catch (error) {
-          client = undefined;
-          pendingLanguageClient = undefined;
-          if (extensionDeactivating) {
-            continue;
-          }
-          const message = `Sage language server failed to start: ${String(error)}`;
-          logger.error("extension", "language server failed to start", { error: String(error) });
-          void vscode.window.showErrorMessage(
-            `${message}. Check 'sage.languageServer.rustPath' and the Sage output channels.`,
-          );
-        }
-      }
-    })().finally(() => {
-      languageClientOperation = undefined;
-      clearSlowLanguageServerNotice();
-      updateStatusBar();
-    });
-
-    updateStatusBar();
-    await languageClientOperation;
-  };
-
-  const startLanguageClientInBackground = (reason: string, force = false): void => {
-    if (extensionDeactivating) {
-      return;
-    }
-    if (!force && !shouldAutoStartLanguageClient(activationPolicyInput())) {
-      logger.info("extension", "language client auto-start skipped outside Sage context", { reason });
-      updateStatusBar();
-      return;
-    }
-    logger.info("extension", "starting language client in background", { reason });
-    scheduleSlowLanguageServerNotice(reason);
-    void startLanguageClient().catch((error) => {
-      logger.error("extension", "background language client start failed", {
-        reason,
-        error: String(error),
-      });
-    });
-  };
-
   const scheduleRuntimeSourceRootDiscovery = (reason: string): void => {
-    if (
-      extensionDeactivating
-      || runtimeSourceRootDiscoveryOperation
-      || !isWorkspaceRuntimeAvailable(currentWorkspaceRuntimeState())
-    ) {
-      return;
-    }
-    if (!shouldAutoStartLanguageClient(activationPolicyInput())) {
-      logger.debug("workspace", "runtime source-root discovery skipped outside Sage context", { reason });
-      return;
-    }
-    const settings = readSettings(activeWorkspaceFolder());
-    if (!settings.runtimeIntrospectionEnabled || !settings.interpreterPath) {
-      return;
-    }
-
-    const workspaceFolders = workspaceFolderPaths();
-    const discoveryGeneration = runtimeSourceRootDiscoveryGeneration;
-    const startupRoots = discoverSourceRoots(
-      workspaceFolders,
-      effectiveInitializationSourceRoots(settings),
-      {
-        interpreterPath: settings.interpreterPath,
-        interpreterArgs: settings.interpreterArgs,
-        runtimeProbe: false,
-      },
-    ).map((root) => path.resolve(root));
-
-    const operationId = ++runtimeSourceRootDiscoveryOperationId;
-    const operation = (async () => {
-      const started = Date.now();
-      try {
-        const discoveredRoots = await discoverSourceRootsAsync(
-          workspaceFolders,
-          effectiveInitializationSourceRoots(settings),
-          {
-            interpreterPath: settings.interpreterPath,
-            interpreterArgs: settings.interpreterArgs,
-          },
-        );
-        if (extensionDeactivating || discoveryGeneration !== runtimeSourceRootDiscoveryGeneration) {
-          return;
-        }
-        const knownRoots = new Set(
-          [...startupRoots, ...runtimeDiscoveredSourceRoots].map((root) => path.resolve(root)),
-        );
-        const additions = discoveredRoots
-          .map((root) => path.resolve(root))
-          .filter((root) => !knownRoots.has(root));
-        if (additions.length === 0) {
-          logger.debug("workspace", "runtime source-root discovery found no new roots", {
-            reason,
-            elapsedMs: Date.now() - started,
-          });
-          return;
-        }
-
-        runtimeDiscoveredSourceRoots = dedupeStrings([...runtimeDiscoveredSourceRoots, ...additions]);
-        logger.info("workspace", "runtime source-root discovery added roots", {
-          reason,
-          elapsedMs: Date.now() - started,
-          count: additions.length,
-          roots: additions.join(","),
-        });
-        updateStatusBar();
-        startLanguageClientInBackground("runtime-source-root-discovery", true);
-      } catch (error) {
-        logger.warn("workspace", "runtime source-root discovery failed", {
-          reason,
-          error: String(error),
-        });
-      } finally {
-        if (runtimeSourceRootDiscoveryOperationId === operationId) {
-          runtimeSourceRootDiscoveryOperation = undefined;
-          if (!extensionDeactivating && discoveryGeneration !== runtimeSourceRootDiscoveryGeneration) {
-            scheduleRuntimeSourceRootDiscovery("superseded-runtime-discovery");
-          }
-        }
-      }
-    })();
-    runtimeSourceRootDiscoveryOperation = operation;
+    void runtimeSourceRootDiscoveryController?.schedule(reason);
   };
 
   const ensureLanguageClientReady = async (action: string): Promise<LanguageClient | undefined> => {
     if (!(await ensureWorkspaceRuntimeAvailable(action))) {
       return undefined;
     }
-    if (!client) {
-      if (!languageClientOperation) {
-        startLanguageClientInBackground(action, true);
+    if (!languageClientLifecycleController?.activeClient) {
+      if (!languageClientLifecycleController?.operation) {
+        languageClientLifecycleController?.startInBackground(action, true);
       }
-      if (languageClientOperation) {
+      const operation = languageClientLifecycleController?.operation;
+      if (operation) {
         const waitResult = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
@@ -762,7 +500,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             cancellable: true,
           },
           async (_progress, token) => waitForOperationOrCancellation(
-            languageClientOperation!,
+            operation,
             token,
           ),
         );
@@ -772,11 +510,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       }
     }
-    if (!client) {
+    const activeClient = languageClientLifecycleController?.activeClient;
+    if (!activeClient) {
       void vscode.window.showWarningMessage("Sage language server is not available yet.");
       return undefined;
     }
-    return client;
+    return activeClient;
   };
 
   context.subscriptions.push(
@@ -789,7 +528,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   const refreshLanguageServerStatus = async (): Promise<void> => {
-    const activeClient = client;
+    const activeClient = languageClientLifecycleController?.activeClient;
     if (!activeClient) {
       lastIndexStatus = undefined;
       lastDocsStatus = undefined;
@@ -817,7 +556,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         "Sage language server status refresh",
         () => cancellation.cancel(),
       );
-      if (client !== activeClient || extensionDeactivating) {
+      if (!languageClientLifecycleController?.isCurrent(activeClient) || extensionDeactivating) {
         return;
       }
       lastIndexStatus = indexStatus ?? undefined;
@@ -827,7 +566,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       logger.warn("extension", "failed to refresh language server status", { error: String(error) });
     } finally {
       cancellation.dispose();
-      if (!extensionDeactivating && client === activeClient) {
+      if (!extensionDeactivating && languageClientLifecycleController?.isCurrent(activeClient)) {
         updateStatusBar();
       }
     }
@@ -878,6 +617,138 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     languageServerStatusRefreshController?.schedule();
   };
 
+  languageClientLifecycleController = new LanguageClientLifecycleController<LanguageClient>({
+    createClient: (hooks) => createLanguageClient(context, languageOutputChannel, {
+      fileSystemWatcher: languageServerFileWatcher,
+      shouldAutoRestartOnClose: hooks.shouldAutoRestartOnClose,
+      runtimeDiscoveredSourceRoots: [
+        ...(runtimeSourceRootDiscoveryController?.discoveredRoots ?? []),
+      ],
+      onClose: hooks.onClose,
+    }),
+    startClient: (nextClient) => startLanguageClientWithTimeout(nextClient, {
+      startTimeoutMs: LANGUAGE_SERVER_START_TIMEOUT_MS,
+      cleanupTimeoutMs: LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
+      label: "Sage language client start",
+      onCleanupError: (cleanupError) => {
+        logger.warn("extension", "failed to clean up a language client after startup failure", {
+          error: String(cleanupError),
+        });
+      },
+    }),
+    stopClient: (activeClient, label) => stopLanguageClientWithTimeout(
+      activeClient,
+      LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
+      label,
+    ),
+    beforeRestart: clearLanguageServerStatusRefresh,
+    beforeStart: () => runIndexCacheMaintenance("language-client-start"),
+    canRun: () => isWorkspaceRuntimeAvailable(currentWorkspaceRuntimeState()),
+    shouldAutoStart: () => shouldAutoStartLanguageClient(activationPolicyInput()),
+    onRuntimeUnavailable: () => {
+      const workspaceRuntimeState = currentWorkspaceRuntimeState();
+      lastIndexStatus = undefined;
+      lastDocsStatus = undefined;
+      updateStatusBar();
+      logger.info("extension", "language client disabled by workspace runtime state", {
+        trusted: workspaceRuntimeState.trusted,
+        hasVirtualWorkspace: workspaceRuntimeState.hasVirtualWorkspace,
+      });
+    },
+    afterStarted: async () => {
+      await refreshLanguageServerStatus();
+      scheduleLanguageServerStatusRefresh();
+    },
+    onStateChanged: updateStatusBar,
+    onSlowStartNotice: (reason) => {
+      logger.info("extension", "showing slow language-server startup notice", { reason });
+      void vscode.window
+        .showInformationMessage(
+          "Sage language features are starting in the background. You can keep editing; hover, completion, navigation, and indexing will appear when ready.",
+          "Show Sage Status",
+        )
+        .then((selection) => {
+          if (selection === "Show Sage Status") {
+            void vscode.commands.executeCommand("sage.showEnvironmentDetails");
+          }
+        });
+    },
+    onStartError: (error) => {
+      const message = `Sage language server failed to start: ${String(error)}`;
+      logger.error("extension", "language server failed to start", { error: String(error) });
+      void vscode.window.showErrorMessage(
+        `${message}. Check 'sage.languageServer.rustPath' and the Sage output channels.`,
+      );
+    },
+    logger,
+    shutdownTimeoutMs: LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
+    slowStartNoticeMs: SLOW_LANGUAGE_SERVER_NOTICE_MS,
+  });
+
+  runtimeSourceRootDiscoveryController = new RuntimeSourceRootDiscoveryController({
+    prepare: (reason) => {
+      if (!isWorkspaceRuntimeAvailable(currentWorkspaceRuntimeState())) {
+        return undefined;
+      }
+      if (!shouldAutoStartLanguageClient(activationPolicyInput())) {
+        logger.debug("workspace", "runtime source-root discovery skipped outside Sage context", { reason });
+        return undefined;
+      }
+      const settings = readSettings(activeWorkspaceFolder());
+      if (!settings.runtimeIntrospectionEnabled || !settings.interpreterPath) {
+        return undefined;
+      }
+      return {
+        scopeKey: activeWorkspaceFolder()?.uri.toString() ?? "workspace",
+        workspaceFolders: workspaceFolderPaths(),
+        configuredSourceRoots: settings.sourceRoots,
+        interpreterPath: settings.interpreterPath,
+        interpreterArgs: settings.interpreterArgs,
+      };
+    },
+    discoverStartupRoots: (snapshot, effectiveRoots) => discoverSourceRoots(
+      [...snapshot.workspaceFolders],
+      [...effectiveRoots],
+      {
+        interpreterPath: snapshot.interpreterPath,
+        interpreterArgs: [...snapshot.interpreterArgs],
+        runtimeProbe: false,
+      },
+    ),
+    discoverRuntimeRoots: (snapshot, effectiveRoots) => discoverSourceRootsAsync(
+      [...snapshot.workspaceFolders],
+      [...effectiveRoots],
+      {
+        interpreterPath: snapshot.interpreterPath,
+        interpreterArgs: [...snapshot.interpreterArgs],
+      },
+    ),
+    onEvent: (event) => {
+      if (event.type === "no-new-roots") {
+        logger.debug("workspace", "runtime source-root discovery found no new roots", {
+          reason: event.reason,
+          elapsedMs: event.elapsedMs,
+        });
+        return;
+      }
+      if (event.type === "failed") {
+        logger.warn("workspace", "runtime source-root discovery failed", {
+          reason: event.reason,
+          error: String(event.error),
+        });
+        return;
+      }
+      logger.info("workspace", "runtime source-root discovery added roots", {
+        reason: event.reason,
+        elapsedMs: event.elapsedMs,
+        count: event.additions.length,
+        roots: event.additions.join(","),
+      });
+      updateStatusBar();
+      languageClientLifecycleController?.startInBackground("runtime-source-root-discovery", true);
+    },
+  });
+
   context.subscriptions.push(
     languageServerFileWatcher.onDidCreate(scheduleLanguageServerStatusRefresh),
     languageServerFileWatcher.onDidChange(scheduleLanguageServerStatusRefresh),
@@ -896,14 +767,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await setWorkspaceContexts();
       cellCodeLensProvider.refresh();
       updateStatusBar();
-      if (!client && !languageClientOperation && shouldAutoStartLanguageClient(activationPolicyInput())) {
-        startLanguageClientInBackground("active-editor-change");
+      scheduleRuntimeSourceRootDiscovery("active-editor-change");
+      if (
+        !languageClientLifecycleController?.activeClient
+        && !languageClientLifecycleController?.operation
+        && shouldAutoStartLanguageClient(activationPolicyInput())
+      ) {
+        languageClientLifecycleController?.startInBackground("active-editor-change");
       }
     }),
     vscode.workspace.onDidGrantWorkspaceTrust(async () => {
       await setWorkspaceContexts();
       cellCodeLensProvider.refresh();
-      startLanguageClientInBackground("workspace-trust-granted");
+      scheduleRuntimeSourceRootDiscovery("workspace-trust-granted");
+      languageClientLifecycleController?.startInBackground("workspace-trust-granted");
     }),
     vscode.commands.registerCommand("sage.openGettingStarted", async () => {
       await vscode.commands.executeCommand(
@@ -984,7 +861,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       logger.info("extension", "restarting language server");
-      await startLanguageClient();
+      await languageClientLifecycleController?.start();
     }),
     vscode.commands.registerCommand("sage.configureWorkspace", async () => {
       if (!(await ensureWorkspaceRuntimeAvailable("Configuring the Sage workspace"))) {
@@ -1050,8 +927,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       buildEnvironmentPresentationInput,
       languageClientLifecycleSnapshot,
       languageClientState: () => ({
-        available: Boolean(client),
-        starting: Boolean(languageClientOperation),
+        available: Boolean(languageClientLifecycleController?.activeClient),
+        starting: Boolean(languageClientLifecycleController?.operation),
       }),
       getIndexStatus: () => lastIndexStatus,
       setIndexStatus: (status) => { lastIndexStatus = status; },
@@ -1066,14 +943,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (event.affectsConfiguration("sage.interpreter.path") || event.affectsConfiguration("sage.interpreter.args")) {
         terminalManager.resetReplTerminal();
       }
-      if (
+      const runtimeSourceRootInputsChanged = (
         event.affectsConfiguration("sage.interpreter.path")
         || event.affectsConfiguration("sage.interpreter.args")
         || event.affectsConfiguration("sage.analysis.sourceRoots")
-      ) {
-        runtimeDiscoveredSourceRoots = [];
-        runtimeSourceRootDiscoveryGeneration += 1;
-        scheduleRuntimeSourceRootDiscovery("configuration-change");
+        || event.affectsConfiguration("sage.analysis.enableRuntimeIntrospection")
+      );
+      if (runtimeSourceRootInputsChanged) {
+        void runtimeSourceRootDiscoveryController?.invalidateAndSchedule("configuration-change");
+      } else if (event.affectsConfiguration("sage.analysis.enablePythonFiles")) {
+        scheduleRuntimeSourceRootDiscovery("python-file-analysis-change");
       }
       if (
         event.affectsConfiguration("sage.analysis.enablePythonFiles")
@@ -1090,17 +969,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           });
           return;
         }
-        startLanguageClientInBackground("configuration-change");
+        languageClientLifecycleController?.startInBackground("configuration-change");
       }
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(async () => {
       await setWorkspaceContexts();
       cellCodeLensProvider.refresh();
-      runtimeDiscoveredSourceRoots = [];
-      runtimeSourceRootDiscoveryGeneration += 1;
+      void runtimeSourceRootDiscoveryController?.invalidateAndSchedule("workspace-folders-changed");
       updateStatusBar();
-      scheduleRuntimeSourceRootDiscovery("workspace-folders-changed");
-      startLanguageClientInBackground("workspace-folders-changed");
+      languageClientLifecycleController?.startInBackground("workspace-folders-changed");
     }),
   );
 
@@ -1122,13 +999,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         };
       }),
       vscode.commands.registerCommand("sage.__test.awaitLanguageClientStable", async () => {
-        if (languageClientOperation) {
-          await languageClientOperation;
+        if (languageClientLifecycleController?.operation) {
+          await languageClientLifecycleController.operation;
         }
         return languageClientLifecycleSnapshot();
       }),
       vscode.commands.registerCommand("sage.__test.restartLanguageServerAndWait", async () => {
-        await startLanguageClient();
+        await languageClientLifecycleController?.start();
         return languageClientLifecycleSnapshot();
       }),
       vscode.commands.registerCommand(
@@ -1147,48 +1024,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void setWorkspaceContexts();
   updateStatusBar();
   scheduleRuntimeSourceRootDiscovery("activation");
-  startLanguageClientInBackground("activation");
+  languageClientLifecycleController.startInBackground("activation");
 }
 
 export async function deactivate(): Promise<void> {
   extensionDeactivating = true;
-  languageClientRestartQueued = false;
-  runtimeSourceRootDiscoveryGeneration += 1;
   clearLanguageServerStatusRefresh();
-  clearSlowLanguageServerNotice();
-  const sourceRootDiscovery = runtimeSourceRootDiscoveryOperation;
+  const sourceRootDiscovery = runtimeSourceRootDiscoveryController?.beginDeactivation();
   try {
-    if (languageClientOperation) {
-      try {
-        await withOperationTimeout(
-          languageClientOperation,
-          LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
-          "Sage language client operation during shutdown",
-        );
-      } catch {
-        // Continue with the best available client handle. A status request or
-        // startup handshake must never keep the extension host alive forever.
-      }
-    }
-    const activeClient = client ?? pendingLanguageClient;
-    if (activeClient) {
-      client = undefined;
-      pendingLanguageClient = undefined;
-      languageClientManagedShutdown = true;
-      languageClientManagedCloseCount += 1;
-      try {
-        await withOperationTimeout(
-          activeClient.stop(),
-          LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
-          "Sage language client stop",
-        );
-      } catch {
-        // VS Code is already deactivating; bounded shutdown is preferable to
-        // waiting indefinitely for a failed child-process transport.
-      } finally {
-        languageClientManagedShutdown = false;
-      }
-    }
+    await languageClientLifecycleController?.deactivate();
   } finally {
     await sourceRootDiscovery;
   }

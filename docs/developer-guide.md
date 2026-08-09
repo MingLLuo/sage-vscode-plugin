@@ -79,6 +79,13 @@ current static-analysis baseline should be extended safely.
 - `src/languageClient.ts`
   Starts the Rust `sage-ls` process, watches Sage/Cython document types, and sends command-backed documentation/status
   requests while suppressing client-library auto-restarts during extension-managed shutdown and restart cycles.
+- `src/languageClientLifecycleController.ts`
+  Owns the active and pending client handles, queued restart loop, bounded shutdown, lifecycle counters, and slow-start
+  notice state. Keep it free of VS Code imports so startup and shutdown races remain covered by fast unit tests.
+- `src/runtimeSourceRootDiscoveryController.ts`
+  Serializes asynchronous runtime source-root probes, caches completed folder/configuration keys, drains distinct
+  multi-root inputs without parallel subprocesses, rejects results superseded by explicit invalidation, and keeps
+  runtime-derived roots in memory without writing user settings.
 - `src/sageCommandClient.ts` and `boundedOperation.ts`
   Keep execute-command requests on the typed LSP protocol overload and bound status/start/stop waits. Do not switch
   command requests back to the string-plus-token overload: it serializes the parameters as a positional array.
@@ -374,7 +381,8 @@ degraded reason and hover/docs continue to use static fallback text.
 
 `npm run test:extension-host` launches the locally installed VS Code desktop in an unattended background test session.
 The harness copies the smoke workspace into a temp directory, captures extension-host and language-server logs, and
-fails the run on known runtime regressions.
+fails the run on known runtime regressions. On macOS it recognizes both the current `Contents/MacOS/Code` application
+binary and older `Contents/MacOS/Electron` layouts; set `SAGE_TEST_VSCODE_EXECUTABLE` for custom installations.
 
 `npm run debug:web` builds the Rust debug inspector and starts the local Browser Use workbench. Open the printed
 `http://127.0.0.1:<port>/` URL to inspect `08_highlighting_structures.sage`, native Cython fixtures, TextMate scopes,

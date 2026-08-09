@@ -588,19 +588,52 @@ test("extension scopes direct navigation bridges to read-only external Sage sour
 
 test("extension activation stays a compact orchestrator with focused feature modules", () => {
   const extensionSource = fs.readFileSync(path.join(packageRoot, "src", "extension.ts"), "utf8");
+  const lifecycleSource = fs.readFileSync(
+    path.join(packageRoot, "src", "languageClientLifecycleController.ts"),
+    "utf8",
+  );
+  const runtimeDiscoverySource = fs.readFileSync(
+    path.join(packageRoot, "src", "runtimeSourceRootDiscoveryController.ts"),
+    "utf8",
+  );
   assert.ok(
-    extensionSource.split(/\r?\n/).length <= 1300,
+    extensionSource.split(/\r?\n/).length <= 1100,
     "extension.ts should delegate feature implementations instead of growing another monolith",
+  );
+  assert.ok(
+    lifecycleSource.split(/\r?\n/).length <= 350,
+    "the language-client lifecycle controller should stay focused",
+  );
+  assert.ok(
+    runtimeDiscoverySource.split(/\r?\n/).length <= 250,
+    "runtime source-root discovery should stay focused",
+  );
+  assert.match(
+    lifecycleSource,
+    /this\.client === nextClient[\s\S]*!this\.managedShutdown[\s\S]*!this\.deactivating/,
+    "only the installed language client may auto-restart outside managed shutdown",
   );
   assert.match(
     extensionSource,
-    /client === nextClient[\s\S]*!languageClientManagedShutdown[\s\S]*!extensionDeactivating/,
-    "only the installed language client may auto-restart outside managed shutdown",
+    /scheduleRuntimeSourceRootDiscovery\("active-editor-change"\)/,
+    "opening a Sage editor should retry deferred runtime source-root discovery",
+  );
+  assert.match(
+    extensionSource,
+    /scheduleRuntimeSourceRootDiscovery\("workspace-trust-granted"\)/,
+    "granting workspace trust should retry deferred runtime source-root discovery",
+  );
+  assert.match(
+    extensionSource,
+    /sage\.analysis\.enableRuntimeIntrospection[\s\S]*invalidateAndSchedule\("configuration-change"\)/,
+    "runtime-introspection changes should invalidate and rediscover source roots",
   );
   for (const moduleName of [
     "executionCommands.ts",
     "externalSourceNavigation.ts",
+    "languageClientLifecycleController.ts",
     "navigationCommands.ts",
+    "runtimeSourceRootDiscoveryController.ts",
     "sourceRootPaths.ts",
     "statusCommands.ts",
     "statusRefreshController.ts",
