@@ -6,13 +6,15 @@
 //! locations.
 
 use super::call_hierarchy::is_identifier_start;
+use super::documentation::is_runtime_placeholder_documentation;
 use super::editor_features::code_before_comment;
 use super::open_documents::{live_document_for_path, uri_to_path, OpenDocument};
 use super::source_symbols::module_name_for_path;
 use super::text_positions::{lsp_range_for_text, query_position_from_lsp, word_at_position};
 use super::Backend;
 use sage_index::{
-    is_code_reference_at_range, parse_source, NavigationTargetRole, QueryDefinition, QueryResult,
+    is_code_reference_at_range, parse_source, NavigationTargetRole, QueryDefinition, QueryFeatures,
+    QueryResult,
 };
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
@@ -262,6 +264,17 @@ impl Backend {
                 request_kind,
             )
             .await;
+        if request_kind == NavigationRequestKind::Definition
+            && query.definition.is_none()
+            && query.definition_candidates.is_empty()
+        {
+            if let Some(location) = self
+                .runtime_builtin_definition(&path, &document.text, params.position)
+                .await
+            {
+                return Ok(Some(GotoDefinitionResponse::Scalar(location)));
+            }
+        }
         if query.resolution_confidence.as_deref() == Some("high") {
             let Some(definition) = query.definition.as_ref() else {
                 return Ok(None);
@@ -305,6 +318,46 @@ impl Backend {
             });
         }
         validated_disk_definition_location(definition)
+    }
+
+    async fn runtime_builtin_definition(
+        &self,
+        path: &Path,
+        text: &str,
+        position: Position,
+    ) -> Option<Location> {
+        let position = query_position_from_lsp(text, position)?;
+        // Navigation queries omit presentation records. Resolve with lexical
+        // context before allowing a runtime fallback; a same-named local or an
+        // ambiguous member must never jump to a Sage global.
+        let query = self.index.read().await.query_source_at_with_features(
+            path,
+            text,
+            position,
+            None,
+            QueryFeatures::hover(),
+        );
+        let record = query.documentation.as_ref()?;
+        if !is_runtime_placeholder_documentation(record)
+            && !record.markers.iter().any(|marker| marker == "runtime")
+        {
+            return None;
+        }
+        let target = query.target.as_ref()?;
+        if !is_code_reference_at_range(text, &target.symbol, &target.range) {
+            return None;
+        }
+        let source = self.runtime_docs.source_location(&record.name).await?;
+        let (uri, text) =
+            if let Some((uri, document)) = self.open_document_for_path(&source.path).await {
+                (uri, document.text)
+            } else {
+                (
+                    Url::from_file_path(&source.path).ok()?,
+                    std::fs::read_to_string(&source.path).ok()?,
+                )
+            };
+        runtime_source_location(uri, &text, &source)
     }
 
     pub(super) async fn open_document_for_path(&self, path: &Path) -> Option<(Url, OpenDocument)> {
@@ -391,6 +444,25 @@ impl Backend {
         }
         links
     }
+}
+
+pub(super) fn runtime_source_location(
+    uri: Url,
+    text: &str,
+    source: &super::runtime_docs::RuntimeSourceLocation,
+) -> Option<Location> {
+    let line = text.lines().nth(source.line as usize)?;
+    if line.trim() != source.source_text.trim() {
+        return None;
+    }
+    let indent = &line[..line.len() - line.trim_start().len()];
+    Some(Location {
+        uri,
+        range: Range::new(
+            Position::new(source.line, indent.encode_utf16().count() as u32),
+            Position::new(source.line, line.encode_utf16().count() as u32),
+        ),
+    })
 }
 
 pub(super) fn validated_disk_definition_location(definition: &QueryDefinition) -> Option<Location> {

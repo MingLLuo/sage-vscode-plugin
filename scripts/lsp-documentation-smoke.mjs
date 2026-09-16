@@ -12,6 +12,17 @@ const server = new LspProcess(process.env.SAGE_LS_BINARY
   ?? path.join(repositoryRoot, "target/debug/sage-ls"));
 const uri = pathToFileURL(path.join(root, "docs.sage")).href;
 const position = { line: 0, character: 1 };
+async function checkDefinition() {
+  const definition = await server.requestWithTimeout("textDocument/definition", {
+    textDocument: { uri }, position,
+  }, 15000);
+  assert.ok(definition?.uri, "sin should have a definition even without a Sage source index");
+  assert.match(definition.uri, /sage\/functions\/trig\.py$/);
+  const source = await fs.readFile(fileURLToPath(definition.uri), "utf8");
+  const line = source.split(/\r?\n/)[definition.range.start.line];
+  assert.match(line, /class Function_sin\b/);
+  return { uri: definition.uri, line: definition.range.start.line + 1 };
+}
 const status = () => server.requestWithTimeout("workspace/executeCommand", {
   command: "sage.__rust.docsStatus", arguments: [],
 }, 2000);
@@ -34,6 +45,7 @@ try {
   server.notify("textDocument/didOpen", {
     textDocument: { uri, languageId: "sage", version: 1, text: "sin(x)\n" },
   });
+  if (process.argv.includes("--definition-first")) await checkDefinition();
   const started = performance.now();
   const cold = await server.requestWithTimeout("textDocument/hover", {
     textDocument: { uri }, position,
@@ -60,11 +72,12 @@ try {
   assert.match(docs.docstring, /The sine function/);
   assert.match(docs.docstring, /EXAMPLES/);
   assert.ok(!docs.docstring.includes("Runtime documentation worker can provide"));
+  const definition = await checkDefinition();
   const runtime = await status();
   assert.equal(runtime.runtime_timeout_count, 0);
   assert.equal(runtime.runtime_degraded_reason, null);
   console.log(JSON.stringify({ status: "passed", coldHoverMs, summary: docs.summary,
-    docstringLength: docs.docstring.length, runtime }, null, 2));
+    docstringLength: docs.docstring.length, definition, runtime }, null, 2));
   await server.requestWithTimeout("shutdown", undefined, 2000);
   server.notify("exit");
 } catch (error) {

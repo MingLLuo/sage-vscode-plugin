@@ -20,7 +20,7 @@ import traceback
 
 try:
     from sage.all import *  # noqa: F401,F403
-    from sage.misc.sageinspect import sage_getdef, sage_getdoc, sage_getfile
+    from sage.misc.sageinspect import sage_getdef, sage_getdoc, sage_getfile, sage_getsourcelines
     print(json.dumps({"ready": True}), flush=True)
 except Exception as exc:
     print(json.dumps({"ready": False, "error": traceback.format_exc()}), flush=True)
@@ -67,6 +67,13 @@ for line in sys.stdin:
             path = sage_getfile(obj) or ""
         except Exception:
             path = ""
+        source_line = None
+        source_text = None
+        try:
+            source_lines, source_line = sage_getsourcelines(obj)
+            source_text = source_lines[0].rstrip() if source_lines else None
+        except Exception:
+            pass
         module = getattr(obj, "__module__", "") or "sage.runtime"
         kind = type(obj).__name__
         print(json.dumps({
@@ -78,6 +85,8 @@ for line in sys.stdin:
             "summary": one_line(doc) or detail or name,
             "docstring": doc,
             "uri": path,
+            "source_line": source_line,
+            "source_text": source_text,
         }), flush=True)
     except Exception as exc:
         print(json.dumps({
@@ -126,8 +135,16 @@ pub struct RuntimeDocsWorker {
     config: Arc<Mutex<RuntimeDocsConfig>>,
     counters: Arc<Mutex<RuntimeDocsCounters>>,
     cache: Arc<Mutex<HashMap<String, DocumentationRecord>>>,
+    sources: Arc<Mutex<HashMap<String, RuntimeSourceLocation>>>,
     inflight: Arc<Mutex<HashSet<String>>>,
     process: Arc<Mutex<Option<RuntimeDocsProcess>>>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct RuntimeSourceLocation {
+    pub path: PathBuf,
+    pub line: u32,
+    pub source_text: String,
 }
 
 struct RuntimeDocsProcess {
@@ -153,6 +170,8 @@ struct WorkerResponse {
     summary: Option<String>,
     docstring: Option<String>,
     uri: Option<String>,
+    source_line: Option<u32>,
+    source_text: Option<String>,
 }
 
 impl RuntimeDocsWorker {
@@ -164,6 +183,10 @@ impl RuntimeDocsWorker {
         self.cache
             .lock()
             .expect("runtime docs cache lock poisoned")
+            .clear();
+        self.sources
+            .lock()
+            .expect("runtime source cache lock poisoned")
             .clear();
         self.inflight
             .lock()
@@ -267,6 +290,15 @@ impl RuntimeDocsWorker {
                 .cache_hits += 1;
         }
         record
+    }
+
+    pub async fn source_location(&self, symbol: &str) -> Option<RuntimeSourceLocation> {
+        self.lookup(symbol).await?;
+        self.sources
+            .lock()
+            .expect("runtime source cache lock poisoned")
+            .get(symbol)
+            .cloned()
     }
 
     pub fn hover_status_message(&self) -> String {
@@ -377,6 +409,23 @@ impl RuntimeDocsWorker {
             return Err(anyhow!(response
                 .error
                 .unwrap_or_else(|| "runtime lookup failed".to_string())));
+        }
+        if let (Some(path), Some(line), Some(source_text)) =
+            (&response.uri, response.source_line, &response.source_text)
+        {
+            if Path::new(path).is_absolute() && line > 0 && !source_text.trim().is_empty() {
+                self.sources
+                    .lock()
+                    .expect("runtime source cache lock poisoned")
+                    .insert(
+                        symbol.to_string(),
+                        RuntimeSourceLocation {
+                            path: PathBuf::from(path),
+                            line: line - 1,
+                            source_text: source_text.clone(),
+                        },
+                    );
+            }
         }
         let record = DocumentationRecord {
             name: response.name.unwrap_or_else(|| symbol.to_string()),

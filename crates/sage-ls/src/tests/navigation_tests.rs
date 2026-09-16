@@ -1,6 +1,74 @@
 use super::*;
 
 #[test]
+fn runtime_definition_validates_source_line_and_utf16_range() {
+    let uri = Url::parse("file:///workspace/trig.py").unwrap();
+    let source = crate::runtime_docs::RuntimeSourceLocation {
+        path: PathBuf::from("/workspace/trig.py"),
+        line: 1,
+        source_text: "class Function_sin: # π 😀".to_string(),
+    };
+    let text = "# source\n    class Function_sin: # π 😀\n";
+    let location = crate::navigation::runtime_source_location(uri.clone(), text, &source).unwrap();
+    assert_eq!(location.range.start, Position::new(1, 4));
+    assert_eq!(
+        location.range.end.character,
+        text.lines().nth(1).unwrap().encode_utf16().count() as u32
+    );
+    assert!(crate::navigation::runtime_source_location(
+        uri.clone(),
+        "# moved\n# source\nclass Function_sin: # π 😀\n",
+        &source
+    )
+    .is_none());
+    assert!(crate::navigation::runtime_source_location(uri, "", &source).is_none());
+}
+
+#[tokio::test]
+async fn runtime_definition_does_not_override_local_bindings_or_non_code() {
+    let (service, _socket) = LspService::new(Backend::new);
+    let backend = service.inner();
+    let uri = Url::parse("file:///workspace/local.sage").unwrap();
+    for (text, position, expected) in [
+        (
+            "def sin(x):\n    return x\nsin(0)\n",
+            Position::new(2, 1),
+            true,
+        ),
+        ("# sin(x)\n", Position::new(0, 3), false),
+        ("value = 'sin(x)'\n", Position::new(0, 10), false),
+        ("unknown.sin(x)\n", Position::new(0, 9), false),
+    ] {
+        backend
+            .open_documents
+            .write()
+            .await
+            .insert(uri.clone(), OpenDocument::live(&uri, text.to_string(), 1));
+        backend.navigation_cache.write().await.clear();
+        let result = backend
+            .goto_definition_response(GotoDefinitionParams {
+                text_document_position_params: TextDocumentPositionParams {
+                    text_document: TextDocumentIdentifier { uri: uri.clone() },
+                    position,
+                },
+                work_done_progress_params: Default::default(),
+                partial_result_params: Default::default(),
+            })
+            .await
+            .unwrap();
+        assert_eq!(result.is_some(), expected, "source: {text}");
+        if let Some(GotoDefinitionResponse::Scalar(location)) = result {
+            assert_eq!(location.uri, uri);
+            assert_eq!(location.range.start.line, 0);
+        }
+    }
+    assert_eq!(
+        backend.docs_status_payload().await["runtime_cache_misses"],
+        0
+    );
+}
+
+#[test]
 fn navigation_cache_entries_are_scoped_to_index_generation() {
     let mut cache = NavigationQueryCache::default();
     let base = NavigationQueryCacheKey {
