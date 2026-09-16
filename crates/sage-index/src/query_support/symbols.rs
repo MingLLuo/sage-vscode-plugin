@@ -386,3 +386,24 @@ pub(crate) fn builtin_symbol_record(name: &str) -> Option<SymbolRecord> {
         signature: None,
     })
 }
+
+pub(crate) fn runtime_sage_symbol_record(name: &str) -> Option<SymbolRecord> {
+    if !is_valid_identifier(name) {
+        return None;
+    }
+    builtin_symbol_record(name).or_else(|| {
+        Some(SymbolRecord {
+            name: name.to_string(),
+            kind: SymbolKind::Variable,
+            module: "sage.all".to_string(),
+            path: PathBuf::new(),
+            range: SourceRange::default(),
+            detail: format!("Sage runtime lookup: {name}"),
+            docstring: Some(format!(
+                "Runtime documentation worker can provide documentation for `{name}` if it is exported by Sage."
+            )),
+            import_from: None,
+            signature: None,
+        })
+    })
+}

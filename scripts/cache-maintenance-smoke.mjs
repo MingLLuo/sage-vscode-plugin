@@ -93,6 +93,16 @@ try {
   assertExists(path.join(tempRoot, newFile), "applied prune should keep newer cache database");
   assertExists(path.join(tempRoot, ignoredFile), "applied prune should ignore non-cache files");
 
+  await writeFixture(`${newFile}.keep`, "persistent");
+  await touchDaysAgo(path.join(tempRoot, newFile), 90);
+  const pinned = await runMaintenance([
+    "--cache-dir", tempRoot, "--prune", "--yes", "--max-age-days", "1",
+    "--max-total-bytes", "1", "--keep-latest", "0", "--json",
+  ]);
+  assertEqual(pinned.entries[0].protected, true, "persistent database must be protected");
+  assertEqual(pinned.actions.length, 0, "persistent database must survive age and size pruning");
+  assertExists(path.join(tempRoot, newFile), "persistent database must remain on disk");
+
   console.log(JSON.stringify({
     schema_version: 1,
     status: "passed",

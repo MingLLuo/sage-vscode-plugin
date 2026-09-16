@@ -479,3 +479,116 @@ fn strict_owner_inference_respects_parameter_shadowing() {
         None
     );
 }
+
+#[test]
+fn coerced_finite_field_elements_resolve_navigation_and_docs() {
+    let source = "F = GF(7)\na = F(2)\nresult = a.multiplicative_order()\n";
+    let (root, index) = strict_navigation_index(
+        "coerced-finite-field-element",
+        &[
+            ("consumer.sage", source),
+            ("sage/rings/finite_rings/element_base.pyx",
+             "cdef class FinitePolyExtElement:\n    def multiplicative_order(self):\n        \"\"\"Return the multiplicative order of this element.\"\"\"\n        return 3\n"),
+        ],
+    );
+    for (file, prefix) in [
+        ("consumer.sage", ""),
+        ("consumer.py", "from sage.all import GF\n"),
+    ] {
+        let source = format!("{prefix}{source}");
+        let (line, character) = member_position(&source, "multiplicative_order");
+        let position = QueryPosition { line, character };
+        let path = root.join(file);
+        let navigation = index.query_source_at_navigation(&path, &source, position);
+        assert_eq!(navigation.owner_type.as_deref(), Some("FieldElement"));
+        assert_eq!(navigation.resolution_confidence.as_deref(), Some("high"));
+        assert_eq!(navigation.definition.unwrap().path,
+            normalize_path(root.join("sage/rings/finite_rings/element_base.pyx")));
+        let query = index.query_source_at(&path, &source, position, None);
+        assert!(query.documentation.unwrap().docstring.unwrap().contains("multiplicative order"));
+    }
+    for source in [
+        "def GF(n):\n    return custom(n)\nF = GF(7)\na = F(2)\na.multiplicative_order()\n",
+        "F = GF(7)\nF = custom\na = F(2)\na.multiplicative_order()\n",
+    ] {
+        let (line, character) = member_position(source, "multiplicative_order");
+        let query = index.query_source_at_navigation(
+            &root.join("consumer.sage"), source, QueryPosition { line, character });
+        assert!(query.definition.is_none());
+        assert_ne!(query.resolution_confidence.as_deref(), Some("high"));
+    }
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn field_coercions_infer_element_types_without_changing_parent_aliases() {
+    let source = "F = GF(7)\na = F(2)\nK = NumberField(x^2 + 1, 'b')\nb = K(2)\nG = F\nresult = (a, b, G)\n";
+    for (name, expected) in [
+        ("a", SageOwnerType::FieldElement),
+        ("b", SageOwnerType::NumberFieldElement),
+        ("G", SageOwnerType::Field),
+    ] {
+        assert_eq!(infer_owner_type_before_strict(source, name, "", 5), Some(expected));
+    }
+}
+
+#[test]
+fn sage_exported_classes_resolve_methods_without_a_catalog_entry() {
+    let source = "R = RealBallField(100)\nR.precision()\n";
+    let (root, index) = strict_navigation_index("uncatalogued-sage-class", &[
+        ("sage/all.py", "from sage.rings.real_arb import RealBallField\n"),
+        ("sage/rings/real_arb.pyx", "class RealBallField:\n    def precision(self):\n        \"\"\"Return the working precision.\"\"\"\n        return 100\n"),
+        ("consumer.sage", source),
+    ]);
+    for (file, prefix) in [
+        ("consumer.sage", ""),
+        ("consumer.py", "from sage.all import *\n"),
+        ("consumer.py", "from sage.all import RealBallField\n"),
+    ] {
+        let source = format!("{prefix}{source}");
+        let (line, character) = member_position(&source, "precision");
+        let query = index.query_source_at(&root.join(file), &source, QueryPosition { line, character }, None);
+        assert_eq!(query.resolution_confidence.as_deref(), Some("high"), "{file}: {query:?}");
+        assert!(query.definition.is_some());
+        assert!(query.documentation.unwrap().docstring.unwrap().contains("working precision"));
+    }
+    for source in [
+        "R = unknown.RealBallField(100)\nR.precision()\n",
+        "RealBallField = custom\nR = RealBallField(100)\nR.precision()\n",
+    ] {
+        let (line, character) = member_position(source, "precision");
+        let query = index.query_source_at_navigation(
+            &root.join("consumer.sage"), source, QueryPosition { line, character });
+        assert!(query.definition.is_none(), "{source}");
+    }
+    fs::remove_dir_all(root).ok();
+}
+
+#[test]
+fn unindexed_sage_globals_can_request_runtime_docs_without_a_builtin_list_entry() {
+    let (root, index) = strict_navigation_index("uncatalogued-sage-runtime", &[]);
+    for (file, source, name, expected) in [
+        ("consumer.sage", "RealBallField(100)\n", "RealBallField", "RealBallField"),
+        ("consumer.sage", "ComplexBallField(100)\n", "ComplexBallField", "ComplexBallField"),
+        ("consumer.sage", "SomeFutureSageExport()\n", "SomeFutureSageExport", "SomeFutureSageExport"),
+        ("consumer.py", "from sage.all import RealBallField as Balls\nBalls(100)\n", "Balls(100)", "RealBallField"),
+        ("consumer.py", "from sage.all import *\nRealBallField(100)\n", "RealBallField", "RealBallField"),
+    ] {
+        let (line, character) = first_position(source, name);
+        let query = index.query_source_at(&root.join(file), source, QueryPosition { line, character }, None);
+        let docs = query.documentation.expect(source);
+        assert_eq!(docs.name, expected);
+        assert!(docs.docstring.unwrap().contains("Runtime documentation worker can provide"));
+        assert!(query.definition.is_none());
+    }
+    for (file, source, name) in [
+        ("consumer.py", "RealBallField(100)\n", "RealBallField"),
+        ("consumer.sage", "def RealBallField(n):\n    return n\nRealBallField(100)\n", "RealBallField(100)"),
+        ("consumer.sage", "obj.RealBallField(100)\n", "RealBallField"),
+    ] {
+        let (line, character) = first_position(source, name);
+        let query = index.query_source_at(&root.join(file), source, QueryPosition { line, character }, None);
+        assert!(!query.documentation.and_then(|docs| docs.docstring).is_some_and(|doc| doc.contains("Runtime documentation worker can provide")), "{source}");
+    }
+    fs::remove_dir_all(root).ok();
+}

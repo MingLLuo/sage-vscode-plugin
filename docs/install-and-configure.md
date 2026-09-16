@@ -168,6 +168,7 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
   selected text, or environment variables.
 - `sage.runUxSelfCheck`: run hover, docs, definition, completion, references, rename, signature, and diagnostics checks
   for the active editor position.
+- `sage.buildDatabase`: discover Sage sources, build a persistent SQLite database of source symbols and documentation, and protect it from automatic cache cleanup.
 - `sage.rebuildIndex`: rebuild the Rust source index for the current workspace.
 
 ## Setting Reference
@@ -253,6 +254,19 @@ By default, project source is snapshotted and Sage source is limited to related 
 reduce Sage source size, or `--source-mode none` when you only want symbol metadata and docs. The exporter writes virtual
 paths such as `project://src/main.py` and `sage://sage/rings/...`, sanitizes source/doc text, and fails if a generated
 package contains private local home paths.
+
+## Persistent database
+
+Run **Sage: Build Persistent Database** once after selecting your interpreter. The command waits for
+Sage source discovery, indexes the library and project, and saves the database in the extension's global
+storage. **Sage: Show Index Status** displays its path, file/symbol/doc counts, and lookup timings.
+Subsequent sessions reuse the database and refresh changed sources. Discovered Sage paths are remembered
+for the same interpreter and source-root configuration, allowing the index to load before Sage starts.
+
+Explicitly built databases have a `.sqlite.keep` marker and survive automatic age/size cleanup. To make
+an old database eligible for cleanup again, remove its `.keep` marker. A changed source-root configuration
+or index format can create a new database; rebuild it with the command when necessary. Static lookup works
+without starting Sage once its sources have been indexed; dynamic objects may still need runtime lookup.
 
 ## Current Limits
 

@@ -120,7 +120,7 @@ function buildReport(root, options) {
       digest,
       sidecars,
       total_bytes: totalBytes,
-      protected: false,
+      protected: fs.existsSync(`${database.path}.keep`),
       prunable: false,
       prune_reasons: [],
     };
@@ -157,7 +157,7 @@ function markPrunableEntries(report) {
       .map((entry) => entry.digest),
   );
   for (const entry of report.entries) {
-    entry.protected = protectedDigests.has(entry.digest);
+    entry.protected = entry.protected || protectedDigests.has(entry.digest);
   }
 
   let projectedTotalBytes = report.totals.total_bytes;

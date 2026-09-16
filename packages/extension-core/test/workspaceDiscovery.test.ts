@@ -216,3 +216,18 @@ test("discoverSourceRootsAsync can supplement startup roots from runtime probe",
 
   assert.deepEqual(result, [workspaceRoot, "/runtime/src"]);
 });
+
+
+test("async source discovery allows a Sage launcher taking longer than two seconds", { skip: process.platform === "win32" }, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "sage-slow-discovery-"));
+  try {
+    const source = path.join(root, "source");
+    fs.mkdirSync(path.join(source, "sage"), { recursive: true });
+    const launcher = path.join(root, "sage");
+    fs.writeFileSync(launcher, `#!${process.execPath}\nsetTimeout(() => console.log(${JSON.stringify(JSON.stringify([source]))}), 2200);\n`, { mode: 0o755 });
+    const roots = await discoverInterpreterSourceRootsAsync(launcher, []);
+    assert.ok(roots.includes(source));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

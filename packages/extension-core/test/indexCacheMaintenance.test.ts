@@ -130,3 +130,24 @@ function assertMissing(filePath: string, message: string): void {
     throw new Error(message);
   }
 }
+
+
+test("explicit persistent databases survive age and size pruning", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sage-pinned-database-"));
+  try {
+    const name = "sage-index-1111111111111111.sqlite";
+    const nowMs = Date.now();
+    for (const suffix of ["", "-wal", "-shm", ".keep"]) {
+      await writeFixture(root, name + suffix, "persistent");
+      await touchDaysAgo(root, name + suffix, nowMs, 90);
+    }
+    const report = await maintainIndexCache({
+      cacheDir: root, keepLatestDatabases: 0, maxAgeDays: 1, maxTotalBytes: 1, nowMs,
+    });
+    assert.equal(report.entries[0].protected, true);
+    assert.equal(report.actions.length, 0);
+    assertExists(path.join(root, name), "persistent database must be retained");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

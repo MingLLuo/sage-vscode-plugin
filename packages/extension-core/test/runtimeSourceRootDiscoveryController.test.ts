@@ -245,3 +245,27 @@ test("prepare can skip discovery without allocating an operation", () => {
   assert.equal(harness.controller.operation, undefined);
   assert.equal(harness.discoveries.length, 0);
 });
+
+
+test("cached Sage roots are available before the runtime probe finishes and new roots are saved", async () => {
+  const probe = deferred<readonly string[]>();
+  const saved: string[][] = [];
+  const snapshot: RuntimeSourceRootDiscoverySnapshot = {
+    scopeKey: "workspace", workspaceFolders: ["/workspace"], configuredSourceRoots: [],
+    interpreterPath: "sage", interpreterArgs: [],
+  };
+  const controller = new RuntimeSourceRootDiscoveryController({
+    prepare: () => snapshot,
+    loadCachedRoots: () => ["/cached/sage/src"],
+    saveCachedRoots: async (_snapshot, roots) => { saved.push([...roots]); },
+    discoverStartupRoots: () => ["/workspace"],
+    discoverRuntimeRoots: () => probe.promise,
+    onEvent: () => {},
+  });
+  const operation = controller.schedule("activation");
+  assert.deepEqual(controller.effectiveRoots([]), ["/cached/sage/src"]);
+  probe.resolve(["/cached/sage/src", "/new/sage/src"]);
+  await operation;
+  assert.deepEqual(saved, [["/cached/sage/src", "/new/sage/src"]]);
+  assert.deepEqual(controller.discoveredRoots, ["/cached/sage/src", "/new/sage/src"]);
+});

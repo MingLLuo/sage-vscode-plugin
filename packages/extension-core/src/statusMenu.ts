@@ -34,6 +34,12 @@ export function statusMenuActions(): StatusMenuAction[] {
       command: "sage.runUxSelfCheck",
     },
     {
+      label: "$(database) Build Persistent Database",
+      description: "Save Sage sources and documentation for fast lookup",
+      detail: "Discover Sage sources, build the on-disk index, and keep it across restarts and automatic cleanup.",
+      command: "sage.buildDatabase",
+    },
+    {
       label: "$(refresh) Rebuild Index",
       description: "Refresh cached Sage/project symbols",
       detail: "Rebuild the Rust index when source roots or Sage internals changed.",

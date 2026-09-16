@@ -21,6 +21,8 @@ export type RuntimeSourceRootDiscoveryEvent =
 
 export interface RuntimeSourceRootDiscoveryControllerOptions {
   prepare(reason: string): RuntimeSourceRootDiscoverySnapshot | undefined;
+  loadCachedRoots?(snapshot: RuntimeSourceRootDiscoverySnapshot): readonly string[];
+  saveCachedRoots?(snapshot: RuntimeSourceRootDiscoverySnapshot, roots: readonly string[]): Promise<void>;
   discoverStartupRoots(
     snapshot: RuntimeSourceRootDiscoverySnapshot,
     effectiveRoots: readonly string[],
@@ -79,6 +81,7 @@ export class RuntimeSourceRootDiscoveryController {
     if (!snapshot) {
       return this.currentOperation;
     }
+    this.roots = [...new Set([...this.roots, ...(this.options.loadCachedRoots?.(snapshot) ?? [])])];
     return this.enqueue({ reason, snapshot, key: this.snapshotKey(snapshot) }, false);
   }
 
@@ -170,6 +173,10 @@ export class RuntimeSourceRootDiscoveryController {
         discovery.snapshot,
         effectiveRoots,
       );
+      if (this.deactivating || discoveryGeneration !== this.generation) {
+        return false;
+      }
+      await this.options.saveCachedRoots?.(discovery.snapshot, discoveredRoots);
       if (this.deactivating || discoveryGeneration !== this.generation) {
         return false;
       }

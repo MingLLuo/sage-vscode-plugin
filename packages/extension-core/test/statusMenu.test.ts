@@ -14,6 +14,7 @@ test("statusMenuActions expose the core troubleshooting commands", () => {
     "sage.showIndexStatus",
     "sage.showDocsStatus",
     "sage.runUxSelfCheck",
+    "sage.buildDatabase",
     "sage.rebuildIndex",
     "sage.copySupportBundle",
   ]);

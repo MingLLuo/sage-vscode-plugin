@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as fs from "node:fs/promises";
 import type { LanguageClient } from "vscode-languageclient/node";
 
 import {
@@ -26,6 +27,7 @@ export interface StatusCommandDependencies {
   outputChannel: vscode.OutputChannel;
   logger: Pick<OutputLogger, "info" | "warn">;
   ensureLanguageClientReady(action: string): Promise<LanguageClient | undefined>;
+  prepareDatabaseBuild(): Promise<void>;
   refreshLanguageServerStatus(): Promise<void>;
   activeEditorSettings(): SageSettings;
   workspaceFolderPaths(): string[];
@@ -72,6 +74,29 @@ export function registerStatusCommands(
   };
 
   return [
+    vscode.commands.registerCommand("sage.buildDatabase", async () => {
+      try {
+        await vscode.window.withProgress({
+          location: vscode.ProgressLocation.Notification,
+          title: "Discovering Sage sources for the persistent database",
+          cancellable: false,
+        }, () => dependencies.prepareDatabaseBuild());
+        const status = await vscode.commands.executeCommand<IndexStatusSummary | undefined>("sage.rebuildIndex");
+        if (!status) {
+          return;
+        }
+        if (status.last_error || !status.cache_path || !status.indexed_file_count) {
+          throw new Error(status.last_error ?? "No files were saved to the database.");
+        }
+        await fs.writeFile(`${status.cache_path}.keep`, "Sage persistent database: protected from automatic cache cleanup.\n");
+        void vscode.window.showInformationMessage(
+          `Persistent Sage database saved: ${status.indexed_file_count} files, ${status.symbol_count ?? 0} symbols. It will be reused after restart.`,
+        );
+        return status;
+      } catch (error) {
+        await reportRequestFailure("Building the persistent Sage database", error);
+      }
+    }),
     vscode.commands.registerCommand("sage.showEnvironmentDetails", async () => {
       showStatusReport(
         "Sage Environment Details",

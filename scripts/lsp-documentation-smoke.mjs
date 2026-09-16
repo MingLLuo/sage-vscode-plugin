@@ -73,11 +73,51 @@ try {
   assert.match(docs.docstring, /EXAMPLES/);
   assert.ok(!docs.docstring.includes("Runtime documentation worker can provide"));
   const definition = await checkDefinition();
+  // These globals are deliberately absent from the static built-in catalog.
+  // Exercise both implicit Sage exports and an explicit import alias without
+  // any Sage source roots, so runtime fallback is required.
+  const runtimeSymbols = [];
+  for (const [index, symbol] of [
+    "RealBallField", "ComplexBallField", "RealIntervalField", "ComplexIntervalField",
+  ].entries()) {
+    const imported = index % 2 === 1;
+    const text = imported
+      ? `from sage.all import ${symbol} as Constructor\nConstructor(100)\n`
+      : index === 0 ? "Reals = RealBallField()\n" : `${symbol}(100)\n`;
+    const targetPosition = {
+      line: imported ? 1 : 0,
+      character: index === 0 ? text.indexOf(symbol) + 1 : 1,
+    };
+    server.notify("textDocument/didChange", {
+      textDocument: { uri, version: index + 2 }, contentChanges: [{ text }],
+    });
+    if (index === 0) {
+      const firstLocation = await server.requestWithTimeout("textDocument/definition", {
+        textDocument: { uri }, position: targetPosition,
+      }, 10000);
+      assert.ok(firstLocation?.uri, `${symbol} must navigate before opening documentation`);
+    }
+    const result = await server.requestWithTimeout("workspace/executeCommand", {
+      command: "sage.__rust.getDocumentation",
+      arguments: [{ textDocument: { uri }, position: targetPosition }],
+    }, 10000);
+    assert.ok(result?.docstring?.length > 100, `${symbol} must load full runtime docs`);
+    assert.ok(!result.docstring.includes("Runtime documentation worker can provide"));
+    const location = await server.requestWithTimeout("textDocument/definition", {
+      textDocument: { uri }, position: targetPosition,
+    }, 10000);
+    assert.ok(location?.uri, `${symbol} must resolve a source location`);
+    const hover = await server.requestWithTimeout("textDocument/hover", {
+      textDocument: { uri }, position: targetPosition,
+    }, 2000);
+    assert.ok(hover?.contents?.value, `${symbol} must show hover documentation`);
+    runtimeSymbols.push({ symbol, uri: location.uri });
+  }
   const runtime = await status();
   assert.equal(runtime.runtime_timeout_count, 0);
   assert.equal(runtime.runtime_degraded_reason, null);
   console.log(JSON.stringify({ status: "passed", coldHoverMs, summary: docs.summary,
-    docstringLength: docs.docstring.length, definition, runtime }, null, 2));
+    docstringLength: docs.docstring.length, definition, runtimeSymbols, runtime }, null, 2));
   await server.requestWithTimeout("shutdown", undefined, 2000);
   server.notify("exit");
 } catch (error) {

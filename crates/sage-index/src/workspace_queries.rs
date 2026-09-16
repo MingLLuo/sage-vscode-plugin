@@ -624,6 +624,12 @@ impl WorkspaceIndex {
                         export.reason
                     ));
                     resolved = Some(export.record);
+                } else if export_lookup.import_module == "sage.all" {
+                    resolved = runtime_sage_symbol_record(&export_lookup.source_name);
+                    resolution_confidence = Some("ambiguous".to_string());
+                    resolution_reason = Some(format!(
+                        "`{lookup_name}` requires runtime verification of its sage.all export"
+                    ));
                 } else {
                     suppress_global_fallback = true;
                     resolution_confidence = Some("ambiguous".to_string());
@@ -758,7 +764,12 @@ impl WorkspaceIndex {
             match global_candidates.len() {
                 0 => {
                     resolved = builtin_symbol_record(dotted_symbol.as_deref().unwrap_or(symbol))
-                        .or_else(|| builtin_symbol_record(lookup_name));
+                        .or_else(|| builtin_symbol_record(lookup_name))
+                        .or_else(|| {
+                            implicit_sage_all_lookup
+                                .then(|| runtime_sage_symbol_record(lookup_name))
+                                .flatten()
+                        });
                 }
                 1 => {
                     resolved = global_candidates.into_iter().next();

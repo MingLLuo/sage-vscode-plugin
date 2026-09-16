@@ -697,7 +697,7 @@ impl WorkspaceIndex {
         let constructor_name = constructor.rsplit('.').next().unwrap_or(&constructor);
         let Some(owner_symbol) = self.resolve_visible_constructor_owner_symbol(
             source,
-            constructor_name,
+            &constructor,
             query_path,
             target_range,
             local_symbols,
@@ -792,13 +792,30 @@ impl WorkspaceIndex {
         target_range: &SourceRange,
         local_symbols: &[SymbolRecord],
     ) -> Option<SymbolRecord> {
+        // A qualified constructor needs its namespace resolved separately;
+        // its short name must not acquire an implicit sage.all binding.
+        if !is_valid_identifier(constructor_name) {
+            return None;
+        }
         let binding = active_local_binding_at(
             source,
             query_path,
             local_symbols,
             constructor_name,
             target_range,
-        )?;
+        );
+        let Some(binding) = binding else {
+            let export = if let Some(lookup) =
+                source_imported_sage_all_star_lookup(source, constructor_name)
+            {
+                self.resolve_sage_exported_symbol_from(&lookup.import_module, &lookup.source_name)
+            } else if is_sage_source_path(query_path) {
+                self.resolve_sage_exported_symbol(constructor_name)
+            } else {
+                None
+            }?;
+            return (export.record.kind == SymbolKind::Class).then_some(export.record);
+        };
         if binding.kind != SymbolKind::Import {
             return (binding.kind == SymbolKind::Class).then_some(binding);
         }
@@ -947,6 +964,31 @@ impl WorkspaceIndex {
                 owner_type,
             );
         };
+        // Calling a field parent constructs an element. Verify the parent's
+        // Sage constructor binding before trusting the inferred element type.
+        if is_valid_identifier(&constructor) {
+            let parent_type = match owner_type {
+                SageOwnerType::FieldElement => Some(SageOwnerType::Field),
+                SageOwnerType::NumberFieldElement => Some(SageOwnerType::NumberField),
+                _ => None,
+            };
+            if let Some(parent_type) = parent_type {
+                if infer_owner_type_before_strict(source, &constructor, "", target_range.start_line)
+                    == Some(parent_type)
+                {
+                    // The recursive check changes from element to parent, so
+                    // this branch cannot recurse through cyclic assignments.
+                    return self.owner_type_has_reliable_sage_binding(
+                        source,
+                        &constructor,
+                        query_path,
+                        target_range,
+                        local_symbols,
+                        parent_type,
+                    );
+                }
+            }
+        }
         if let Some((receiver, member)) = constructor.rsplit_once('.') {
             if let Some(receiver_type) =
                 infer_owner_type_before_strict(source, receiver, member, target_range.start_line)

@@ -143,7 +143,11 @@ pub(super) fn infer_type_from_rhs(
             return Some(SageOwnerType::PolynomialElement);
         }
         if let Some(owner_type) = known_types.get(callee).copied() {
-            return Some(owner_type);
+            return Some(match owner_type {
+                SageOwnerType::Field => SageOwnerType::FieldElement,
+                SageOwnerType::NumberField => SageOwnerType::NumberFieldElement,
+                _ => owner_type,
+            });
         }
         if let Some((receiver, member)) = callee.rsplit_once('.') {
             let receiver_type = known_types.get(receiver).copied().or_else(|| {

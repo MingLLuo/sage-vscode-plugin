@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import * as fs from "node:fs";
 
 import * as vscode from "vscode";
 import type { LanguageClient } from "vscode-languageclient/node";
@@ -686,6 +687,19 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   runtimeSourceRootDiscoveryController = new RuntimeSourceRootDiscoveryController({
+    loadCachedRoots: (snapshot) => {
+      const key = JSON.stringify([snapshot.interpreterPath, snapshot.interpreterArgs, snapshot.configuredSourceRoots]);
+      const cached = context.globalState.get<Record<string, string[]>>("sage.runtimeSourceRoots.v1", {});
+      return (cached[key] ?? []).filter((root) => fs.existsSync(path.join(root, "sage")));
+    },
+    saveCachedRoots: async (snapshot, roots) => {
+      const key = JSON.stringify([snapshot.interpreterPath, snapshot.interpreterArgs, snapshot.configuredSourceRoots]);
+      const cached = context.globalState.get<Record<string, string[]>>("sage.runtimeSourceRoots.v1", {});
+      const sageRoots = roots.filter((root) => fs.existsSync(path.join(root, "sage")));
+      if (sageRoots.length > 0) {
+        await context.globalState.update("sage.runtimeSourceRoots.v1", { ...cached, [key]: sageRoots });
+      }
+    },
     prepare: (reason) => {
       if (!isWorkspaceRuntimeAvailable(currentWorkspaceRuntimeState())) {
         return undefined;
@@ -920,6 +934,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       outputChannel,
       logger,
       ensureLanguageClientReady,
+      prepareDatabaseBuild: async () => {
+        await runtimeSourceRootDiscoveryController?.invalidateAndSchedule("build-database");
+        await languageClientLifecycleController?.operation;
+        if (!effectiveSourceRootPaths(activeEditorSettings()).some((root) => fs.existsSync(path.join(root, "sage")))) {
+          throw new Error("Sage sources were not found. Set sage.analysis.sourceRoots to the directory containing the sage package, then retry.");
+        }
+      },
       refreshLanguageServerStatus,
       activeEditorSettings,
       workspaceFolderPaths,

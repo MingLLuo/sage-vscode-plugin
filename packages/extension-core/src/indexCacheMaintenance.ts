@@ -136,7 +136,7 @@ export async function maintainIndexCache(
       digest,
       sidecars,
       totalBytes,
-      protected: false,
+      protected: names.includes(`${name}.keep`),
       prunable: false,
       pruneReasons: [],
     });
@@ -208,7 +208,7 @@ function markPrunableEntries(report: IndexCacheMaintenanceReport): void {
       .map((entry) => entry.digest),
   );
   for (const entry of report.entries) {
-    entry.protected = protectedDigests.has(entry.digest);
+    entry.protected = entry.protected || protectedDigests.has(entry.digest);
   }
 
   let projectedTotalBytes = report.totals.totalBytes;
