@@ -6,12 +6,12 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
-use tokio::time::timeout;
 
-const WORKER_TIMEOUT: Duration = Duration::from_millis(750);
+const WORKER_TIMEOUT: Duration = Duration::from_secs(3);
+const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
 const WORKER_SCRIPT: &str = r#"
 import inspect
 import json
@@ -23,7 +23,7 @@ try:
     from sage.misc.sageinspect import sage_getdef, sage_getdoc, sage_getfile
     print(json.dumps({"ready": True}), flush=True)
 except Exception as exc:
-    print(json.dumps({"ready": False, "error": str(exc)}), flush=True)
+    print(json.dumps({"ready": False, "error": traceback.format_exc()}), flush=True)
     sys.exit(0)
 
 def resolve_symbol(name):
@@ -52,7 +52,9 @@ for line in sys.stdin:
         name = request.get("symbol", "")
         obj = resolve_symbol(name)
         try:
-            doc = sage_getdoc(obj, obj_name=name) or ""
+            # Embedded formatting preserves docs without probing optional packages
+            # (e.g. starting Maxima merely to format sin's doctest tags).
+            doc = sage_getdoc(obj, obj_name=name, embedded=True) or ""
         except TypeError:
             doc = sage_getdoc(obj) or ""
         if not doc:
@@ -131,7 +133,7 @@ pub struct RuntimeDocsWorker {
 struct RuntimeDocsProcess {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    output: mpsc::Receiver<std::io::Result<String>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -211,50 +213,38 @@ impl RuntimeDocsWorker {
             .cache_misses += 1;
         let worker = self.clone();
         let symbol = symbol.to_string();
-        let result = timeout(
-            WORKER_TIMEOUT,
-            tokio::task::spawn_blocking(move || worker.lookup_uncached_blocking(&symbol)),
-        )
-        .await;
+        let result =
+            tokio::task::spawn_blocking(move || worker.lookup_uncached_blocking(&symbol)).await;
         match result {
-            Ok(Ok(Ok(Some(record)))) => {
+            Ok(Ok(Some(record))) => {
                 self.cache
                     .lock()
                     .expect("runtime docs cache lock poisoned")
                     .insert(record.name.clone(), record.clone());
                 Some(record)
             }
-            Ok(Ok(Ok(None))) => None,
-            Ok(Ok(Err(error))) => {
-                let mut counters = self
-                    .counters
-                    .lock()
-                    .expect("runtime docs counters lock poisoned");
-                counters.state = "degraded".to_string();
-                counters.degraded_reason = Some(error.to_string());
-                None
-            }
+            Ok(Ok(None)) => None,
             Ok(Err(error)) => {
                 let mut counters = self
                     .counters
                     .lock()
                     .expect("runtime docs counters lock poisoned");
+                if error.downcast_ref::<mpsc::RecvTimeoutError>()
+                    == Some(&mpsc::RecvTimeoutError::Timeout)
+                {
+                    counters.timeout_count += 1;
+                }
                 counters.state = "degraded".to_string();
                 counters.degraded_reason = Some(error.to_string());
                 None
             }
-            Err(_) => {
-                self.stop_process();
+            Err(error) => {
                 let mut counters = self
                     .counters
                     .lock()
                     .expect("runtime docs counters lock poisoned");
                 counters.state = "degraded".to_string();
-                counters.timeout_count += 1;
-                counters.degraded_reason = Some(format!(
-                    "runtime docs lookup timed out after {}ms",
-                    WORKER_TIMEOUT.as_millis()
-                ));
+                counters.degraded_reason = Some(error.to_string());
                 None
             }
         }
@@ -279,6 +269,19 @@ impl RuntimeDocsWorker {
         record
     }
 
+    pub fn hover_status_message(&self) -> String {
+        let counters = self
+            .counters
+            .lock()
+            .expect("runtime docs counters lock poisoned");
+        match counters.state.as_str() {
+            "disabled" => "Runtime documentation is disabled. Enable `sage.analysis.enableRuntimeIntrospection` to load full Sage documentation.",
+            "unavailable" | "unconfigured-static-fallback" => "Select a Sage interpreter to load full documentation.",
+            "degraded" => "Runtime documentation could not be loaded. Run `Sage: Show Docs Status` for details.",
+            _ => "Loading Sage documentation. Hover again shortly, or run `Sage: Show Documentation`.",
+        }.to_string()
+    }
+
     pub fn prefetch(&self, symbol: &str) {
         let symbol = symbol.trim().to_string();
         if symbol.is_empty() {
@@ -297,14 +300,6 @@ impl RuntimeDocsWorker {
             .lock()
             .expect("runtime docs cache lock poisoned")
             .contains_key(&symbol)
-        {
-            return;
-        }
-        if self
-            .process
-            .lock()
-            .expect("runtime docs process lock poisoned")
-            .is_none()
         {
             return;
         }
@@ -361,24 +356,27 @@ impl RuntimeDocsWorker {
         let process = guard
             .as_mut()
             .ok_or_else(|| anyhow!("runtime docs process is unavailable"))?;
-        let request = json!({ "symbol": symbol }).to_string();
-        process.stdin.write_all(request.as_bytes())?;
-        process.stdin.write_all(b"\n")?;
-        process.stdin.flush()?;
-        let mut line = String::new();
-        if process.stdout.read_line(&mut line)? == 0 {
-            *guard = None;
-            return Err(anyhow!("runtime docs worker exited"));
+        let response = (|| -> Result<WorkerResponse> {
+            let request = json!({ "symbol": symbol }).to_string();
+            process.stdin.write_all(request.as_bytes())?;
+            process.stdin.write_all(b"\n")?;
+            process.stdin.flush()?;
+            let line = process.read_line(WORKER_TIMEOUT)?;
+            serde_json::from_str(&line)
+                .with_context(|| format!("parse runtime docs response: {line}"))
+        })();
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                *guard = None;
+                let message = format!("runtime documentation lookup for {symbol}: {error}");
+                return Err(error.context(message));
+            }
         };
-        let response: WorkerResponse = serde_json::from_str(&line)
-            .with_context(|| format!("parse runtime docs response: {line}"))?;
         if !response.ok {
-            return Err(anyhow!(
-                "{}",
-                response
-                    .error
-                    .unwrap_or_else(|| "runtime lookup failed".to_string())
-            ));
+            return Err(anyhow!(response
+                .error
+                .unwrap_or_else(|| "runtime lookup failed".to_string())));
         }
         let record = DocumentationRecord {
             name: response.name.unwrap_or_else(|| symbol.to_string()),
@@ -393,10 +391,12 @@ impl RuntimeDocsWorker {
             markers: vec!["runtime".to_string()],
             sections: Vec::<DocumentationSection>::new(),
         };
-        self.counters
+        let mut counters = self
+            .counters
             .lock()
-            .expect("runtime docs counters lock poisoned")
-            .state = "ready".to_string();
+            .expect("runtime docs counters lock poisoned");
+        counters.state = "ready".to_string();
+        counters.degraded_reason = None;
         Ok(Some(record))
     }
 
@@ -418,7 +418,8 @@ impl RuntimeDocsWorker {
         command.env("PYTHONUNBUFFERED", "1");
         let runtime_home = std::env::temp_dir().join("sage-vscode-runtime-home");
         prepare_runtime_home(&runtime_home)?;
-        command.env("HOME", &runtime_home);
+        // Keep the interpreter's HOME: replacing it also changes GAP's startup
+        // configuration and can break sage.all imports. Isolate only the caches.
         command.env("DOT_SAGE", runtime_home.join(".sage"));
         command.env("XDG_CACHE_HOME", runtime_home.join(".cache"));
         if !config.source_roots.is_empty() {
@@ -437,11 +438,21 @@ impl RuntimeDocsWorker {
             .stdout
             .take()
             .ok_or_else(|| anyhow!("runtime docs worker stdout is unavailable"))?;
-        let mut stdout = BufReader::new(stdout);
-        let mut line = String::new();
-        if stdout.read_line(&mut line)? == 0 {
-            return Err(anyhow!("runtime docs worker exited before ready"));
-        }
+        let (sender, output) = mpsc::channel();
+        std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let failed = line.is_err();
+                if sender.send(line).is_err() || failed {
+                    break;
+                }
+            }
+        });
+        let process = RuntimeDocsProcess {
+            child,
+            stdin,
+            output,
+        };
+        let line = process.read_line(WORKER_STARTUP_TIMEOUT)?;
         let ready: WorkerReady = serde_json::from_str(&line)
             .with_context(|| format!("parse runtime docs worker ready response: {line}"))?;
         if !ready.ready {
@@ -456,22 +467,14 @@ impl RuntimeDocsWorker {
             .lock()
             .expect("runtime docs counters lock poisoned")
             .state = "ready".to_string();
-        Ok(RuntimeDocsProcess {
-            child,
-            stdin,
-            stdout,
-        })
+        Ok(process)
     }
 
     fn stop_process(&self) {
-        if let Some(mut process) = self
-            .process
+        self.process
             .lock()
             .expect("runtime docs process lock poisoned")
-            .take()
-        {
-            let _ = process.child.kill();
-        }
+            .take();
     }
 
     fn finish_prefetch(&self, symbol: &str) {
@@ -487,6 +490,27 @@ impl RuntimeDocsWorker {
             .lock()
             .expect("runtime docs counters lock poisoned")
             .queue_depth = queue_depth;
+    }
+}
+
+impl RuntimeDocsProcess {
+    fn read_line(&self, timeout: Duration) -> Result<String> {
+        self.output
+            .recv_timeout(timeout)
+            .with_context(|| {
+                format!(
+                    "runtime docs worker response exceeded {}ms or worker exited",
+                    timeout.as_millis()
+                )
+            })?
+            .context("read runtime docs worker response")
+    }
+}
+
+impl Drop for RuntimeDocsProcess {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -580,7 +604,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hover_prefetch_does_not_start_runtime_process() {
+    async fn hover_prefetch_starts_runtime_process_without_blocking() {
         let worker = RuntimeDocsWorker::default();
         worker
             .configure(RuntimeDocsConfig {
@@ -594,9 +618,80 @@ mod tests {
         worker.prefetch("PolynomialRing");
 
         let status = worker.status(base_status()).await;
-        assert_eq!(status.runtime_worker_state, "idle-static-fallback");
-        assert_eq!(status.runtime_queue_depth, 0);
-        assert_eq!(status.runtime_cache_misses, 0);
+        assert_eq!(status.runtime_queue_depth, 1);
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let status = worker.status(base_status()).await;
+                if status.runtime_queue_depth == 0 {
+                    assert_eq!(status.runtime_cache_misses, 1);
+                    assert_eq!(status.runtime_worker_state, "degraded");
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("prefetch must finish without blocking the async executor");
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cold_prefetch_allows_slow_startup_and_caches_documentation() {
+        let worker = RuntimeDocsWorker::default();
+        worker.configure(RuntimeDocsConfig {
+            enabled: true,
+            interpreter_path: "/bin/sh".to_string(),
+            interpreter_args: vec!["-c".to_string(), r#"
+sleep 1
+printf '%s\n' '{"ready":true}'
+while IFS= read -r request; do
+    printf '%s\n' '{"ok":true,"name":"sin","docstring":"The sine function.","summary":"The sine function."}'
+done
+"#.to_string()],
+            source_roots: Vec::new(),
+        }).await;
+        worker.prefetch("sin");
+        worker.prefetch("sin");
+        tokio::time::timeout(Duration::from_secs(4), async {
+            loop {
+                if let Some(record) = worker.cached("sin") {
+                    assert_eq!(record.docstring.as_deref(), Some("The sine function."));
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("cold hover should eventually get real docs");
+        let status = worker.status(base_status()).await;
+        assert_eq!(status.runtime_cache_misses, 1);
+        assert_eq!(status.runtime_timeout_count, 0);
+        assert_eq!(status.runtime_degraded_reason, None);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn stalled_response_times_out_and_discards_worker() {
+        let worker = RuntimeDocsWorker::default();
+        worker
+            .configure(RuntimeDocsConfig {
+                enabled: true,
+                interpreter_path: "/bin/sh".to_string(),
+                interpreter_args: vec![
+                    "-c".to_string(),
+                    "printf '%s\\n' '{\"ready\":true}'; read -r request; exec sleep 5".to_string(),
+                ],
+                source_roots: Vec::new(),
+            })
+            .await;
+        let record = tokio::time::timeout(Duration::from_secs(5), worker.lookup("sin"))
+            .await
+            .expect("timeout must not block while trying to kill the worker");
+        assert!(record.is_none());
+        assert!(worker.process.lock().unwrap().is_none());
+        let status = worker.status(base_status()).await;
+        assert_eq!(status.runtime_timeout_count, 1);
+        assert_eq!(status.runtime_worker_state, "degraded");
     }
 
     #[test]

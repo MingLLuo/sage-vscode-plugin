@@ -44,6 +44,7 @@
     "test:real-file-smoke": "npm run build:debug-inspector && node scripts/real-file-smoke.mjs",
     "test:reference-export": "npm run build:debug-inspector && node scripts/reference-export-smoke.mjs",
     "test:lsp-navigation": "npm run build:rust && node scripts/lsp-navigation-smoke.mjs",
+    "test:lsp-documentation:sage": "npm run build:rust && node scripts/lsp-documentation-smoke.mjs",
     "test:lsp-shutdown": "npm run build:rust && node scripts/lsp-shutdown-smoke.mjs",
     "test:lsp-protocol": "npm run build:rust && node scripts/lsp-navigation-smoke.mjs && node scripts/lsp-shutdown-smoke.mjs",
     "test:lsp-latency": "npm run build:rust:release && node scripts/lsp-latency-smoke.mjs --profile release",

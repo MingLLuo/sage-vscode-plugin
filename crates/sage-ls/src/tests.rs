@@ -4,6 +4,64 @@ use crate::call_hierarchy::call_ranges_in_range;
 mod navigation_tests;
 mod reference_tests;
 
+#[tokio::test]
+async fn documentation_placeholder_at_position_attempts_runtime_lookup() {
+    let (service, _socket) = LspService::new(Backend::new);
+    let backend = service.inner();
+    let uri = Url::parse("file:///workspace/docs.sage").unwrap();
+    backend.open_documents.write().await.insert(
+        uri.clone(),
+        OpenDocument::live(&uri, "PolynomialRing(QQ, 'x')".to_string(), 1),
+    );
+    let result = backend
+        .documentation_payload(json!({
+            "textDocument": { "uri": uri },
+            "position": { "line": 0, "character": 3 }
+        }))
+        .await
+        .expect("static fallback remains available");
+    assert_eq!(result["name"], "PolynomialRing");
+    let status = backend.docs_status_payload().await;
+    assert_eq!(
+        status["runtime_cache_misses"], 1,
+        "a position-specific placeholder must not bypass runtime lookup"
+    );
+}
+
+#[tokio::test]
+async fn explicit_documentation_symbol_overrides_cursor_and_keeps_local_docs() {
+    let (service, _socket) = LspService::new(Backend::new);
+    let backend = service.inner();
+    let uri = Url::parse("file:///workspace/docs.py").unwrap();
+    backend.open_documents.write().await.insert(
+        uri.clone(),
+        OpenDocument::live(&uri, "def selected():\n    \"\"\"Selected function documentation.\"\"\"\n    pass\ndef adjacent():\n    \"\"\"Wrong documentation.\"\"\"\n    pass\n".to_string(),
+            1,
+        ),
+    );
+    for preference in [
+        DocumentationPreferredSource::Auto,
+        DocumentationPreferredSource::Runtime,
+    ] {
+        *backend.docs_preferred_source.write().await = preference;
+        let result = backend
+            .documentation_payload(json!({
+                "textDocument": { "uri": uri },
+                "position": { "line": 3, "character": 6 },
+                "symbol": "selected"
+            }))
+            .await
+            .expect("selected local documentation remains available");
+        assert_eq!(result["name"], "selected");
+        assert_eq!(result["docstring"], "Selected function documentation.");
+    }
+    let status = backend.docs_status_payload().await;
+    assert_eq!(
+        status["runtime_cache_misses"], 1,
+        "runtime preference must attempt lookup even when local docs exist"
+    );
+}
+
 #[test]
 fn background_index_results_require_latest_job_and_unchanged_index() {
     assert!(index_job_result_is_current(2, 2, 7, 7));

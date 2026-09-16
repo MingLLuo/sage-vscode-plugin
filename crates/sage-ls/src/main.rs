@@ -174,25 +174,31 @@ struct DocumentationPositionContext {
 async fn main() {
     let stdin = tokio::io::stdin();
     let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(|client| Backend {
-        client,
-        index: Arc::new(RwLock::new(WorkspaceIndex::default())),
-        open_documents: Arc::new(RwLock::new(OpenDocumentMap::new())),
-        navigation_cache: Arc::new(RwLock::new(NavigationQueryCache::default())),
-        navigation_link_support: Arc::new(RwLock::new(NavigationLinkSupport::default())),
-        analysis_mode: Arc::new(RwLock::new(AnalysisMode::default())),
-        diagnostics_enabled: Arc::new(RwLock::new(true)),
-        docs_on_hover_enabled: Arc::new(RwLock::new(true)),
-        docs_preferred_source: Arc::new(RwLock::new(DocumentationPreferredSource::Auto)),
-        pending_jobs: Arc::new(RwLock::new(0)),
-        pending_index_task: Arc::new(RwLock::new(None)),
-        index_job_generation: Arc::new(AtomicU64::new(0)),
-        index_work_gate: Arc::new(Mutex::new(())),
-        shutting_down: Arc::new(AtomicBool::new(false)),
-        linked_document_prewarmer: LinkedDocumentPrewarmer::default(),
-        runtime_docs: RuntimeDocsWorker::default(),
-    });
+    let (service, socket) = LspService::new(Backend::new);
     Server::new(stdin, stdout, socket).serve(service).await;
+}
+
+impl Backend {
+    fn new(client: Client) -> Self {
+        Self {
+            client,
+            index: Arc::new(RwLock::new(WorkspaceIndex::default())),
+            open_documents: Arc::new(RwLock::new(OpenDocumentMap::new())),
+            navigation_cache: Arc::new(RwLock::new(NavigationQueryCache::default())),
+            navigation_link_support: Arc::new(RwLock::new(NavigationLinkSupport::default())),
+            analysis_mode: Arc::new(RwLock::new(AnalysisMode::default())),
+            diagnostics_enabled: Arc::new(RwLock::new(true)),
+            docs_on_hover_enabled: Arc::new(RwLock::new(true)),
+            docs_preferred_source: Arc::new(RwLock::new(DocumentationPreferredSource::Auto)),
+            pending_jobs: Arc::new(RwLock::new(0)),
+            pending_index_task: Arc::new(RwLock::new(None)),
+            index_job_generation: Arc::new(AtomicU64::new(0)),
+            index_work_gate: Arc::new(Mutex::new(())),
+            shutting_down: Arc::new(AtomicBool::new(false)),
+            linked_document_prewarmer: LinkedDocumentPrewarmer::default(),
+            runtime_docs: RuntimeDocsWorker::default(),
+        }
+    }
 }
 
 #[async_trait]
@@ -1210,25 +1216,41 @@ impl Backend {
             )
             .map(|(word, _)| word)
         });
-        let symbol = position_symbol.or(explicit_symbol.clone())?;
+        let symbol = explicit_symbol.clone().or(position_symbol)?;
         let preferred_source = *self.docs_preferred_source.read().await;
-        let mut record = if let Some(context) = &position_context {
+        let record = if let Some(context) = &position_context {
             let index = self.index.read().await;
-            documentation_record_for_source_position(
-                &index,
-                &context.path,
-                &context.text,
-                context.position,
-            )
+            if let Some(selected) = &explicit_symbol {
+                index
+                    .query_source_symbol(
+                        &context.path,
+                        &context.text,
+                        selected,
+                        None,
+                        None,
+                        Vec::new(),
+                    )
+                    .documentation
+            } else {
+                documentation_record_for_source_position(
+                    &index,
+                    &context.path,
+                    &context.text,
+                    context.position,
+                )
+            }
         } else {
             None
         };
-        if record.is_none() {
-            record = self
-                .documentation_record_for_symbol(&symbol, preferred_source)
-                .await;
-        }
-        let record = record?;
+        // Resolve imported aliases using the indexed name while preserving the
+        // position-specific documentation as the static fallback.
+        let lookup_symbol = record
+            .as_ref()
+            .map_or(symbol.as_str(), |record| record.name.as_str())
+            .to_string();
+        let record = self
+            .documentation_record_for_symbol(&lookup_symbol, preferred_source, record)
+            .await?;
         Some(json!({
             "name": record.name,
             "moduleName": record.module_name,
@@ -1330,8 +1352,12 @@ impl Backend {
         &self,
         symbol: &str,
         preferred_source: DocumentationPreferredSource,
+        source_record: Option<DocumentationRecord>,
     ) -> Option<DocumentationRecord> {
-        let static_record = self.index.read().await.documentation_for_symbol(symbol);
+        let static_record = match source_record {
+            Some(record) => Some(record),
+            None => self.index.read().await.documentation_for_symbol(symbol),
+        };
         match preferred_source {
             DocumentationPreferredSource::Runtime => {
                 if let Some(runtime_record) = self.runtime_docs.lookup(symbol).await {
@@ -1379,6 +1405,15 @@ impl Backend {
         let record = self.runtime_docs.cached(symbol);
         if record.is_none() {
             self.runtime_docs.prefetch(symbol);
+            if let Some(placeholder) = query
+                .documentation
+                .as_ref()
+                .filter(|record| is_runtime_placeholder_documentation(record))
+            {
+                let mut pending = placeholder.clone();
+                pending.docstring = Some(self.runtime_docs.hover_status_message());
+                return Some(pending);
+            }
         }
         record
     }
