@@ -22,9 +22,10 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
-    DocumentChanges, Location, OneOf, OptionalVersionedTextDocumentIdentifier, Position,
-    PrepareRenameResponse, Range, ReferenceParams, RenameParams, TextDocumentEdit,
-    TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
+    DocumentChanges, DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams, Location,
+    OneOf, OptionalVersionedTextDocumentIdentifier, Position, PrepareRenameResponse, Range,
+    ReferenceParams, RenameParams, TextDocumentEdit, TextDocumentPositionParams, TextEdit, Url,
+    WorkspaceEdit,
 };
 
 #[derive(Clone, Debug)]
@@ -54,6 +55,74 @@ pub(super) struct ResolvedReferenceTarget {
 }
 
 impl Backend {
+    pub(super) async fn document_highlight_response(
+        &self,
+        params: DocumentHighlightParams,
+    ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let uri = &params.text_document_position_params.text_document.uri;
+        let Some(document) = self.document_for_uri(uri).await else {
+            return Ok(Some(Vec::new()));
+        };
+        let Some(path) = uri_to_path(uri) else {
+            return Ok(Some(Vec::new()));
+        };
+        let Some((word, target_range)) = word_at_position(
+            &document.text,
+            params.text_document_position_params.position,
+        ) else {
+            return Ok(Some(Vec::new()));
+        };
+        if !is_valid_identifier(&word)
+            || !is_code_reference_range(&document.text, &word, target_range)
+        {
+            return Ok(Some(Vec::new()));
+        }
+        if let Some(target_position) = source_range_from_lsp(&document.text, target_range) {
+            if let Some(ranges) = sage_index::local_document_highlight_ranges(
+                &document.text,
+                &word,
+                target_position.start_line,
+                target_position.start_character,
+            ) {
+                return Ok(Some(
+                    ranges
+                        .into_iter()
+                        .map(|range| DocumentHighlight {
+                            range: lsp_range_for_text(&document.text, &range),
+                            kind: Some(DocumentHighlightKind::TEXT),
+                        })
+                        .collect(),
+                ));
+            }
+        }
+        let Some(target) = self
+            .resolved_reference_target_at(uri, params.text_document_position_params.position)
+            .await
+        else {
+            return Ok(Some(Vec::new()));
+        };
+        let index = self.index.read().await;
+        let parsed = index.parse_source_for_query(&path, &document.text);
+        let highlights = sage_index::references_in_source(&path, &document.text, &target.word)
+            .into_iter()
+            .filter(|reference| {
+                reference_candidate_matches_target_with_symbols(
+                    &index,
+                    &path,
+                    &document.text,
+                    &reference.range,
+                    &target,
+                    Some(&parsed.symbols),
+                )
+            })
+            .map(|reference| DocumentHighlight {
+                range: lsp_range_for_text(&document.text, &reference.range),
+                kind: Some(DocumentHighlightKind::TEXT),
+            })
+            .collect();
+        Ok(Some(highlights))
+    }
+
     pub(super) async fn references_response(
         &self,
         params: ReferenceParams,
@@ -79,7 +148,11 @@ impl Backend {
         &self,
         params: RenameParams,
     ) -> Result<Option<WorkspaceEdit>> {
-        let versions_before: HashMap<Url, i32> = self.open_documents.read().await.iter()
+        let versions_before: HashMap<Url, i32> = self
+            .open_documents
+            .read()
+            .await
+            .iter()
             .map(|(uri, document)| (uri.clone(), document.version))
             .collect();
         let uri = &params.text_document_position.text_document.uri;
@@ -119,17 +192,21 @@ impl Backend {
         if *self.versioned_workspace_edits.read().await {
             let documents = self.open_documents.read().await;
             if changes.keys().any(|uri| {
-                documents.get(uri).map(|document| document.version) != versions_before.get(uri).copied()
+                documents.get(uri).map(|document| document.version)
+                    != versions_before.get(uri).copied()
             }) {
                 return Ok(None);
             }
-            let edits = changes.into_iter().map(|(uri, edits)| {
-                let version = documents.get(&uri).map(|document| document.version);
-                TextDocumentEdit {
-                    text_document: OptionalVersionedTextDocumentIdentifier { uri, version },
-                    edits: edits.into_iter().map(OneOf::Left).collect(),
-                }
-            }).collect();
+            let edits = changes
+                .into_iter()
+                .map(|(uri, edits)| {
+                    let version = documents.get(&uri).map(|document| document.version);
+                    TextDocumentEdit {
+                        text_document: OptionalVersionedTextDocumentIdentifier { uri, version },
+                        edits: edits.into_iter().map(OneOf::Left).collect(),
+                    }
+                })
+                .collect();
             Ok(Some(WorkspaceEdit {
                 changes: None,
                 document_changes: Some(DocumentChanges::Edits(edits)),
@@ -158,7 +235,9 @@ impl Backend {
         let index = self.index.read().await;
         let parsed = index.parse_source_for_query(&target.definition.path, &text);
         let target_line = target.declaration.range.start.line as usize;
-        let target_indent = text.lines().nth(target_line)
+        let target_indent = text
+            .lines()
+            .nth(target_line)
             .map(|line| line.len() - line.trim_start().len());
         if target_indent != Some(0) {
             return false;
@@ -166,7 +245,9 @@ impl Backend {
         parsed.symbols.iter().any(|symbol| {
             symbol.name == new_name
                 && symbol.range.start_line != target.declaration.range.start.line
-                && text.lines().nth(symbol.range.start_line as usize)
+                && text
+                    .lines()
+                    .nth(symbol.range.start_line as usize)
                     .is_some_and(|line| line.len() == line.trim_start().len())
         })
     }

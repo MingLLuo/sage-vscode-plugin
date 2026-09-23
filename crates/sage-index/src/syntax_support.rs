@@ -194,7 +194,10 @@ pub(super) fn assignment_re() -> &'static Regex {
 pub(super) fn semantic_assignment_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?m)^\s*(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*(?::[^=\n]+)?=\s*[^=\n]").unwrap()
+        Regex::new(
+            r"(?m)^\s*(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*(?::[^=\n]+)?=\s*[^=\n]",
+        )
+        .unwrap()
     })
 }
 
@@ -246,7 +249,10 @@ pub(super) fn member_alias_assignment_re() -> &'static Regex {
 
 pub(super) fn member_reference_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[\p{XID_Start}_][\p{XID_Continue}_]*\.[\p{XID_Start}_][\p{XID_Continue}_]*$").unwrap())
+    RE.get_or_init(|| {
+        Regex::new(r"^[\p{XID_Start}_][\p{XID_Continue}_]*\.[\p{XID_Start}_][\p{XID_Continue}_]*$")
+            .unwrap()
+    })
 }
 
 pub(super) fn deprecated_function_alias_re() -> &'static Regex {
@@ -278,7 +284,7 @@ pub(super) fn word_re() -> &'static Regex {
 
 pub(super) fn decorator_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?m)^\s*@(?P<name>[A-Za-z_][A-Za-z0-9_\.]*)").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?m)^\s*@(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*(?:\.[\p{XID_Start}_][\p{XID_Continue}_]*)*)").unwrap())
 }
 
 pub(super) fn matrix_method_name_override_re() -> &'static Regex {

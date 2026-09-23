@@ -893,43 +893,6 @@ fn import_modules_for_prewarm_extracts_local_targets() {
 }
 
 #[test]
-fn document_highlights_cover_code_references_only() {
-    let path = PathBuf::from("/workspace/demo.sage");
-    let source = [
-        "def kernel_columns(A):",
-        "    return A",
-        "N = kernel_columns(M)",
-        "text = 'kernel_columns(M)'",
-        "# kernel_columns(comment)",
-        "K = kernel_columns(N)",
-    ]
-    .join("\n");
-    let highlights = document_highlights_for_source(
-        &path,
-        &source,
-        "kernel_columns",
-        Range::new(Position::new(0, 4), Position::new(0, 18)),
-    );
-
-    assert_eq!(highlights.len(), 3);
-    assert_eq!(
-        highlights
-            .iter()
-            .map(|highlight| highlight.range.start.line)
-            .collect::<Vec<_>>(),
-        vec![0, 2, 5]
-    );
-    assert!(highlights
-        .iter()
-        .all(|highlight| highlight.kind == Some(DocumentHighlightKind::TEXT)));
-
-    let comment_range = Range::new(Position::new(4, 2), Position::new(4, 16));
-    assert!(
-        document_highlights_for_source(&path, &source, "kernel_columns", comment_range,).is_empty()
-    );
-}
-
-#[test]
 fn signature_information_extracts_parameter_offsets() {
     let label = "trace_window(poly, base_ring=QQ, *, width=5, normalize=True)".to_string();
     let info = signature_information(label.clone(), Some("docs".to_string()), 1);

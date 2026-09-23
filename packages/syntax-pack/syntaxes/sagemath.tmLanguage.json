@@ -95,11 +95,11 @@
         },
         {
           "name": "support.function.decorator.cython.sagemath",
-          "match": "^\\s*(@cython\\.[A-Za-z_][A-Za-z0-9_]*)\\b"
+          "match": "^\\s*(@cython\\.[\\p{XID_Start}_][\\p{XID_Continue}_]*)\\b"
         },
         {
           "name": "meta.annotation.sagemath",
-          "match": "^\\s*(@[A-Za-z_][A-Za-z0-9_\\.]*)"
+          "match": "^\\s*(@[\\p{XID_Start}_][\\p{XID_Continue}_\\.]*)"
         }
       ]
     },
@@ -119,7 +119,7 @@
       "patterns": [
         {
           "name": "meta.assignment.preparse.sagemath",
-          "begin": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(\\.)(\\<)",
+          "begin": "\\b([\\p{XID_Start}_][\\p{XID_Continue}_]*)\\b(\\.)(\\<)",
           "beginCaptures": {
             "1": { "name": "variable.other.readwrite.sagemath" },
             "2": { "name": "punctuation.accessor.dot.sagemath" },
@@ -133,7 +133,7 @@
           "patterns": [
             {
               "name": "variable.parameter.preparse.generator.sagemath",
-              "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b"
+              "match": "\\b[\\p{XID_Start}_][\\p{XID_Continue}_]*\\b"
             },
             {
               "name": "punctuation.separator.generator.sagemath",
@@ -147,7 +147,7 @@
       "patterns": [
         {
           "name": "meta.assignment.factory.sagemath",
-          "match": "\\b([A-Za-z_][A-Za-z0-9_]*)\\b(\\s*=\\s*)([A-Z][A-Za-z0-9_]*Factory)(\\s*\\()",
+          "match": "\\b([\\p{XID_Start}_][\\p{XID_Continue}_]*)\\b(\\s*=\\s*)([A-Z][\\p{XID_Continue}_]*Factory)(\\s*\\()",
           "captures": {
             "1": { "name": "variable.other.constant.sagemath" },
             "2": { "name": "keyword.operator.assignment.sagemath" },
@@ -161,7 +161,7 @@
       "patterns": [
         {
           "name": "meta.assignment.variable.sagemath",
-          "match": "^(\\s*)([A-Za-z_][A-Za-z0-9_]*)(\\s*)(?:(:)(\\s*[^=\\n]+?)\\s*)?(=)(?!=)",
+          "match": "^(\\s*)([\\p{XID_Start}_][\\p{XID_Continue}_]*)(\\s*)(?:(:)(\\s*[^=\\n]+?)\\s*)?(=)(?!=)",
           "captures": {
             "2": { "name": "variable.other.assignment.sagemath" },
             "4": { "name": "punctuation.separator.annotation.sagemath" },
@@ -175,7 +175,7 @@
       "patterns": [
         {
           "name": "meta.argument.keyword.sagemath",
-          "match": "([\\(,]\\s*)([A-Za-z_][A-Za-z0-9_]*)(\\s*=)(?!=)",
+          "match": "([\\(,]\\s*)([\\p{XID_Start}_][\\p{XID_Continue}_]*)(\\s*=)(?!=)",
           "captures": {
             "1": { "name": "punctuation.separator.argument.sagemath" },
             "2": { "name": "variable.parameter.keyword.sagemath" },
@@ -188,7 +188,7 @@
       "patterns": [
         {
           "name": "meta.class.definition.sagemath",
-          "match": "^(\\s*)(class|cdef\\s+class|cpdef\\s+class)(\\s+)([A-Za-z_][A-Za-z0-9_]*)",
+          "match": "^(\\s*)(class|cdef\\s+class|cpdef\\s+class)(\\s+)([\\p{XID_Start}_][\\p{XID_Continue}_]*)",
           "captures": {
             "2": { "name": "keyword.declaration.class.sagemath" },
             "4": { "name": "entity.name.type.class.sagemath" }
@@ -196,7 +196,7 @@
         },
         {
           "name": "meta.function.definition.sagemath",
-          "match": "^(\\s*)(?:async\\s+def|def|cpdef|cdef)(?:\\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed|long|short|char|int|float|double|void|object|bint|size_t|Py_ssize_t|[A-Za-z_][A-Za-z0-9_\\.\\*\\[\\]]*))*\\s+([A-Za-z_][A-Za-z0-9_]*)(\\s*\\()",
+          "match": "^(\\s*)(?:async\\s+def|def|cpdef|cdef)(?:\\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed|long|short|char|int|float|double|void|object|bint|size_t|Py_ssize_t|[\\p{XID_Start}_][\\p{XID_Continue}_\\.\\*\\[\\]]*))*\\s+([\\p{XID_Start}_][\\p{XID_Continue}_]*)(\\s*\\()",
           "captures": {
             "2": { "name": "entity.name.function.sagemath" },
             "3": { "name": "punctuation.definition.parameters.begin.sagemath" }
@@ -236,7 +236,7 @@
         },
         {
           "name": "meta.typed-variable.cython.sagemath",
-          "match": "\\b(bint|char|short|int|long|float|double|void|object|size_t|Py_ssize_t|mpz_t|mpq_t|mpfr_t|cppclass|[A-Za-z_][A-Za-z0-9_\\.]*)(\\s+)([A-Za-z_][A-Za-z0-9_]*)\\b(?=\\s*(?:=|,|\\)|:|$))",
+          "match": "\\b(bint|char|short|int|long|float|double|void|object|size_t|Py_ssize_t|mpz_t|mpq_t|mpfr_t|cppclass|[\\p{XID_Start}_][\\p{XID_Continue}_\\.]*)(\\s+)([\\p{XID_Start}_][\\p{XID_Continue}_]*)\\b(?=\\s*(?:=|,|\\)|:|$))",
           "captures": {
             "1": { "name": "storage.type.cython.sagemath" },
             "3": { "name": "variable.other.typed.cython.sagemath" }
@@ -244,7 +244,7 @@
         },
         {
           "name": "meta.return-type.cython.sagemath",
-          "match": "\\b(cpdef|cdef)(?:\\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed))*\\s+([A-Za-z_][A-Za-z0-9_\\.\\*\\[\\]]+)(\\s+)([A-Za-z_][A-Za-z0-9_]*)(\\s*\\()",
+          "match": "\\b(cpdef|cdef)(?:\\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed))*\\s+([\\p{XID_Start}_][\\p{XID_Continue}_\\.\\*\\[\\]]+)(\\s+)([\\p{XID_Start}_][\\p{XID_Continue}_]*)(\\s*\\()",
           "captures": {
             "1": { "name": "keyword.declaration.cython.sagemath" },
             "2": { "name": "storage.type.cython.sagemath" },
@@ -366,7 +366,7 @@
       "patterns": [
         {
           "name": "meta.method-call.sagemath",
-          "match": "(\\.)([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+          "match": "(\\.)([\\p{XID_Start}_][\\p{XID_Continue}_]*)(?=\\s*\\()",
           "captures": {
             "1": { "name": "punctuation.accessor.dot.sagemath" },
             "2": { "name": "support.function.method.sagemath" }
@@ -374,7 +374,7 @@
         },
         {
           "name": "support.function.call.sagemath",
-          "match": "\\b[a-z_][A-Za-z0-9_]*(?=\\s*\\()"
+          "match": "\\b[\\p{XID_Start}_][\\p{XID_Continue}_]*(?=\\s*\\()"
         }
       ]
     },

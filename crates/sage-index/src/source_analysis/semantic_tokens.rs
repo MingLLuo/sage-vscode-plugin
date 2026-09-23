@@ -3,6 +3,10 @@ use super::*;
 pub fn semantic_spans(source: &str) -> Vec<SemanticSpan> {
     let mut spans = Vec::new();
     let code_map = CodeMap::new(source);
+    let scopes = LexicalScopeMap::new(source);
+    let lines: Vec<&str> = source.lines().collect();
+    let mut module_bindings: HashMap<&str, Vec<u32>> = HashMap::new();
+    let mut function_bindings: HashMap<(u32, &str), bool> = HashMap::new();
     for re in [class_re(), function_re()] {
         for captures in re.captures_iter(source) {
             if let Some(name) = captures.name("name") {
@@ -89,7 +93,20 @@ pub fn semantic_spans(source: &str) -> Vec<SemanticSpan> {
                 start: character,
                 length: name.as_str().len() as u32,
                 token_type: "decorator".to_string(),
-                modifiers: vec!["defaultLibrary".to_string()],
+                modifiers: if is_known_sage_decorator(name.as_str())
+                    && !is_shadowed_name(
+                        name.as_str(),
+                        line,
+                        source,
+                        &lines,
+                        &scopes,
+                        &mut module_bindings,
+                        &mut function_bindings,
+                    ) {
+                    vec!["defaultLibrary".to_string()]
+                } else {
+                    Vec::new()
+                },
             });
         }
     }
@@ -104,6 +121,7 @@ pub fn semantic_spans(source: &str) -> Vec<SemanticSpan> {
             continue;
         }
         let token = name.as_str();
+        let (line, character) = code_map.line_col(name.start());
         let token_type = if SAGE_NAMESPACES.contains(&token) {
             "namespace"
         } else if SAGE_TYPES.contains(&token) {
@@ -115,7 +133,17 @@ pub fn semantic_spans(source: &str) -> Vec<SemanticSpan> {
         } else {
             continue;
         };
-        let (line, character) = code_map.line_col(name.start());
+        if is_shadowed_name(
+            token,
+            line,
+            source,
+            &lines,
+            &scopes,
+            &mut module_bindings,
+            &mut function_bindings,
+        ) {
+            continue;
+        }
         let modifiers = if SAGE_READONLY.contains(&token) {
             vec!["readonly".to_string(), "defaultLibrary".to_string()]
         } else {
@@ -150,4 +178,77 @@ pub fn semantic_spans(source: &str) -> Vec<SemanticSpan> {
         filtered.push(span);
     }
     filtered
+}
+
+fn is_known_sage_decorator(name: &str) -> bool {
+    matches!(
+        name,
+        "interact"
+            | "interact_manual"
+            | "cached_method"
+            | "cached_function"
+            | "cached_in_parent_method"
+            | "cached_property"
+            | "lazy_attribute"
+    )
+}
+
+fn is_shadowed_name<'a>(
+    name: &'a str,
+    line: u32,
+    source: &str,
+    lines: &[&str],
+    scopes: &LexicalScopeMap,
+    module_bindings: &mut HashMap<&'a str, Vec<u32>>,
+    function_bindings: &mut HashMap<(u32, &'a str), bool>,
+) -> bool {
+    if scopes.is_function_parameter_at_header(line, name) {
+        return true;
+    }
+    if scopes
+        .enclosing_function_lines(line)
+        .into_iter()
+        .any(|function_line| {
+            *function_bindings
+                .entry((function_line, name))
+                .or_insert_with(|| {
+                    scopes.function_statically_binds_name(source, function_line, name)
+                        && (scopes.is_function_parameter_at_header(function_line, name)
+                            || lines.iter().enumerate().any(|(line_number, source_line)| {
+                                let trimmed = source_line.trim_start();
+                                scopes.is_code_line(line_number as u32)
+                                    && scopes.is_direct_function_body_line(
+                                        line_number as u32,
+                                        function_line,
+                                    )
+                                    && line_rebinds_name(trimmed, name)
+                                    && !is_sage_import_binding(trimmed)
+                            }))
+                })
+        })
+    {
+        return true;
+    }
+    module_bindings
+        .entry(name)
+        .or_insert_with(|| {
+            lines
+                .iter()
+                .enumerate()
+                .filter_map(|(line_number, source_line)| {
+                    let trimmed = source_line.trim_start();
+                    (scopes.is_code_line(line_number as u32)
+                        && scopes.is_module_scope_line(line_number as u32)
+                        && line_rebinds_name(trimmed, name)
+                        && !is_sage_import_binding(trimmed))
+                    .then_some(line_number as u32)
+                })
+                .collect()
+        })
+        .iter()
+        .any(|binding_line| *binding_line <= line)
+}
+
+fn is_sage_import_binding(line: &str) -> bool {
+    line.starts_with("from sage.") || line.starts_with("from sage import ")
 }

@@ -9,7 +9,9 @@
   },
   "devDependencies": {
     "pako": "1.0.11",
-    "semver": "^7.8.5"
+    "semver": "^7.8.5",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   },
   "workspaces": [
     "packages/extension-core",
@@ -48,6 +50,7 @@
     "test:lsp-shutdown": "npm run build:rust && node scripts/lsp-shutdown-smoke.mjs",
     "test:lsp-protocol": "npm run build:rust && node scripts/lsp-navigation-smoke.mjs && node scripts/lsp-shutdown-smoke.mjs",
     "test:lsp-unicode-rename": "npm run build:rust && node scripts/lsp-unicode-rename-smoke.mjs",
+    "test:lsp-highlighting": "npm run build:rust && node scripts/lsp-highlighting-smoke.mjs",
     "test:lsp-latency": "npm run build:rust:release && node scripts/lsp-latency-smoke.mjs --profile release",
     "test:native-smoke": "PYTHONPATH=packages/sage-lsp/src python scripts/native_sage_smoke.py",
     "test:performance": "node scripts/performance-smoke.mjs",
@@ -58,8 +61,8 @@
     "test:vsix-package": "node scripts/vsix-package-smoke.mjs",
     "test:vsix-install": "node scripts/vsix-install-smoke.mjs",
     "test:extension-host": "npm run build:rust && npm run test:extension-host --workspace sage-vscode-extension",
-    "test:ci": "cargo test --locked && cargo clippy --locked --all-targets --all-features -- -D warnings && npm run lint && npm run build && npm run test && npm run test:debug-web:sage && npm run test:lsp-protocol && npm run test:lsp-unicode-rename && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && npm run test:vsix-package && npm run test:cache-maintenance && npm run test:repo-hygiene && npm run test:product-readiness && npm run test:reference-export && npm run test:performance -- --skip-workbench && git diff --check",
-    "test:release": "cargo test --locked && cargo clippy --locked --all-targets --all-features -- -D warnings && npm run lint && npm run test && npm run test:debug-web:sage && npm run test:lsp-protocol && npm run test:lsp-unicode-rename && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && npm run test:vsix-package && npm run test:vsix-install && npm run test:cache-maintenance && npm run test:repo-hygiene && npm run test:product-readiness && npm run test:reference-export && npm run test:performance -- --skip-workbench && npm run test:lsp-latency && npm run test:real-file-smoke && git diff --check",
+    "test:ci": "cargo test --locked && cargo clippy --locked --all-targets --all-features -- -D warnings && npm run lint && npm run build && npm run test && npm run test:debug-web:sage && npm run test:lsp-protocol && npm run test:lsp-unicode-rename && npm run test:lsp-highlighting && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && npm run test:vsix-package && npm run test:cache-maintenance && npm run test:repo-hygiene && npm run test:product-readiness && npm run test:reference-export && npm run test:performance -- --skip-workbench && git diff --check",
+    "test:release": "cargo test --locked && cargo clippy --locked --all-targets --all-features -- -D warnings && npm run lint && npm run test && npm run test:debug-web:sage && npm run test:lsp-protocol && npm run test:lsp-unicode-rename && npm run test:lsp-highlighting && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && npm run test:vsix-package && npm run test:vsix-install && npm run test:cache-maintenance && npm run test:repo-hygiene && npm run test:product-readiness && npm run test:reference-export && npm run test:performance -- --skip-workbench && npm run test:lsp-latency && npm run test:real-file-smoke && git diff --check",
     "test:full": "npm run test:release && npm run test:extension-host",
     "test:python": "PYTHONPATH=packages/sage-lsp/src python -m pytest packages/sage-lsp/tests"
   }

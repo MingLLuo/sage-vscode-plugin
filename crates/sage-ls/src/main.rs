@@ -82,7 +82,7 @@ use source_symbols::{document_symbols_for_source, module_name_for_path};
 #[cfg(test)]
 use std::collections::BTreeSet;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -702,25 +702,7 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>> {
-        let uri = &params.text_document_position_params.text_document.uri;
-        let Some(document) = self.document_for_uri(uri).await else {
-            return Ok(Some(Vec::new()));
-        };
-        let Some(path) = uri_to_path(uri) else {
-            return Ok(Some(Vec::new()));
-        };
-        let Some((word, range)) = word_at_position(
-            &document.text,
-            params.text_document_position_params.position,
-        ) else {
-            return Ok(Some(Vec::new()));
-        };
-        Ok(Some(document_highlights_for_source(
-            &path,
-            &document.text,
-            &word,
-            range,
-        )))
+        self.document_highlight_response(params).await
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
@@ -1544,28 +1526,6 @@ fn code_actions_for_diagnostics(uri: Url, diagnostics: &[Diagnostic]) -> CodeAct
         }));
     }
     actions
-}
-
-fn document_highlights_for_source(
-    path: &Path,
-    text: &str,
-    word: &str,
-    target_range: Range,
-) -> Vec<DocumentHighlight> {
-    let references = sage_index::references_in_source(path, text, word);
-    if !references
-        .iter()
-        .any(|reference| lsp_range_for_text(text, &reference.range) == target_range)
-    {
-        return Vec::new();
-    }
-    references
-        .into_iter()
-        .map(|reference| DocumentHighlight {
-            range: lsp_range_for_text(text, &reference.range),
-            kind: Some(DocumentHighlightKind::TEXT),
-        })
-        .collect()
 }
 
 fn may_fallback_to_enclosing_call_hierarchy(text: &str, position: Position) -> bool {

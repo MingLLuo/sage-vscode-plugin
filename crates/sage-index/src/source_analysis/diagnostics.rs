@@ -189,7 +189,8 @@ pub fn references_in_source(path: &Path, source: &str, name: &str) -> Vec<Refere
         .filter_map(|(start, _)| {
             let end = start + name.len();
             if !crate::identifiers::has_boundaries(source, start, end)
-                || !code_map.is_code_offset(start) {
+                || !code_map.is_code_offset(start)
+            {
                 return None;
             }
             let (line, character) = code_map.line_col(start);
@@ -204,6 +205,33 @@ pub fn references_in_source(path: &Path, source: &str, name: &str) -> Vec<Refere
             })
         })
         .collect()
+}
+
+/// Conservative source-local fallback for names bound inside a function. It keeps
+/// occurrences in sibling functions separate even when navigation cannot resolve
+/// a local variable to a high-confidence indexed symbol.
+pub fn local_document_highlight_ranges(
+    source: &str,
+    name: &str,
+    target_line: u32,
+    target_character: u32,
+) -> Option<Vec<SourceRange>> {
+    let scopes = LexicalScopeMap::new(source);
+    let owner = scopes.local_binding_function_line(source, target_line, target_character, name)?;
+    Some(
+        references_in_source(Path::new("document.py"), source, name)
+            .into_iter()
+            .filter(|reference| {
+                scopes.local_binding_function_line(
+                    source,
+                    reference.range.start_line,
+                    reference.range.start_character,
+                    name,
+                ) == Some(owner)
+            })
+            .map(|reference| reference.range)
+            .collect(),
+    )
 }
 
 pub(super) fn reference_spans_in_source(

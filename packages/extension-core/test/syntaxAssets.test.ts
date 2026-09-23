@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { INITIAL, Registry, parseRawGrammar, type IGrammar, type StateStack } from "vscode-textmate";
+import { loadWASM, OnigScanner, OnigString } from "vscode-oniguruma";
 
 type GrammarPattern = {
   begin?: string;
@@ -33,6 +35,65 @@ function flattenPatternText(patterns: GrammarPattern[]): string {
     ])
     .join("\n");
 }
+
+async function loadSageGrammar(): Promise<IGrammar> {
+  const wasm = fs.readFileSync(require.resolve("vscode-oniguruma/release/onig.wasm"));
+  await loadWASM(wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength));
+  const grammarSource = fs.readFileSync(
+    path.resolve(__dirname, "../../../syntax-pack/syntaxes/sagemath.tmLanguage.json"),
+    "utf-8",
+  );
+  const registry = new Registry({
+    onigLib: Promise.resolve({
+      createOnigScanner: (sources) => new OnigScanner(sources),
+      createOnigString: (source) => new OnigString(source),
+    }),
+    loadGrammar: async (scopeName) => scopeName === "source.sagemath"
+      ? parseRawGrammar(grammarSource, "sagemath.tmLanguage.json")
+      : null,
+  });
+  const grammar = await registry.loadGrammar("source.sagemath");
+  assert.ok(grammar);
+  return grammar;
+}
+
+function scopesForText(grammar: IGrammar, source: string, lineIndex: number, needle: string): string[] {
+  let state: StateStack = INITIAL;
+  const lines = source.split("\n");
+  for (let index = 0; index <= lineIndex; index += 1) {
+    const line = lines[index] ?? "";
+    const result = grammar.tokenizeLine(line, state);
+    state = result.ruleStack;
+    if (index === lineIndex) {
+      const offset = line.indexOf(needle);
+      assert.ok(offset >= 0, `missing ${needle} on line ${lineIndex}`);
+      const token = result.tokens.find((item) => item.startIndex <= offset && offset < item.endIndex);
+      assert.ok(token, `missing token for ${needle}`);
+      return token.scopes;
+    }
+  }
+  throw new Error(`missing line ${lineIndex}`);
+}
+
+test("TextMate tokenization recognizes Unicode Sage and Cython identifiers", async () => {
+  const grammar = await loadSageGrammar();
+  const source = [
+    "def 变量(数):",
+    "    return 数",
+    "R.<参数> = PolynomialRing(QQ)",
+    "结果 = 变量(参数)",
+    "cdef int 计数 = 1",
+    "# 变量(数)",
+    "text = '变量(数)'",
+  ].join("\n");
+  assert.ok(scopesForText(grammar, source, 0, "变量").includes("entity.name.function.sagemath"));
+  assert.ok(scopesForText(grammar, source, 2, "参数").includes("variable.parameter.preparse.generator.sagemath"));
+  assert.ok(scopesForText(grammar, source, 3, "结果").includes("variable.other.assignment.sagemath"));
+  assert.ok(scopesForText(grammar, source, 3, "变量").includes("support.function.call.sagemath"));
+  assert.ok(scopesForText(grammar, source, 4, "计数").includes("variable.other.typed.cython.sagemath"));
+  assert.ok(scopesForText(grammar, source, 5, "变量").some((scope) => scope.startsWith("comment.")));
+  assert.ok(scopesForText(grammar, source, 6, "变量").some((scope) => scope.startsWith("string.")));
+});
 
 test("syntax grammar highlights broad SageMath domains and operators", () => {
   const grammar = readJson("syntaxes/sagemath.tmLanguage.json") as {

@@ -14,12 +14,44 @@ pub fn is_identifier(value: &str) -> bool {
 }
 
 pub fn is_keyword(value: &str) -> bool {
-    matches!(value,
-        "False" | "None" | "True" | "and" | "as" | "assert" | "async" | "await"
-        | "break" | "class" | "continue" | "def" | "del" | "elif" | "else"
-        | "except" | "finally" | "for" | "from" | "global" | "if" | "import"
-        | "in" | "is" | "lambda" | "nonlocal" | "not" | "or" | "pass"
-        | "raise" | "return" | "try" | "while" | "with" | "yield")
+    matches!(
+        value,
+        "False"
+            | "None"
+            | "True"
+            | "and"
+            | "as"
+            | "assert"
+            | "async"
+            | "await"
+            | "break"
+            | "class"
+            | "continue"
+            | "def"
+            | "del"
+            | "elif"
+            | "else"
+            | "except"
+            | "finally"
+            | "for"
+            | "from"
+            | "global"
+            | "if"
+            | "import"
+            | "in"
+            | "is"
+            | "lambda"
+            | "nonlocal"
+            | "not"
+            | "or"
+            | "pass"
+            | "raise"
+            | "return"
+            | "try"
+            | "while"
+            | "with"
+            | "yield"
+    )
 }
 
 pub fn spans(source: &str) -> impl Iterator<Item = (usize, &str)> {
@@ -62,7 +94,10 @@ mod tests {
 
     #[test]
     fn unicode_spans_and_keyword_validation() {
-        assert_eq!(spans("量 = 变量 + 𝑥").collect::<Vec<_>>(), vec![(0, "量"), (6, "变量"), (15, "𝑥")]);
+        assert_eq!(
+            spans("量 = 变量 + 𝑥").collect::<Vec<_>>(),
+            vec![(0, "量"), (6, "变量"), (15, "𝑥")]
+        );
         assert!(is_identifier("变量"));
         assert!(!is_identifier("class"));
         assert!(!is_identifier("🙂"));

@@ -1,4 +1,5 @@
 use super::*;
+use std::path::Path;
 
 #[test]
 fn reference_candidates_are_scoped_to_the_resolved_definition() {

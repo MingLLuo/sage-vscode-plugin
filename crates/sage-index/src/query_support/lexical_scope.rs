@@ -199,6 +199,40 @@ impl LexicalScopeMap {
         self.code_lines.get(line as usize).copied().unwrap_or(false)
     }
 
+    pub(crate) fn is_module_scope_line(&self, line: u32) -> bool {
+        self.line_scopes
+            .get(line as usize)
+            .is_some_and(Vec::is_empty)
+    }
+
+    pub(crate) fn is_function_parameter_at_header(&self, line: u32, name: &str) -> bool {
+        self.function_parameters
+            .get(&line)
+            .is_some_and(|parameters| parameters.contains(name))
+    }
+
+    pub(crate) fn local_binding_function_line(
+        &self,
+        source: &str,
+        line: u32,
+        character: u32,
+        name: &str,
+    ) -> Option<u32> {
+        if self.is_function_parameter_at_header(line, name)
+            && source
+                .lines()
+                .nth(line as usize)
+                .and_then(|header| header.find('('))
+                .is_some_and(|open| character as usize > open)
+        {
+            return Some(line);
+        }
+        self.enclosing_function_lines(line)
+            .into_iter()
+            .rev()
+            .find(|function_line| self.function_statically_binds_name(source, *function_line, name))
+    }
+
     pub(crate) fn line_relation_to(
         &self,
         binding_line: u32,

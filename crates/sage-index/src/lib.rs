@@ -57,8 +57,9 @@ use symbol_support::*;
 use syntax_support::*;
 
 pub use source_analysis::{
-    collect_indexable_paths, is_code_reference_at_range, parse_file_for_roots, parse_source,
-    preprocess_sage_source, references_in_source, semantic_spans, CodeReferenceMap,
+    collect_indexable_paths, is_code_reference_at_range, local_document_highlight_ranges,
+    parse_file_for_roots, parse_source, preprocess_sage_source, references_in_source,
+    semantic_spans, CodeReferenceMap,
 };
 
 pub fn source_definition_header_end(source: &str, offset: usize) -> Option<usize> {

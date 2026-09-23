@@ -22,7 +22,10 @@ use import_capture::{
     capture_local_definition_alias_assignments, capture_static_member_aliases,
 };
 
-pub use diagnostics::{is_code_reference_at_range, references_in_source, CodeReferenceMap};
+pub use diagnostics::{
+    is_code_reference_at_range, local_document_highlight_ranges, references_in_source,
+    CodeReferenceMap,
+};
 pub use discovery::{collect_indexable_paths, parse_file_for_roots};
 pub use preprocessing::preprocess_sage_source;
 pub use semantic_tokens::semantic_spans;

@@ -214,3 +214,93 @@ fn semantic_spans_skip_strings_and_comments() {
         1
     );
 }
+
+#[test]
+fn semantic_spans_do_not_label_shadowed_names_as_sage_builtins() {
+    let source = "outside = plot(1)\ndef render(plot):\n    return plot(2)\n\ndef other():\n    plot = lambda x: x\n    return plot(3)\n\nplot = lambda x: x\nafter = plot(4)\n";
+    let spans = semantic_spans(source);
+    let library_plot_lines: Vec<_> = spans
+        .iter()
+        .filter(|span| {
+            span.token_type == "function"
+                && span
+                    .modifiers
+                    .iter()
+                    .any(|modifier| modifier == "defaultLibrary")
+        })
+        .map(|span| span.line)
+        .collect();
+    assert_eq!(library_plot_lines, vec![0]);
+}
+
+#[test]
+fn semantic_spans_distinguish_user_decorators_and_unicode_declarations() {
+    let source = "@自定义\ndef 变量():\n    return 1\n\n@cached_method\ndef 方法(self):\n    return 变量()\n";
+    let spans = semantic_spans(source);
+    assert!(spans.iter().any(|span| span.line == 0
+        && span.token_type == "decorator"
+        && span.length == "自定义".len() as u32
+        && span.modifiers.is_empty()));
+    assert!(spans.iter().any(|span| span.line == 1
+        && span.token_type == "function"
+        && span.length == "变量".len() as u32));
+    assert!(spans.iter().any(|span| span.line == 4
+        && span.token_type == "decorator"
+        && span
+            .modifiers
+            .iter()
+            .any(|modifier| modifier == "defaultLibrary")));
+}
+
+#[test]
+fn semantic_spans_keep_explicit_sage_imports_colored_as_library_names() {
+    let source = "from sage.all import QQ\nbase = QQ\n\ndef local():\n    from sage.all import QQ\n    return QQ\n\nfrom sage.misc.cachefunc import cached_method\n@cached_method\ndef cached(self):\n    return QQ\n";
+    let spans = semantic_spans(source);
+    for line in [1, 5, 10] {
+        assert!(
+            spans.iter().any(|span| span.line == line
+                && span.token_type == "variable"
+                && span
+                    .modifiers
+                    .iter()
+                    .any(|modifier| modifier == "defaultLibrary")),
+            "line {line}"
+        );
+    }
+    assert!(spans.iter().any(|span| span.line == 8
+        && span.token_type == "decorator"
+        && span
+            .modifiers
+            .iter()
+            .any(|modifier| modifier == "defaultLibrary")));
+}
+
+#[test]
+fn local_document_highlights_follow_the_function_binding() {
+    let source = "def first():\n    变量 = 1\n    return 变量\n\ndef second():\n    变量 = 2\n    return 变量\n# 变量\n";
+    let first = local_document_highlight_ranges(source, "变量", 2, 11).unwrap();
+    assert_eq!(
+        first
+            .iter()
+            .map(|range| range.start_line)
+            .collect::<Vec<_>>(),
+        vec![1, 2]
+    );
+    let second = local_document_highlight_ranges(source, "变量", 6, 11).unwrap();
+    assert_eq!(
+        second
+            .iter()
+            .map(|range| range.start_line)
+            .collect::<Vec<_>>(),
+        vec![5, 6]
+    );
+    assert!(local_document_highlight_ranges(source, "first", 0, 4).is_none());
+    let shared_name = "def plot(plot):\n    return plot\n";
+    assert!(local_document_highlight_ranges(shared_name, "plot", 0, 4).is_none());
+    assert_eq!(
+        local_document_highlight_ranges(shared_name, "plot", 0, 9)
+            .unwrap()
+            .len(),
+        2
+    );
+}
