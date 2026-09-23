@@ -56,14 +56,13 @@ export function registerStatusCommands(
     [],
     { timeoutMs: USER_STATUS_REQUEST_TIMEOUT_MS, label },
   );
-  const showStatusReport = (title: string, report: string, notification: string): void => {
+  const showStatusReport = (title: string, report: string): void => {
     const folder = dependencies.activeProjectFolder();
     const label = (vscode.workspace.workspaceFolders?.length ?? 0) > 1 && folder ? ` [${folder.name}]` : "";
     dependencies.outputChannel.appendLine(`## ${title}${label}`);
     dependencies.outputChannel.appendLine(report);
     dependencies.outputChannel.appendLine("");
     dependencies.outputChannel.show(true);
-    void vscode.window.showInformationMessage(notification);
   };
   const reportRequestFailure = async (action: string, error: unknown): Promise<void> => {
     dependencies.logger.warn("status", `${action} failed`, { error: String(error) });
@@ -104,7 +103,6 @@ export function registerStatusCommands(
       showStatusReport(
         "Sage Environment Details",
         formatEnvironmentDetails(dependencies.buildEnvironmentPresentationInput()),
-        "Sage environment details written to the Sage output channel.",
       );
     }),
     vscode.commands.registerCommand("sage.showIndexStatus", async () => {
@@ -128,7 +126,6 @@ export function registerStatusCommands(
       showStatusReport(
         "Sage Index Status",
         formatIndexStatusReport(status),
-        "Sage index status written to the Sage output channel.",
       );
       return status;
     }),
@@ -153,7 +150,6 @@ export function registerStatusCommands(
       showStatusReport(
         "Sage Documentation Status",
         formatDocsStatusReport(status),
-        "Sage documentation status written to the Sage output channel.",
       );
     }),
     vscode.commands.registerCommand("sage.copySupportBundle", async () => {

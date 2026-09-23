@@ -7,7 +7,7 @@ Use this path when you want to try the extension quickly from this repository:
 ```bash
 npm ci
 npm run package:vsix
-npm run configure:workspace -- --workspace /path/to/your/project --profile auto
+npm run doctor:mac
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
 
@@ -16,13 +16,13 @@ Node 22 CI/development baseline without rejecting newer supported releases; `rus
 Rust compiler automatically. The packaging check also validates the selected Node/npm pair against npm's own engine
 declaration.
 
-Open your Sage workspace in VS Code, then run:
+Open a trusted local folder with a `.sage` file, hover a symbol or use Go to Definition, then run **Sage: Run Current
+File**. The packaged language server and nearby Sage source roots are discovered automatically. The Sage status bar
+item reports startup and indexing; click it for details when a feature does not become ready.
 
-1. `Sage: Open Getting Started`
-2. `Sage: Select Interpreter`
-3. `Sage: Configure Workspace`
-4. `Sage: Show Environment Details`
-5. `Sage: Show Index Status`
+Run **Sage: Select Interpreter** only when Sage was not found or the wrong runtime was selected. Run **Sage: Configure
+Workspace** only when you need Sage analysis for `.py` files or a Cython/mixed profile. You can instead configure before
+opening VS Code with `npm run configure:workspace -- --workspace /path/to/project --profile auto`.
 
 For Sage-heavy `.py` files, choose the `Sage-heavy Python workspace` profile. For mixed `.sage`, `.py`, and Cython
 projects, choose `Full Sage research workspace`.
@@ -125,13 +125,12 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
   Controls the Rust `sage-ls` executable. `auto` prefers `SAGE_LS_PATH`, local `target/debug/sage-ls`, local
   `target/release/sage-ls`, then `sage-ls` on `PATH`.
 - `Sage: Select Interpreter`
-  Presents environment-first choices before the advanced path actions. The main built-in profiles are:
+  Presents environment-first choices before advanced path actions. The main choices are `Local Sage development
+  environment` for a nearby checkout and `System Sage (stable)` for an installed executable.
 - `Sage: Configure Workspace`
   Writes a small workspace profile for standard Sage, Sage-heavy Python, native Cython, or mixed research projects.
   The command keeps `sage.languageServer.rustPath = auto` so future local rebuilds or packaged server updates are picked
   up without rewriting the workspace by hand.
-  `Local Sage development environment` for a nearby checkout, and `System Sage (stable)` for an installed standalone
-  Sage executable.
 - `sage.analysis.sourceRoots`
   When set, these roots seed the project index. The extension then supplements them with nearby Sage checkouts and
   roots inferred from the selected interpreter.

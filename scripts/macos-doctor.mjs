@@ -163,8 +163,6 @@ function nextCommands() {
   if (fs.existsSync(vsixPath)) {
     commands.push(`code --install-extension ${path.relative(repositoryRoot, vsixPath)} --force`);
   }
-  commands.push("Sage: Open Getting Started");
-  commands.push("Sage: Run UX Self Check");
   return commands;
 }
 

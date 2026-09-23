@@ -19,19 +19,19 @@ runtime compatible. CI packages on macOS with Node.js 26 and npm 12. Rust remain
 npm ci
 npm run package:vsix
 npm run doctor:mac
-npm run configure:workspace -- --workspace /path/to/your/project --profile auto
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
 
-Then open a Sage workspace in VS Code and run:
+Open a trusted local folder containing a `.sage` file and edit it. The packaged language server and nearby Sage source
+roots are discovered automatically. Use **Run Current File** from the Sage command palette or editor title to run it.
+If Sage is not found, run **Sage: Select Interpreter** once and choose its executable. The status bar shows startup and
+indexing progress; click it for environment details if a feature does not become ready.
 
-1. `Sage: Open Getting Started`
-2. `Sage: Select Interpreter`
-3. `Sage: Configure Workspace`
-4. `Sage: Show Index Status`
+For Sage-heavy Python projects, run **Sage: Configure Workspace** and choose **Sage-heavy Python workspace**. This
+enables Sage analysis for `.py` files. To configure a workspace before opening VS Code, use
+`npm run configure:workspace -- --workspace /path/to/project --profile auto` instead of the editor command.
 
-For Sage-heavy Python projects, enable Sage analysis for `.py` files through `Sage: Configure Workspace` or this
-workspace setting:
+Only set paths manually when discovery selects the wrong environment:
 
 ```json
 {

@@ -8,8 +8,14 @@ import { resolveVSCodeExecutablePath } from "./vscodeExecutable";
 
 async function main(): Promise<void> {
   const repositoryRoot = path.resolve(__dirname, "../../../..");
-  const extensionDevelopmentPath = path.join(repositoryRoot, "packages/extension-core");
+  const extensionDevelopmentPath = process.env.SAGE_TEST_EXTENSION_PATH
+    ?? path.join(repositoryRoot, "packages/extension-core");
+  const builtTestsPath = path.join(repositoryRoot, "packages/extension-core", "out", "test-host", "smoke.js");
   const extensionTestsPath = path.join(extensionDevelopmentPath, "out", "test-host", "smoke.js");
+  if (extensionTestsPath !== builtTestsPath) {
+    await fs.mkdir(path.dirname(extensionTestsPath), { recursive: true });
+    await fs.copyFile(builtTestsPath, extensionTestsPath);
+  }
   const vscodeExecutablePath = await resolveVSCodeExecutablePath({
     override: process.env.SAGE_TEST_VSCODE_EXECUTABLE,
   });
@@ -18,10 +24,21 @@ async function main(): Promise<void> {
   const smokeWorkspacePath = await cloneSmokeWorkspace(repositoryRoot, tempRoot);
   const externalSageSourceRoot = await createExternalSageSourceRoot(tempRoot);
   const plainPythonWorkspacePath = await createPlainPythonWorkspace(tempRoot);
+  const firstRunWorkspacePath = await createFirstRunWorkspace(tempRoot);
   const multiRootWorkspacePath = await createMultiRootWorkspace(tempRoot);
   let completedSuccessfully = false;
 
   try {
+    await runExtensionHostSuite({
+      vscodeExecutablePath,
+      extensionDevelopmentPath,
+      extensionTestsPath,
+      workspacePath: firstRunWorkspacePath,
+      userDataDir: path.join(tempRoot, "userdata-first-run"),
+      extensionsDir: path.join(tempRoot, "extensions-first-run"),
+      mode: "first-run",
+    });
+
     await runExtensionHostSuite({
       vscodeExecutablePath,
       extensionDevelopmentPath,
@@ -71,7 +88,7 @@ async function runExtensionHostSuite(options: {
   workspacePath: string;
   userDataDir: string;
   extensionsDir: string;
-  mode: "plain-python" | "smoke" | "multi-root";
+  mode: "first-run" | "plain-python" | "smoke" | "multi-root";
   nativeSage?: { sourceRoot?: string; executable?: string };
   externalSageSourceRoot?: string;
 }): Promise<void> {
@@ -137,6 +154,16 @@ async function createPlainPythonWorkspace(tempRoot: string): Promise<string> {
       "    return left + right",
       "",
     ].join("\n"),
+  );
+  return targetWorkspace;
+}
+
+async function createFirstRunWorkspace(tempRoot: string): Promise<string> {
+  const targetWorkspace = path.join(tempRoot, "first-run-workspace");
+  await fs.mkdir(targetWorkspace, { recursive: true });
+  await fs.writeFile(
+    path.join(targetWorkspace, "hello.sage"),
+    "def square(value):\n    return value * value\n\nsquare(3)\n",
   );
   return targetWorkspace;
 }

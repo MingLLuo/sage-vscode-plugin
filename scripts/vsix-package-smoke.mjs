@@ -66,6 +66,7 @@ const sourceDatePackageResult = spawnSync(
 const sourceDateVsixPath = path.join(sourceDateTempRoot, `${manifest.name}-${manifest.version}.vsix`);
 const sourceDatePackageOutput = parseJsonOutput(sourceDatePackageResult.stdout);
 const hiddenFileRejection = packageWithUnexpectedHiddenFile();
+const finderMetadataPackage = packageWithFinderMetadata();
 const zip = readZip(vsixPath);
 const sourceDateZip = sourceDatePackageResult.status === 0 && fs.existsSync(sourceDateVsixPath)
   ? readZip(sourceDateVsixPath)
@@ -74,6 +75,16 @@ const entries = new Set(zip.entries.map((entry) => entry.name));
 const checks = [];
 
 pushCheck("VSIX file exists", fs.existsSync(vsixPath), vsixPath);
+pushCheck(
+  "VSIX excludes macOS Finder metadata",
+  ![...entries].some((entry) => path.basename(entry) === ".DS_Store"),
+  [...entries].filter((entry) => path.basename(entry) === ".DS_Store"),
+);
+pushCheck(
+  "VSIX packaging tolerates Finder metadata in the extension tree",
+  finderMetadataPackage.status === 0 && !finderMetadataPackage.entries.some((entry) => path.basename(entry) === ".DS_Store"),
+  finderMetadataPackage,
+);
 pushCheck(
   "repeat VSIX package succeeds",
   repeatPackageResult.status === 0 && fs.existsSync(repeatVsixPath),
@@ -480,6 +491,32 @@ function packageWithUnexpectedHiddenFile() {
     };
   } finally {
     fs.rmSync(hiddenFile, { force: true });
+    fs.rmSync(outputDirectory, { recursive: true, force: true });
+  }
+}
+
+function packageWithFinderMetadata() {
+  const metadataFile = path.join(packageRoot, "src", ".DS_Store");
+  const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "sage-vsix-package-finder-smoke-"));
+  const prior = fs.existsSync(metadataFile) ? fs.readFileSync(metadataFile) : undefined;
+  fs.writeFileSync(metadataFile, "Finder metadata fixture\n", "utf8");
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", outputDirectory],
+      { cwd: repositoryRoot, encoding: "utf8" },
+    );
+    const archivePath = path.join(outputDirectory, `${manifest.name}-${manifest.version}.vsix`);
+    return {
+      status: result.status,
+      entries: result.status === 0
+        ? readZip(archivePath).entries.map((entry) => entry.name).filter((entry) => path.basename(entry) === ".DS_Store")
+        : [],
+      error: result.status === 0 ? undefined : result.stderr,
+    };
+  } finally {
+    if (prior) fs.writeFileSync(metadataFile, prior);
+    else fs.rmSync(metadataFile, { force: true });
     fs.rmSync(outputDirectory, { recursive: true, force: true });
   }
 }

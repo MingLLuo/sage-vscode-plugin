@@ -12,25 +12,28 @@ the repository's `rust-toolchain.toml` pins Rust.
 npm ci
 npm run package:vsix
 npm run doctor:mac
-npm run configure:workspace -- --workspace /path/to/your/project --profile auto
 code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 ```
 
-Then open your Sage workspace in VS Code.
+Open a trusted local folder with a `.sage` file in VS Code. The extension uses the packaged language server and
+discovers nearby Sage source roots. Hover a local name or use Go to Definition, then run **Sage: Run Current File** from
+the command palette. Select a Sage executable with **Sage: Select Interpreter** only if it is not found automatically.
+Click the Sage status bar item for details if indexing or the language server does not become ready.
 
 ## First VS Code Setup
 
-1. Run `npm run configure:workspace -- --workspace /path/to/your/project --profile auto` before opening VS Code, or run
-   `Sage: Configure Workspace` from the command palette after opening it.
-2. Run `Sage: Open Getting Started`.
-3. Run `Sage: Select Interpreter` if the script did not find Sage automatically.
-4. Pick the closest profile:
-   - `Standard Sage workspace` for `.sage` files.
-   - `Sage-heavy Python workspace` for `.py` files that import `sage.all`.
-   - `Sage native/Cython workspace` for `.pyx`, `.pxd`, or `.pxi`.
-   - `Full Sage research workspace` for mixed projects.
-5. Open a `.sage`, Sage-heavy `.py`, or Cython file.
-6. Check the left status bar item beginning with `Sage:`.
+For `.sage` files, no workspace settings are required. For Sage-heavy `.py` or Cython projects, run **Sage: Configure
+Workspace** once and pick the closest profile:
+
+- `Sage-heavy Python workspace` for `.py` files that import `sage.all`.
+- `Sage native/Cython workspace` for `.pyx`, `.pxd`, or `.pxi`.
+- `Full Sage research workspace` for mixed projects.
+
+Open the corresponding file and check the left status bar item beginning with `Sage:`.
+
+The optional **Sage: Open Getting Started** walkthrough explains interpreter choice and diagnostics. To configure
+before opening VS Code, use `npm run configure:workspace -- --workspace /path/to/project --profile auto`; do not also
+run the editor configuration command for that project.
 
 ## Minimal Workspace Settings
 

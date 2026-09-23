@@ -117,6 +117,9 @@ function argumentValue(name) {
 function collectExtensionFiles(root) {
   const files = [];
   walk(root, "", (absolutePath, relativePath) => {
+    if (path.basename(relativePath) === ".DS_Store") {
+      return;
+    }
     if (relativePath !== ".vscodeignore" && hasHiddenPathSegment(relativePath)) {
       throw new Error(
         `Refusing to package unknown hidden extension file: ${relativePath}. `

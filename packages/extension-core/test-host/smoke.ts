@@ -35,6 +35,10 @@ interface IndexStatusSnapshot {
 }
 
 export async function run(): Promise<void> {
+  if (process.env.SAGE_TEST_HOST_MODE === "first-run") {
+    await runFirstRunSmoke();
+    return;
+  }
   if (process.env.SAGE_TEST_HOST_MODE === "plain-python") {
     await runPlainPythonQuietSmoke();
     return;
@@ -142,6 +146,53 @@ export async function run(): Promise<void> {
 
   await assertEventually(() => verifyWorkspaceHoverDefinitionCompletion(workspaceFolder.uri), 30_000);
   await assertEventually(() => verifySageAwarePythonWorkspace(workspaceFolder.uri), 30_000);
+}
+
+async function runFirstRunSmoke(): Promise<void> {
+  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  assert.ok(workspaceFolder, "expected a fresh local workspace");
+  assert.equal(
+    await vscode.workspace.fs.stat(vscode.Uri.joinPath(workspaceFolder.uri, ".vscode")).then(() => true, () => false),
+    false,
+    "first-run workspace must start without settings",
+  );
+  const uri = vscode.Uri.joinPath(workspaceFolder.uri, "hello.sage");
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+  assert.equal(document.languageId, "sagemath");
+  await waitForCommand("sage.__test.awaitLanguageClientStable");
+  await assertEventually(async () => {
+    const snapshot = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
+    assert.ok(snapshot.hasClient, "opening a .sage file should start the packaged language server");
+  }, 30_000);
+  const usage = positionOfNth(document, "square", 2);
+  await assertEventually(async () => {
+    const definitions = (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider", uri, usage,
+    )) ?? [];
+    assertSingleDefinitionTarget(definitions, "hello.sage", "first-run definition", "file");
+  }, 30_000);
+  const status = await vscode.commands.executeCommand<IndexStatusSnapshot>("sage.showIndexStatus");
+  assert.ok(status, "first-run index status should be available");
+  let runSubscription: vscode.Disposable | undefined;
+  const runStarted = new Promise<vscode.Task>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("first-run Sage task did not start")), 5000);
+    runSubscription = vscode.tasks.onDidStartTask(({ execution }) => {
+      if (execution.task.source === "Sage") {
+        clearTimeout(timeout);
+        resolve(execution.task);
+      }
+    });
+  });
+  try {
+    await vscode.commands.executeCommand("sage.runCurrentFile");
+    const task = await runStarted;
+    assert.equal(path.basename((task.execution as vscode.ProcessExecution).process), "sage");
+    assert.equal((task.scope as vscode.WorkspaceFolder).uri.toString(), workspaceFolder.uri.toString());
+  } finally {
+    runSubscription?.dispose();
+  }
+  assert.equal((await lifecycleSnapshot("sage.__test.getLifecycleSnapshot")).unexpectedCloseCount, 0);
 }
 
 async function verifyExternalSageSourceFollowUpWithPythonDisabled(): Promise<void> {

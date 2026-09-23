@@ -917,7 +917,7 @@ function pushGrammarMatcher(matchers, repositoryName, name, pattern, captures) {
       repository: repositoryName,
       name,
       captures,
-      regex: new RegExp(pattern, "gd"),
+      regex: new RegExp(pattern, "gdu"),
     });
   } catch {
     // TextMate uses Oniguruma; skip patterns not accepted by JavaScript regex.

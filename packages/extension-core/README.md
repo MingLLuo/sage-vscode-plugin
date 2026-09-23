@@ -23,12 +23,12 @@ The extension identifier is `sage-vscode.sage-vscode-extension`.
 
 1. Install the VSIX or marketplace package.
 2. Open a local trusted workspace containing Sage files, Sage-heavy Python files, or native Sage Cython files.
-3. Run `Sage: Open Getting Started`.
-4. Run `Sage: Select Interpreter` and choose a local Sage checkout or system Sage runtime.
-5. Run `Sage: Configure Workspace`.
-6. Choose `Sage-heavy Python workspace` for `.py` files that import `sage.all`, or `Full Sage research workspace` for
-   mixed Sage/Python/Cython projects.
-7. Check `Sage: Show Environment Details`, `Sage: Show Index Status`, and `Sage: Run UX Self Check`.
+3. Open a `.sage` file. Hover a symbol or use Go to Definition, then run `Sage: Run Current File` to check execution.
+4. If Sage was not found, run `Sage: Select Interpreter` and choose the intended executable.
+5. For Sage-heavy `.py` files or Cython projects, run `Sage: Configure Workspace` and choose the matching profile.
+
+The Sage status bar item shows language-server and indexing progress. Click it for status commands when something does
+not become ready. `Sage: Open Getting Started` offers an optional guided walkthrough.
 
 For predictable Sage library navigation, configure the Sage source root when it is not discovered automatically:
 

@@ -102,7 +102,9 @@ function buildSettings(existing, input) {
   const externalSourceRoots = input.sourceRoots
     .filter((sourceRoot) => !isPathInsideOrEqual(path.resolve(sourceRoot), input.workspaceRoot))
     .map((sourceRoot) => path.resolve(sourceRoot));
-  const externalSourceRootSettings = compactWorkspacePaths(input.workspaceRoot, externalSourceRoots);
+  const externalSourceRootSettings = externalSourceRoots.length > 0
+    ? compactWorkspacePaths(input.workspaceRoot, externalSourceRoots)
+    : [];
   const pythonExtraPaths = sourceRootSettings.filter(
     (entry) => !externalSourceRootSettings.includes(entry),
   );

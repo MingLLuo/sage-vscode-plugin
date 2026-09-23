@@ -716,24 +716,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     },
     onStateChanged: () => { if (scope === activeScope) updateStatusBar(); },
     onSlowStartNotice: (reason) => {
-      logger.info("extension", "showing slow language-server startup notice", { reason });
-      void vscode.window
-        .showInformationMessage(
-          "Sage language features are starting in the background. You can keep editing; hover, completion, navigation, and indexing will appear when ready.",
-          "Show Sage Status",
-        )
-        .then((selection) => {
-          if (selection === "Show Sage Status") {
-            void vscode.commands.executeCommand("sage.showEnvironmentDetails");
-          }
-        });
+      logger.info("extension", "language server is still starting in the background", { reason });
+      updateStatusBar();
     },
     onStartError: (error) => {
-      const message = `Sage language server failed to start: ${String(error)}`;
       logger.error("extension", "language server failed to start", { error: String(error) });
-      void vscode.window.showErrorMessage(
-        `${message}. Check 'sage.languageServer.rustPath' and the Sage output channels.`,
-      );
+      updateStatusBar();
     },
     logger,
     shutdownTimeoutMs: LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
