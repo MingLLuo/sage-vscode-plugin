@@ -54,6 +54,7 @@ export function buildDocumentationRequestPayload(
 
 export function renderDocumentationMarkdown(result: DocumentationResult): string {
   const lines = [`# ${result.symbol}`, ""];
+  const hasCandidateDefinitions = result.kind === "AmbiguousMember";
 
   if (result.detail) {
     lines.push(result.detail);
@@ -63,7 +64,7 @@ export function renderDocumentationMarkdown(result: DocumentationResult): string
     lines.push(`Module: \`${result.module}\``);
   }
 
-  if (result.kind) {
+  if (result.kind && !hasCandidateDefinitions) {
     lines.push(`Kind: ${result.kind}`);
   }
 
@@ -71,7 +72,7 @@ export function renderDocumentationMarkdown(result: DocumentationResult): string
     lines.push(`Source: ${result.uri}`);
   }
 
-  if (result.markers.length > 0) {
+  if (result.markers.length > 0 && !hasCandidateDefinitions) {
     lines.push("");
     lines.push(`> ${result.markers.map((marker) => `\`${marker}\``).join(" ")}`);
   }

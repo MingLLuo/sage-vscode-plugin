@@ -14,7 +14,10 @@ mod sage_types;
 mod symbols;
 mod syntax;
 
-pub use calls::function_call_at_position;
+pub use calls::{
+    active_parameter_for_keyword, function_call_at_position, function_call_context_at_position,
+    FunctionCallContext,
+};
 pub use completion::{
     local_import_alias_symbol_from_source, local_import_alias_symbol_from_source_name,
     local_import_alias_symbol_from_symbols,

@@ -508,7 +508,9 @@ fn ambiguous_dotted_member_returns_explainable_docs_without_wrong_definition() {
         .as_ref()
         .expect("ambiguous member should provide explainable documentation");
     assert_eq!(docs.kind, "AmbiguousMember");
-    assert!(docs.summary.contains("multiple-definition preview"));
+    assert!(docs
+        .summary
+        .contains("receiver type does not identify one implementation"));
     assert!(docs.markers.iter().any(|marker| marker == "ambiguous"));
     assert_eq!(docs.sections.len(), 2);
     assert!(query

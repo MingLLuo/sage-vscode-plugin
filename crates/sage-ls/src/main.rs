@@ -69,9 +69,10 @@ use references::{
 };
 use runtime_docs::{RuntimeDocsConfig, RuntimeDocsWorker};
 use sage_index::{
-    default_cache_dir, function_call_at_position, parse_source, semantic_spans,
-    DocumentationRecord, IndexOptions, QueryCompletion, QueryDefinition, QueryFeatures,
-    QueryPosition, QueryResult, SymbolKind as SageSymbolKind, SymbolRecord, WorkspaceIndex,
+    active_parameter_for_keyword, default_cache_dir, function_call_context_at_position,
+    parse_source, semantic_spans, DocumentationRecord, IndexOptions, QueryCompletion,
+    QueryDefinition, QueryFeatures, QueryPosition, QueryResult, SymbolKind as SageSymbolKind,
+    SymbolRecord, WorkspaceIndex,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -729,7 +730,7 @@ impl LanguageServer for Backend {
             params.text_document_position_params.position,
         )
         .and_then(|position| {
-            function_call_at_position(&document.text, position.line, position.character)
+            function_call_context_at_position(&document.text, position.line, position.character)
         });
         let query = self
             .navigation_query_for_document(
@@ -740,20 +741,35 @@ impl LanguageServer for Backend {
             )
             .await;
         let Some(signature) = query.signature else {
-            let Some((name, active_parameter)) = fallback else {
+            let Some(call) = fallback else {
                 return Ok(None);
             };
             let index = self.index.read().await;
-            let Some(symbol) = index.resolve_symbol(&name, None) else {
+            let target =
+                index.query_source_at_navigation(&path, &document.text, call.name_position);
+            let confirmed = (target.resolution_confidence.as_deref() == Some("high"))
+                .then_some(target.signature)
+                .flatten()
+                .map(|signature| (signature.label, signature.documentation));
+            let selected = confirmed.or_else(|| {
+                if call.qualified {
+                    return None;
+                }
+                let symbol = index.resolve_symbol(&call.name, Some(module_name_for_path(&path)))?;
+                Some((symbol.signature.clone()?, symbol.docstring))
+            });
+            let Some((signature, documentation)) = selected else {
                 return Ok(None);
             };
-            let Some(signature) = symbol.signature.clone() else {
-                return Ok(None);
-            };
+            let active_parameter = call
+                .keyword
+                .as_deref()
+                .and_then(|keyword| active_parameter_for_keyword(&signature, keyword))
+                .unwrap_or(call.active_parameter);
             return Ok(Some(SignatureHelp {
                 signatures: vec![signature_information(
                     signature,
-                    symbol.docstring,
+                    documentation,
                     active_parameter,
                 )],
                 active_signature: Some(0),
@@ -763,14 +779,19 @@ impl LanguageServer for Backend {
         if signature.label.is_empty() {
             return Ok(None);
         }
+        let active_parameter = fallback
+            .as_ref()
+            .and_then(|call| call.keyword.as_deref())
+            .and_then(|keyword| active_parameter_for_keyword(&signature.label, keyword))
+            .unwrap_or(signature.active_parameter);
         Ok(Some(SignatureHelp {
             signatures: vec![signature_information(
                 signature.label,
                 signature.documentation,
-                signature.active_parameter,
+                active_parameter,
             )],
             active_signature: Some(0),
-            active_parameter: Some(signature.active_parameter),
+            active_parameter: Some(active_parameter),
         }))
     }
 

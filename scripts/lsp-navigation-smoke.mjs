@@ -89,6 +89,17 @@ async function runSmoke() {
     "def caller():",
     "    ambiguous = unknown.shared()",
     "    weak = unknown.solitary()",
+    "def trace_window(poly, base_ring=None, *, width=5):",
+    "    return poly",
+    "keyword_call = trace_window(1, width=7)",
+    "unknown_call = unknown.trace_window(1)",
+    "class Example:",
+    "    def method(self, value=0, *, width=5):",
+    "        return value",
+    "def method(value):",
+    "    return value",
+    "example = Example()",
+    "known_method_call = example.method(width=7)",
   ].join("\n");
   const nativeDeclarationText = [
     "cdef class NativeThing:",
@@ -198,6 +209,36 @@ async function runSmoke() {
       },
     });
     const indexStatus = await waitForIndex(server);
+
+    const keywordSignature = await server.requestWithTimeout("textDocument/signatureHelp", {
+      textDocument: { uri: consumerUri },
+      position: positionInLine(consumerText, "keyword_call =", "7"),
+    }, requestTimeoutMs, "keyword signature help");
+    assert.match(keywordSignature?.signatures?.[0]?.label ?? "", /trace_window\(poly/);
+    assert.equal(keywordSignature?.activeParameter, 3, "keyword call should select the named parameter");
+    const unknownReceiverSignature = await server.requestWithTimeout("textDocument/signatureHelp", {
+      textDocument: { uri: consumerUri },
+      position: positionInLine(consumerText, "unknown_call =", "1"),
+    }, requestTimeoutMs, "unknown receiver signature help");
+    assert.equal(unknownReceiverSignature, null, "unknown receiver must not borrow a global function signature");
+    const knownMethodPosition = positionInLine(consumerText, "known_method_call =", "example.method");
+    knownMethodPosition.character += "example.".length;
+    const knownMethodDefinition = await server.requestWithTimeout("textDocument/definition", {
+      textDocument: { uri: consumerUri },
+      position: knownMethodPosition,
+    }, requestTimeoutMs, "known receiver definition");
+    assert.equal(knownMethodDefinition?.uri, consumerUri);
+    assert.equal(
+      knownMethodDefinition?.range?.start?.line,
+      consumerText.split("\n").findIndex((line) => line.includes("def method(self")),
+      "method jump must select the receiver's class, not the homonymous global function",
+    );
+    const knownMethodSignature = await server.requestWithTimeout("textDocument/signatureHelp", {
+      textDocument: { uri: consumerUri },
+      position: positionInLine(consumerText, "known_method_call =", "7"),
+    }, requestTimeoutMs, "known receiver signature help");
+    assert.match(knownMethodSignature?.signatures?.[0]?.label ?? "", /method\(self, value=0/);
+    assert.equal(knownMethodSignature?.activeParameter, 3);
 
     const exactPosition = positionInLine(consumerText, "result =", "exact");
     const sharedPosition = positionOf(consumerText, "shared");

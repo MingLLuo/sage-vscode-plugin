@@ -6,13 +6,13 @@ use super::{
         is_call_hierarchy_symbol, module_name_for_path, symbol_body_range, symbol_kind,
     },
     text_positions::{
-        byte_offset_to_utf16_character, is_word_byte, line_byte_bounds, lsp_range_for_text,
+        byte_offset_to_utf16_character, line_byte_bounds, lsp_range_for_text,
         query_position_from_lsp, utf16_character_to_byte_offset, word_at_position,
     },
 };
 use sage_index::{
-    parse_source, source_definition_header_end, CodeReferenceMap, QueryDefinition, QueryResult,
-    SymbolRecord, WorkspaceIndex,
+    identifiers, parse_source, source_definition_header_end, CodeReferenceMap, QueryDefinition,
+    QueryResult, SymbolRecord, WorkspaceIndex,
 };
 use std::path::Path;
 use tower_lsp::lsp_types::{
@@ -443,54 +443,72 @@ fn call_ranges_in_line(
     scan_start: usize,
     scan_end: usize,
 ) -> Vec<(String, Range)> {
-    let bytes = line.as_bytes();
     let mut calls = Vec::new();
-    let mut quote: Option<u8> = None;
+    let mut quote: Option<char> = None;
     let mut escaped = false;
     let mut index = 0;
     while index < scan_end {
-        let byte = bytes[index];
+        let Some(character) = line[index..].chars().next() else {
+            break;
+        };
+        let width = character.len_utf8();
         if escaped {
             escaped = false;
-            index += 1;
+            index += width;
             continue;
         }
-        if byte == b'\\' {
+        if character == '\\' {
             escaped = true;
-            index += 1;
+            index += width;
             continue;
         }
         if let Some(active) = quote {
-            if byte == active {
+            if character == active {
                 quote = None;
             }
-            index += 1;
+            index += width;
             continue;
         }
-        if byte == b'#' {
+        if character == '#' {
             break;
         }
-        if byte == b'\'' || byte == b'"' {
-            quote = Some(byte);
-            index += 1;
+        if character == '\'' || character == '"' {
+            quote = Some(character);
+            index += width;
             continue;
         }
         if index >= scan_start
-            && is_identifier_start(byte)
-            && (index == 0 || !is_word_byte(bytes[index - 1]))
+            && identifiers::is_start(character)
+            && (index == 0
+                || !line[..index]
+                    .chars()
+                    .next_back()
+                    .is_some_and(identifiers::is_continue))
         {
             let start = index;
-            let mut end = index + 1;
-            while end < scan_end && is_word_byte(bytes[end]) {
-                end += 1;
+            let mut end = index + width;
+            while end < scan_end {
+                let Some(next) = line[end..].chars().next() else {
+                    break;
+                };
+                if !identifiers::is_continue(next) {
+                    break;
+                }
+                end += next.len_utf8();
             }
             let mut cursor = end;
-            while cursor < scan_end && bytes[cursor].is_ascii_whitespace() {
-                cursor += 1;
+            while cursor < scan_end {
+                let Some(next) = line[cursor..].chars().next() else {
+                    break;
+                };
+                if !next.is_whitespace() {
+                    break;
+                }
+                cursor += next.len_utf8();
             }
             let name = &line[start..end];
             if cursor < scan_end
-                && bytes[cursor] == b'('
+                && line[cursor..].starts_with('(')
                 && !is_call_hierarchy_keyword(name)
                 && !is_declaration_identifier(line, start)
             {
@@ -511,7 +529,7 @@ fn call_ranges_in_line(
             index = end;
             continue;
         }
-        index += 1;
+        index += width;
     }
     calls
 }

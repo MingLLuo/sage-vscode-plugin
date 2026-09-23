@@ -756,6 +756,21 @@ fn call_hierarchy_scanner_includes_members_and_skips_non_code_calls() {
 }
 
 #[test]
+fn call_hierarchy_scanner_keeps_unicode_function_ranges() {
+    let source = "def 主函数():\n    结果 = 计算(2)\n    return 结果\n";
+    let calls = call_ranges_in_range(
+        source,
+        Range::new(Position::new(0, 0), Position::new(2, 13)),
+    );
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, "计算");
+    assert_eq!(
+        calls[0].1,
+        Range::new(Position::new(1, 9), Position::new(1, 11))
+    );
+}
+
+#[test]
 fn call_hierarchy_scanner_skips_calls_in_multiline_strings() {
     let source = [
         "def main():",

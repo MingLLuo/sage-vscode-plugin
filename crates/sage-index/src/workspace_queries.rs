@@ -943,7 +943,7 @@ impl WorkspaceIndex {
                 .then(|| {
                     target_is_code
                         .then(|| {
-                            function_call_at_position_with_code_map(
+                            function_call_context_at_position_with_code_map(
                                 source,
                                 target_range.start_line,
                                 target_range.start_character,
@@ -951,17 +951,33 @@ impl WorkspaceIndex {
                             )
                         })
                         .flatten()
-                        .and_then(|(name, active_parameter)| {
+                        .and_then(|call| {
                             resolved
                                 .as_ref()
-                                .filter(|record| record.name == name)
+                                .filter(|record| record.name == call.name)
                                 .cloned()
-                                .or_else(|| self.resolve_symbol(&name, module_hint.as_deref()))
-                                .or_else(|| builtin_symbol_record(&name))
+                                .or_else(|| {
+                                    (!call.qualified)
+                                        .then(|| {
+                                            self.resolve_symbol(&call.name, module_hint.as_deref())
+                                        })
+                                        .flatten()
+                                })
+                                .or_else(|| {
+                                    (!call.qualified)
+                                        .then(|| builtin_symbol_record(&call.name))
+                                        .flatten()
+                                })
                                 .and_then(|record| {
                                     record.signature.clone().map(|label| QuerySignature {
+                                        active_parameter: call
+                                            .keyword
+                                            .as_deref()
+                                            .and_then(|keyword| {
+                                                active_parameter_for_keyword(&label, keyword)
+                                            })
+                                            .unwrap_or(call.active_parameter),
                                         label,
-                                        active_parameter,
                                         documentation: record.docstring,
                                     })
                                 })
@@ -1048,12 +1064,17 @@ impl WorkspaceIndex {
                 if let Some(signature) = &candidate.signature {
                     body.push(format!("```sage\n{signature}\n```"));
                 }
-                if let Some(summary) = candidate
+                if let Some(docstring) = candidate
                     .docstring
                     .as_deref()
-                    .and_then(documentation_summary)
+                    .filter(|doc| !doc.trim().is_empty())
                 {
-                    body.push(summary.to_string());
+                    let preview: String = docstring.trim().chars().take(2400).collect();
+                    body.push(if preview.len() < docstring.trim().len() {
+                        format!("{preview}\n\n… (open the source for the complete documentation)")
+                    } else {
+                        preview
+                    });
                 }
                 body.push(format!("Module: `{}`", candidate.module));
                 if !candidate.path.as_os_str().is_empty() {
@@ -1067,14 +1088,14 @@ impl WorkspaceIndex {
             .collect();
         Some(DocumentationRecord {
             name: member.to_string(),
-            module_name: "ambiguous".to_string(),
+            module_name: String::new(),
             kind: "AmbiguousMember".to_string(),
-            detail: format!("Ambiguous Sage member `{member}`"),
+            detail: format!("Possible definitions of `{member}`"),
             summary: format!(
-                "Ambiguous Sage member `{member}` has {candidate_count} ranked candidates; a multiple-definition preview is available when at least two targets remain."
+                "Found {candidate_count} indexed definition(s) for `{member}`, but the receiver type does not identify one implementation. Each candidate's signature, documentation, module, and source are listed below."
             ),
             docstring: Some(format!(
-                "Reason: {reason}\n\nRefine the receiver type to obtain a single definition, reference set, or rename target."
+                "Why no direct jump: {reason}\n\nAdd a known constructor or type for the receiver to narrow the result. References and rename stay unavailable until one target is confirmed."
             )),
             uri: None,
             markers: vec![

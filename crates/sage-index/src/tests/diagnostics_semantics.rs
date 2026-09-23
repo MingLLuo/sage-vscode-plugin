@@ -90,6 +90,37 @@ fn function_call_context_tracks_keyword_arguments() {
         function_call_at_position(source, 0, character),
         Some(("trace_window".to_string(), 1))
     );
+    let context =
+        function_call_context_at_position(source, 0, source.find('7').unwrap() as u32 + 1)
+            .expect("keyword call context");
+    assert_eq!(context.keyword.as_deref(), Some("width"));
+    assert!(!context.qualified);
+    assert_eq!(
+        active_parameter_for_keyword(
+            "trace_window(poly, base_ring=QQ, *, width=5, normalize=True)",
+            "width",
+        ),
+        Some(3),
+    );
+}
+
+#[test]
+fn call_context_distinguishes_qualified_and_unicode_names() {
+    let source = "结果 = 模块.计算(值, 精度=7)\n";
+    let character = source.find('7').unwrap() as u32 + 1;
+    let context = function_call_context_at_position(source, 0, character)
+        .expect("Unicode qualified call context");
+    assert_eq!(context.name, "计算");
+    assert_eq!(context.keyword.as_deref(), Some("精度"));
+    assert!(context.qualified);
+    assert_eq!(
+        active_parameter_for_keyword("计算(值, *, 精度=5)", "精度"),
+        Some(2)
+    );
+    assert_eq!(
+        active_parameter_for_keyword("计算(值, *, 精度=5)", "missing"),
+        None
+    );
 }
 
 #[test]

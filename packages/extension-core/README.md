@@ -30,6 +30,12 @@ The extension identifier is `sage-vscode.sage-vscode-extension`.
 The Sage status bar item shows language-server and indexing progress. Click it for status commands when something does
 not become ready. `Sage: Open Getting Started` offers an optional guided walkthrough.
 
+Hover a symbol for its signature and a short documentation preview; use `Sage: Show Documentation` for the full
+available source or runtime text. `F12` and Ctrl/Cmd-click navigate to verified definitions. When several methods
+share a name and the receiver type is unknown, the extension shows candidates and their documentation instead of
+choosing an arbitrary target. A known constructor or an explicit `sage.analysis.sourceRoots` entry can improve
+resolution. Signature help matches named arguments such as `width=7` to the corresponding parameter.
+
 For predictable Sage library navigation, configure the Sage source root when it is not discovered automatically:
 
 ```json

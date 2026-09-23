@@ -53,6 +53,23 @@ test("renderDocumentationMarkdown formats module and source metadata", () => {
   );
 });
 
+test("candidate documentation explains uncertainty without internal labels", () => {
+  const markdown = renderDocumentationMarkdown({
+    symbol: "degree",
+    detail: "Possible definitions of `degree`",
+    module: "",
+    kind: "AmbiguousMember",
+    uri: undefined,
+    summary: "Found two indexed definitions; the receiver type is not known.",
+    docstring: "Add a known constructor to narrow the result.",
+    markers: ["ambiguous", "source:rust-index-v2"],
+    sections: [{ title: "PolynomialElement — sage.rings", body: "degree(self)\n\nReturn the degree." }],
+  });
+  assert.match(markdown, /Possible definitions of `degree`/);
+  assert.match(markdown, /Return the degree/);
+  assert.doesNotMatch(markdown, /Kind: AmbiguousMember|Module: `ambiguous`|source:rust-index-v2/);
+});
+
 test("normalizeDocumentationResponse maps server payload into extension result", () => {
   assert.deepEqual(
     normalizeDocumentationResponse({

@@ -45,6 +45,24 @@ Most local Sage checkouts only need these settings:
 Use an explicit `sage.analysis.sourceRoots` entry for predictable Sage source indexing and fast definition jumps into the
 Sage library. Leave it empty only when you want automatic nearby/runtime discovery.
 
+## Editing, Documentation, and Navigation
+
+Open a `.sage` file and hover a symbol to see its signature, module, and a documentation preview. Run **Sage: Show
+Documentation** on the symbol for the full available source or runtime documentation. Runtime documentation requires a
+usable Sage interpreter; local definitions and indexed source documentation work without starting Sage.
+
+Use **Go to Definition** (`F12`) or Ctrl/Cmd-click on an imported name, local function, constructor, or method call.
+**Find All References** and **Call Hierarchy** work best when the index can identify one concrete definition. For a
+call such as `trace_window(poly, width=7)`, signature help highlights `width` by its parameter name, even if an
+earlier optional parameter was omitted. Calls with Unicode function names follow the same parsing rules.
+
+Some Sage methods have the same name in different classes. If the receiver's type cannot be established, Go to
+Definition shows the matching implementations when there are several and the documentation panel lists each
+candidate's signature, available documentation, module, and source. A single unproved candidate is not treated as a
+confirmed target. Assigning the receiver from a known constructor, keeping its import visible, or adding its source
+root can let the index narrow the target. In that state, references and rename remain unavailable until one target is
+confirmed. This avoids silently jumping to or editing a different method with the same name.
+
 ## Development Bootstrap
 
 1. Select any Node.js 22.9-or-newer runtime and the Rust/Cargo toolchain from `rust-toolchain.toml`; install Python 3.9
