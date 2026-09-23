@@ -188,9 +188,8 @@ pub fn references_in_source(path: &Path, source: &str, name: &str) -> Vec<Refere
         .match_indices(name)
         .filter_map(|(start, _)| {
             let end = start + name.len();
-            let starts_at_boundary = start == 0 || !is_word_byte(source.as_bytes()[start - 1]);
-            let ends_at_boundary = end == source.len() || !is_word_byte(source.as_bytes()[end]);
-            if !starts_at_boundary || !ends_at_boundary || !code_map.is_code_offset(start) {
+            if !crate::identifiers::has_boundaries(source, start, end)
+                || !code_map.is_code_offset(start) {
                 return None;
             }
             let (line, character) = code_map.line_col(start);
@@ -213,15 +212,11 @@ pub(super) fn reference_spans_in_source(
 ) -> Vec<(String, ReferenceRecord)> {
     let mut records = Vec::new();
     let code_map = CodeMap::new(source);
-    for captures in word_re().captures_iter(source) {
-        let Some(candidate) = captures.name("name") else {
-            continue;
-        };
-        if !code_map.is_code_offset(candidate.start()) {
+    for (start, name) in crate::identifiers::spans(source) {
+        if !code_map.is_code_offset(start) {
             continue;
         }
-        let name = candidate.as_str();
-        let (line, character) = code_map.line_col(candidate.start());
+        let (line, character) = code_map.line_col(start);
         records.push((
             name.to_string(),
             ReferenceRecord {
@@ -267,14 +262,10 @@ impl<'source> CodeReferenceMap<'source> {
         if start >= end || !self.code_map.is_code_offset(start) {
             return false;
         }
-        let bytes = self.source.as_bytes();
-        if bytes.get(start..end) != Some(name.as_bytes()) {
+        if self.source.get(start..end) != Some(name) {
             return false;
         }
-        if start > 0 && is_word_byte(bytes[start - 1]) {
-            return false;
-        }
-        if bytes.get(end).is_some_and(|byte| is_word_byte(*byte)) {
+        if !crate::identifiers::has_boundaries(self.source, start, end) {
             return false;
         }
         true

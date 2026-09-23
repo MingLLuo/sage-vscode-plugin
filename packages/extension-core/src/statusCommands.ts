@@ -30,6 +30,7 @@ export interface StatusCommandDependencies {
   prepareDatabaseBuild(): Promise<void>;
   refreshLanguageServerStatus(): Promise<void>;
   activeEditorSettings(): SageSettings;
+  activeProjectFolder(): vscode.WorkspaceFolder | undefined;
   workspaceFolderPaths(): string[];
   currentWorkspaceRuntimeState(): WorkspaceRuntimeState;
   buildEnvironmentPresentationInput(languageServerStarting?: boolean): EnvironmentPresentationInput;
@@ -56,7 +57,9 @@ export function registerStatusCommands(
     { timeoutMs: USER_STATUS_REQUEST_TIMEOUT_MS, label },
   );
   const showStatusReport = (title: string, report: string, notification: string): void => {
-    dependencies.outputChannel.appendLine(`## ${title}`);
+    const folder = dependencies.activeProjectFolder();
+    const label = (vscode.workspace.workspaceFolders?.length ?? 0) > 1 && folder ? ` [${folder.name}]` : "";
+    dependencies.outputChannel.appendLine(`## ${title}${label}`);
     dependencies.outputChannel.appendLine(report);
     dependencies.outputChannel.appendLine("");
     dependencies.outputChannel.show(true);

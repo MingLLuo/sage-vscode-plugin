@@ -383,22 +383,9 @@ pub(super) fn aliased_import_binding_offset(
 }
 
 fn import_identifier_tokens(line: &str) -> Vec<(&str, usize)> {
-    let bytes = line.as_bytes();
-    let mut tokens = Vec::new();
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes[index] != b'_' && !bytes[index].is_ascii_alphabetic() {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        index += 1;
-        while index < bytes.len() && is_word_byte(bytes[index]) {
-            index += 1;
-        }
-        tokens.push((&line[start..index], start));
-    }
-    tokens
+    crate::identifiers::spans(line)
+        .map(|(start, word)| (word, start))
+        .collect()
 }
 
 pub(super) fn parse_plain_import(line: &str) -> Option<Vec<(String, String, bool)>> {

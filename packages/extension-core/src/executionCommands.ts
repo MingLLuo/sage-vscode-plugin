@@ -15,6 +15,7 @@ export interface ExecutionCommandDependencies {
   terminalManager: SageTerminalManager;
   ensureWorkspaceRuntimeAvailable(action: string): Promise<boolean>;
   workspaceFolderPaths(): string[];
+  activeProjectFolder(): vscode.WorkspaceFolder | undefined;
   showExecutionStatus(message: string, fields?: Record<string, unknown>): void;
 }
 
@@ -51,16 +52,17 @@ export function registerExecutionCommands(
         }
         return;
       }
-      const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
+      const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
+      const settings = readSettings(workspaceFolder);
       const runtimePythonPaths = resolveRuntimePythonPaths(
-        workspacePathsForDocument(editor.document, dependencies.workspaceFolderPaths()),
+        workspacePathsForDocument(editor.document, workspaceFolder, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
         settings.extraPaths,
       );
       let terminal: vscode.Terminal | undefined;
       try {
         terminal = await dependencies.terminalManager.runFile(
-          { ...settings, runtimePythonPaths },
+          { ...settings, runtimePythonPaths, workspaceFolderPath: workspaceFolder?.uri.fsPath },
           editor.document.uri.fsPath,
         );
       } catch (error) {
@@ -96,16 +98,17 @@ export function registerExecutionCommands(
       }
       const selection = editor.document.getText(editor.selection)
         || editor.document.lineAt(editor.selection.active.line).text;
-      const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
+      const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
+      const settings = readSettings(workspaceFolder);
       const runtimePythonPaths = resolveRuntimePythonPaths(
-        workspacePathsForDocument(editor.document, dependencies.workspaceFolderPaths()),
+        workspacePathsForDocument(editor.document, workspaceFolder, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
         settings.extraPaths,
         editor.document.uri.fsPath,
       );
       let terminal: vscode.Terminal;
       try {
-        terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths }, selection);
+        terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths, workspaceFolderPath: workspaceFolder?.uri.fsPath }, selection);
       } catch (error) {
         await showTerminalLaunchError("send the selection to the Sage REPL", error);
         return;
@@ -131,16 +134,17 @@ export function registerExecutionCommands(
         void vscode.window.showWarningMessage("No Sage cell content found near the cursor.");
         return;
       }
-      const settings = readSettings(vscode.workspace.getWorkspaceFolder(editor.document.uri));
+      const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
+      const settings = readSettings(workspaceFolder);
       const runtimePythonPaths = resolveRuntimePythonPaths(
-        workspacePathsForDocument(editor.document, dependencies.workspaceFolderPaths()),
+        workspacePathsForDocument(editor.document, workspaceFolder, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
         settings.extraPaths,
         editor.document.uri.scheme === "file" ? editor.document.uri.fsPath : undefined,
       );
       let terminal: vscode.Terminal;
       try {
-        terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths }, cell.text);
+        terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths, workspaceFolderPath: workspaceFolder?.uri.fsPath }, cell.text);
       } catch (error) {
         await showTerminalLaunchError("send the current cell to the Sage REPL", error);
         return;
@@ -158,14 +162,12 @@ export function registerExecutionCommands(
         return;
       }
       const activeDocument = vscode.window.activeTextEditor?.document;
-      const settings = readSettings(
-        activeDocument
-          ? vscode.workspace.getWorkspaceFolder(activeDocument.uri)
-          : vscode.workspace.workspaceFolders?.[0],
-      );
+      const workspaceFolder = (activeDocument && vscode.workspace.getWorkspaceFolder(activeDocument.uri))
+        || dependencies.activeProjectFolder();
+      const settings = readSettings(workspaceFolder);
       let terminal: vscode.Terminal;
       try {
-        terminal = dependencies.terminalManager.startRepl(settings);
+        terminal = dependencies.terminalManager.startRepl({ ...settings, workspaceFolderPath: workspaceFolder?.uri.fsPath });
       } catch (error) {
         await showTerminalLaunchError("start the Sage REPL", error);
         return;
@@ -180,9 +182,10 @@ export function registerExecutionCommands(
 
 function workspacePathsForDocument(
   document: vscode.TextDocument,
+  projectFolder: vscode.WorkspaceFolder | undefined,
   fallback: string[],
 ): string[] {
-  const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
+  const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri) ?? projectFolder;
   return workspaceFolder ? [workspaceFolder.uri.fsPath] : fallback;
 }
 

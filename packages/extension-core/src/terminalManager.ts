@@ -19,11 +19,11 @@ export interface TerminalSettings {
   runTarget: RunTarget;
   cleanupGeneratedPython: boolean;
   runtimePythonPaths?: readonly string[];
+  workspaceFolderPath?: string;
 }
 
 export class SageTerminalManager implements vscode.Disposable {
-  private replTerminal: vscode.Terminal | undefined;
-  private replConfigurationKey: string | undefined;
+  private readonly replTerminals = new Map<string, { terminal: vscode.Terminal; configurationKey: string }>();
   private readonly runTaskLifecycle: RunTaskLifecycle<vscode.TaskExecution>;
   private readonly taskEndSubscription: vscode.Disposable;
   private readonly runInvocationNonce = randomUUID();
@@ -40,31 +40,31 @@ export class SageTerminalManager implements vscode.Disposable {
   }
 
   handleClosedTerminal(terminal: vscode.Terminal): void {
-    if (this.replTerminal === terminal) {
-      this.replTerminal = undefined;
-      this.replConfigurationKey = undefined;
+    for (const [scope, entry] of this.replTerminals) {
+      if (entry.terminal === terminal) {
+        this.replTerminals.delete(scope);
+      }
     }
   }
 
-  resetReplTerminal(): void {
-    if (this.replTerminal) {
-      this.replTerminal.dispose();
-      this.replTerminal = undefined;
-      this.replConfigurationKey = undefined;
+  resetReplTerminal(workspaceFolderPath?: string): void {
+    const scopes = workspaceFolderPath ? [workspaceFolderPath] : [...this.replTerminals.keys()];
+    for (const scope of scopes) {
+      const entry = this.replTerminals.get(scope);
+      entry?.terminal.dispose();
+      this.replTerminals.delete(scope);
     }
   }
 
   dispose(): void {
-    this.replTerminal?.dispose();
-    this.replTerminal = undefined;
-    this.replConfigurationKey = undefined;
+    this.resetReplTerminal();
     this.runTaskLifecycle.dispose();
   }
 
   async runFile(settings: TerminalSettings, filePath: string): Promise<vscode.Terminal | undefined> {
     this.runTaskLifecycle.assertActive();
     if (shouldRunInRepl(settings.runTarget)) {
-      const terminal = this.ensureReplTerminal(settings);
+      const terminal = this.ensureReplTerminal({ ...settings, workspaceFolderPath: settings.workspaceFolderPath ?? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath))?.uri.fsPath });
       terminal.sendText(
         buildReplLoadCommand(filePath, settings.runtimePythonPaths, settings.cleanupGeneratedPython),
         true,
@@ -122,7 +122,7 @@ export class SageTerminalManager implements vscode.Disposable {
     return terminal;
   }
 
-  startRepl(settings: Pick<TerminalSettings, "interpreterPath" | "interpreterArgs">): vscode.Terminal {
+  startRepl(settings: Pick<TerminalSettings, "interpreterPath" | "interpreterArgs" | "workspaceFolderPath">): vscode.Terminal {
     this.runTaskLifecycle.assertActive();
     return this.ensureReplTerminal(settings);
   }
@@ -130,26 +130,29 @@ export class SageTerminalManager implements vscode.Disposable {
   private ensureReplTerminal(settings: {
     interpreterPath: string;
     interpreterArgs: readonly string[];
+    workspaceFolderPath?: string;
   }): vscode.Terminal {
+    const scope = settings.workspaceFolderPath ?? "__no_workspace__";
     const configurationKey = JSON.stringify([
       settings.interpreterPath,
       ...settings.interpreterArgs,
     ]);
-    if (this.replTerminal && this.replConfigurationKey !== configurationKey) {
-      this.replTerminal.dispose();
-      this.replTerminal = undefined;
-      this.replConfigurationKey = undefined;
+    const existing = this.replTerminals.get(scope);
+    if (existing && existing.configurationKey !== configurationKey) {
+      existing.terminal.dispose();
+      this.replTerminals.delete(scope);
     }
-    if (!this.replTerminal) {
-      this.replTerminal = vscode.window.createTerminal({
-        name: "Sage REPL",
+    if (!this.replTerminals.has(scope)) {
+      const terminal = vscode.window.createTerminal({
+        name: settings.workspaceFolderPath ? `Sage REPL: ${path.basename(settings.workspaceFolderPath)}` : "Sage REPL",
         shellPath: settings.interpreterPath,
         shellArgs: [...settings.interpreterArgs],
+        ...(settings.workspaceFolderPath ? { cwd: settings.workspaceFolderPath } : {}),
       });
-      this.replConfigurationKey = configurationKey;
+      this.replTerminals.set(scope, { terminal, configurationKey });
     }
 
-    return this.replTerminal;
+    return this.replTerminals.get(scope)!.terminal;
   }
 
   private removeGeneratedFile(filePath: string | undefined): void {

@@ -163,7 +163,7 @@ pub(super) fn class_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?m)^\s*(?:class|cdef\s+class|cpdef\s+class)\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)",
+            r"(?m)^\s*(?:class|cdef\s+class|cpdef\s+class)\s+(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)",
         )
         .unwrap()
     })
@@ -171,14 +171,14 @@ pub(super) fn class_re() -> &'static Regex {
 
 pub(super) fn function_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?m)^\s*(?:async\s+def|def|cpdef|cdef)(?:\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed|long|short|char|int|float|double|void|object|bint|size_t|Py_ssize_t|[A-Za-z_][A-Za-z0-9_\.\*\[\]]*))*\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\n]*\])?\s*\(").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?m)^\s*(?:async\s+def|def|cpdef|cdef)(?:\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed|long|short|char|int|float|double|void|object|bint|size_t|Py_ssize_t|[A-Za-z_][A-Za-z0-9_\.\*\[\]]*))*\s+(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)(?:\s*\[[^\n]*\])?\s*\(").unwrap())
 }
 
 pub(super) fn preparser_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?P<parent>\b[A-Za-z_][A-Za-z0-9_]*\b)\.<(?P<symbols>[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)>",
+            r"(?P<parent>\b[\p{XID_Start}_][\p{XID_Continue}_]*\b)\.<(?P<symbols>[\p{XID_Start}_][\p{XID_Continue}_]*(?:\s*,\s*[\p{XID_Start}_][\p{XID_Continue}_]*)*)>",
         )
         .unwrap()
     })
@@ -187,21 +187,21 @@ pub(super) fn preparser_re() -> &'static Regex {
 pub(super) fn assignment_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?m)^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::(?P<annotation>[^=\n]+))?=\s*(?P<rhs>[^=\n].*)$").unwrap()
+        Regex::new(r"(?m)^(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*(?::(?P<annotation>[^=\n]+))?=\s*(?P<rhs>[^=\n].*)$").unwrap()
     })
 }
 
 pub(super) fn semantic_assignment_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"(?m)^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=\n]+)?=\s*[^=\n]").unwrap()
+        Regex::new(r"(?m)^\s*(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*(?::[^=\n]+)?=\s*[^=\n]").unwrap()
     })
 }
 
 pub(super) fn assignment_call_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(?P<callee>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\(")
+        Regex::new(r"^(?P<callee>[\p{XID_Start}_][\p{XID_Continue}_]*(?:\.[\p{XID_Start}_][\p{XID_Continue}_]*)*)\s*\(")
             .unwrap()
     })
 }
@@ -210,7 +210,7 @@ pub(super) fn assignment_constructor_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=\n]+)?=\s*(?P<ctor>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)\s*\(",
+            r"^(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*(?::[^=\n]+)?=\s*(?P<ctor>[\p{XID_Start}_][\p{XID_Continue}_]*(?:\.[\p{XID_Start}_][\p{XID_Continue}_]*)*)\s*\(",
         )
         .unwrap()
     })
@@ -219,7 +219,7 @@ pub(super) fn assignment_constructor_re() -> &'static Regex {
 pub(super) fn simple_assignment_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?::[^=\n]+)?=\s*(?P<rhs>[^=\n].*)$")
+        Regex::new(r"^(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*(?::[^=\n]+)?=\s*(?P<rhs>[^=\n].*)$")
             .unwrap()
     })
 }
@@ -228,7 +228,7 @@ pub(super) fn static_member_alias_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*staticmethod\(\s*(?P<module>[A-Za-z_][A-Za-z0-9_]*)\.(?P<member>[A-Za-z_][A-Za-z0-9_]*)\s*\)",
+            r"^\s*(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*=\s*staticmethod\(\s*(?P<module>[\p{XID_Start}_][\p{XID_Continue}_]*)\.(?P<member>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*\)",
         )
         .unwrap()
     })
@@ -238,7 +238,7 @@ pub(super) fn member_alias_assignment_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?P<owner>[A-Za-z_][A-Za-z0-9_]*)\.(?P<member>[A-Za-z_][A-Za-z0-9_]*)$",
+            r"^(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*=\s*(?P<owner>[\p{XID_Start}_][\p{XID_Continue}_]*)\.(?P<member>[\p{XID_Start}_][\p{XID_Continue}_]*)$",
         )
         .unwrap()
     })
@@ -246,14 +246,14 @@ pub(super) fn member_alias_assignment_re() -> &'static Regex {
 
 pub(super) fn member_reference_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^[\p{XID_Start}_][\p{XID_Continue}_]*\.[\p{XID_Start}_][\p{XID_Continue}_]*$").unwrap())
 }
 
 pub(super) fn deprecated_function_alias_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*=\s*deprecated_function_alias\(\s*(?P<issue>[0-9]+)\s*,\s*(?P<target>[A-Za-z_][A-Za-z0-9_\.]*)",
+            r"^\s*(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\s*=\s*deprecated_function_alias\(\s*(?P<issue>[0-9]+)\s*,\s*(?P<target>[A-Za-z_][A-Za-z0-9_\.]*)",
         )
         .unwrap()
     })
@@ -262,18 +262,18 @@ pub(super) fn deprecated_function_alias_re() -> &'static Regex {
 pub(super) fn function_header_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
-        Regex::new(r"^(?:async\s+def|def|cpdef|cdef)(?:\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed|long|short|char|int|float|double|void|object|bint|size_t|Py_ssize_t|[A-Za-z_][A-Za-z0-9_\.\*\[\]]*))*\s+(?P<name>[A-Za-z_][A-Za-z0-9_]*)(?:\s*\[[^\n]*\])?\s*\(").unwrap()
+        Regex::new(r"^(?:async\s+def|def|cpdef|cdef)(?:\s+(?:inline|api|public|readonly|nogil|gil|except|const|unsigned|signed|long|short|char|int|float|double|void|object|bint|size_t|Py_ssize_t|[A-Za-z_][A-Za-z0-9_\.\*\[\]]*))*\s+(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)(?:\s*\[[^\n]*\])?\s*\(").unwrap()
     })
 }
 
 pub(super) fn identifier_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_]*$").unwrap())
+    RE.get_or_init(|| Regex::new(r"^[\p{XID_Start}_][\p{XID_Continue}_]*$").unwrap())
 }
 
 pub(super) fn word_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"\b(?P<name>[A-Za-z_][A-Za-z0-9_]*)\b").unwrap())
+    RE.get_or_init(|| Regex::new(r"\b(?P<name>[\p{XID_Start}_][\p{XID_Continue}_]*)\b").unwrap())
 }
 
 pub(super) fn decorator_re() -> &'static Regex {
@@ -285,7 +285,7 @@ pub(super) fn matrix_method_name_override_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r#"name\s*=\s*(?:"(?P<double>[A-Za-z_][A-Za-z0-9_]*)"|'(?P<single>[A-Za-z_][A-Za-z0-9_]*)')"#,
+            r#"name\s*=\s*(?:"(?P<double>[\p{XID_Start}_][\p{XID_Continue}_]*)"|'(?P<single>[\p{XID_Start}_][\p{XID_Continue}_]*)')"#,
         )
         .unwrap()
     })

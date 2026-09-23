@@ -39,6 +39,10 @@ export async function run(): Promise<void> {
     await runPlainPythonQuietSmoke();
     return;
   }
+  if (process.env.SAGE_TEST_HOST_MODE === "multi-root") {
+    await runMultiRootSmoke();
+    return;
+  }
 
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   assert.ok(workspaceFolder, "expected the smoke workspace to be open in the extension host");
@@ -358,6 +362,88 @@ async function runPlainPythonQuietSmoke(): Promise<void> {
   assert.equal(snapshot.launchCount, 0, "ordinary Python workspace should not auto-start the Sage LSP");
   assert.equal(snapshot.hasClient, false, "ordinary Python workspace should not hold a Sage LSP client");
   assert.equal(snapshot.operationInFlight, false, "ordinary Python workspace should not have Sage LSP startup in flight");
+}
+
+async function runMultiRootSmoke(): Promise<void> {
+  const folders = vscode.workspace.workspaceFolders ?? [];
+  assert.equal(folders.length, 2, "expected two project folders");
+  const [alpha, beta] = folders;
+  for (const [folder, pythonEnabled, interpreter] of [
+    [alpha, false, "/bin/sh"],
+    [beta, true, "/bin/zsh"],
+  ] as const) {
+    const configuration = vscode.workspace.getConfiguration("sage", folder.uri);
+    await configuration.update("analysis.sourceRoots", ["src"], vscode.ConfigurationTarget.WorkspaceFolder);
+    await configuration.update("analysis.enableRuntimeIntrospection", false, vscode.ConfigurationTarget.WorkspaceFolder);
+    await configuration.update("analysis.enablePythonFiles", pythonEnabled, vscode.ConfigurationTarget.WorkspaceFolder);
+    await configuration.update("interpreter.path", interpreter, vscode.ConfigurationTarget.WorkspaceFolder);
+  }
+  await waitForCommand("sage.showIndexStatus");
+  const statusFor = async (folder: vscode.WorkspaceFolder) => {
+    const uri = vscode.Uri.joinPath(folder.uri, "src", "demo.sage");
+    const document = await vscode.workspace.openTextDocument(uri);
+    await vscode.window.showTextDocument(document);
+    const status = await vscode.commands.executeCommand<IndexStatusSnapshot & { cache_path?: string; source_root_fingerprints?: Array<{ root?: string }> }>("sage.showIndexStatus");
+    assert.ok(status?.cache_path, `${folder.name}: expected indexed cache`);
+    assert.ok(status.source_root_fingerprints?.some((entry) => entry.root && normalizePathForAssertion(entry.root).startsWith(normalizePathForAssertion(folder.uri.fsPath))), `${folder.name}: expected own source root`);
+    const symbol = `${folder.name}_value`;
+    const usage = positionOfNth(document, symbol, 2);
+    const definitions = (await vscode.commands.executeCommand<Array<vscode.Location | vscode.LocationLink>>(
+      "vscode.executeDefinitionProvider", uri, usage,
+    )) ?? [];
+    assertSingleDefinitionTarget(definitions, "src/demo.sage", `${folder.name} definition`, "file");
+    const completionResult = (await vscode.commands.executeCommand<vscode.CompletionList | vscode.CompletionItem[]>(
+      "vscode.executeCompletionItemProvider", uri, positionOfNth(document, symbol, 2, 3),
+    )) ?? [];
+    const items = Array.isArray(completionResult) ? completionResult : completionResult.items;
+    assert.ok(items.some((item) => item.label.toString() === symbol), `${folder.name}: expected own completion`);
+    return status;
+  };
+  const alphaStatus = await statusFor(alpha);
+  const alphaSnapshot = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
+  const betaStatus = await statusFor(beta);
+  const betaSnapshot = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
+  assert.notEqual(alphaStatus.cache_path, betaStatus.cache_path, "projects need separate index caches");
+  assert.ok(alphaSnapshot.hasClient && betaSnapshot.hasClient);
+
+  const betaPython = vscode.Uri.joinPath(beta.uri, "src", "demo.py");
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(betaPython));
+  assert.equal((await sageContextSnapshot()).pythonFilesEnabled, true);
+  const alphaPython = vscode.Uri.joinPath(alpha.uri, "src", "demo.py");
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(alphaPython));
+  assert.equal((await sageContextSnapshot()).pythonFilesEnabled, false);
+
+  for (const folder of [alpha, beta]) {
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder.uri, "src", "demo.sage")));
+    await vscode.commands.executeCommand("sage.startRepl");
+  }
+  for (const folder of [alpha, beta]) {
+    const terminal = vscode.window.terminals.find((candidate) => candidate.name === `Sage REPL: ${folder.name}`);
+    assert.ok(terminal, `${folder.name}: expected separate REPL`);
+    assert.equal((terminal.creationOptions as vscode.TerminalOptions).cwd, folder.uri.fsPath);
+    assert.equal((terminal.creationOptions as vscode.TerminalOptions).shellPath, folder === alpha ? "/bin/sh" : "/bin/zsh");
+  }
+  for (const folder of [alpha, beta]) {
+    await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder.uri, "src", "demo.sage")));
+    let subscription: vscode.Disposable | undefined;
+    const started = new Promise<vscode.Task>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`${folder.name}: run task did not start`)), 5000);
+      subscription = vscode.tasks.onDidStartTask(({ execution }) => {
+        if (execution.task.source === "Sage") {
+          clearTimeout(timeout);
+          resolve(execution.task);
+        }
+      });
+    });
+    try {
+      await vscode.commands.executeCommand("sage.runCurrentFile");
+      const task = await started;
+      assert.equal((task.execution as vscode.ProcessExecution).process, folder === alpha ? "/bin/sh" : "/bin/zsh");
+      assert.equal((task.scope as vscode.WorkspaceFolder).uri.toString(), folder.uri.toString());
+    } finally {
+      subscription?.dispose();
+    }
+  }
 }
 
 async function verifyWorkspaceHoverDefinitionCompletion(workspaceUri: vscode.Uri): Promise<void> {

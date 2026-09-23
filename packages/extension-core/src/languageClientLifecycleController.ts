@@ -14,6 +14,8 @@ export interface LanguageClientLifecycleSnapshot {
   restartQueued: boolean;
   operationInFlight: boolean;
   hasClient: boolean;
+  recoveryStopped: boolean;
+  consecutiveFailures: number;
 }
 
 interface LanguageClientLifecycleLogger {
@@ -54,6 +56,9 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
   private deactivating = false;
   private slowNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   private slowNoticeShown = false;
+  private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
+  private failureTimes: number[] = [];
+  private recoveryStopped = false;
   private readonly scheduleTimeout: typeof setTimeout;
   private readonly cancelTimeout: typeof clearTimeout;
 
@@ -74,6 +79,17 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
     return this.deactivating;
   }
 
+  get hasStoppedRecovery(): boolean {
+    return this.recoveryStopped;
+  }
+
+  manualRestart(): Promise<void> {
+    this.clearRecoveryTimer();
+    this.failureTimes = [];
+    this.recoveryStopped = false;
+    return this.start();
+  }
+
   isCurrent(client: TClient): boolean {
     return this.client === client;
   }
@@ -87,13 +103,16 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
       restartQueued: this.restartQueued,
       operationInFlight: Boolean(this.currentOperation),
       hasClient: Boolean(this.client),
+      recoveryStopped: this.recoveryStopped,
+      consecutiveFailures: this.failureTimes.length,
     };
   }
 
   async start(): Promise<void> {
-    if (this.deactivating) {
+    if (this.deactivating || this.recoveryStopped) {
       return;
     }
+    this.clearRecoveryTimer();
     this.restartQueued = true;
     while (!this.deactivating) {
       if (!this.currentOperation) {
@@ -112,7 +131,7 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
   }
 
   startInBackground(reason: string, force = false): void {
-    if (this.deactivating) {
+    if (this.deactivating || this.recoveryStopped || this.recoveryTimer) {
       return;
     }
     if (!force && !this.options.shouldAutoStart()) {
@@ -136,6 +155,7 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
 
   async deactivate(): Promise<void> {
     this.deactivating = true;
+    this.clearRecoveryTimer();
     this.restartQueued = false;
     this.clearSlowStartNotice();
     const operation = this.currentOperation;
@@ -221,8 +241,10 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
             && !this.deactivating
           ),
           onClose: ({ managedShutdown }) => {
-            if (!managedShutdown) {
+            if (!managedShutdown && this.client === nextClient && !this.deactivating) {
               this.unexpectedCloseCount += 1;
+              this.client = undefined;
+              this.scheduleRecovery();
             }
           },
         });
@@ -261,6 +283,7 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
           continue;
         }
         this.options.onStartError(error);
+        this.scheduleRecovery();
       }
     }
   }
@@ -283,6 +306,41 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
     if (this.slowNoticeTimer !== undefined) {
       this.cancelTimeout(this.slowNoticeTimer);
       this.slowNoticeTimer = undefined;
+    }
+  }
+
+  private scheduleRecovery(): void {
+    if (this.deactivating || this.recoveryStopped) {
+      return;
+    }
+    const now = Date.now();
+    this.failureTimes = this.failureTimes.filter((time) => now - time < 3 * 60_000);
+    this.failureTimes.push(now);
+    if (this.failureTimes.length >= 5) {
+      this.recoveryStopped = true;
+      this.options.logger.error("extension", "language server recovery stopped after repeated failures", {
+        failures: this.failureTimes.length,
+      });
+      this.options.onStateChanged();
+      return;
+    }
+    this.clearRecoveryTimer();
+    const delay = Math.min(1000 * 2 ** (this.failureTimes.length - 1), 8000);
+    this.options.logger.warn("extension", "language server will restart after an unexpected failure", {
+      failures: this.failureTimes.length,
+      delayMs: delay,
+    });
+    this.recoveryTimer = this.scheduleTimeout(() => {
+      this.recoveryTimer = undefined;
+      this.startInBackground("automatic-recovery", true);
+    }, delay);
+    this.options.onStateChanged();
+  }
+
+  private clearRecoveryTimer(): void {
+    if (this.recoveryTimer !== undefined) {
+      this.cancelTimeout(this.recoveryTimer);
+      this.recoveryTimer = undefined;
     }
   }
 }

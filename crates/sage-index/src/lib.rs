@@ -15,6 +15,7 @@ mod cache_metadata;
 mod cache_persistence;
 mod cache_queries;
 mod identifier_filter;
+pub mod identifiers;
 mod lookup_state;
 mod materialized_cache;
 mod model;
@@ -66,7 +67,7 @@ pub fn source_definition_header_end(source: &str, offset: usize) -> Option<usize
 
 // Bump whenever persisted symbol/materialization semantics change. In particular,
 // v30 discards symbol rows created before PEP 695 generic declarations were indexed.
-const CACHE_FORMAT_VERSION: &str = "sage-index-v30-pep695-declarations";
+const CACHE_FORMAT_VERSION: &str = "sage-index-v31-unicode-identifiers";
 const MAX_IMPORT_RESOLUTION_DEPTH: usize = 8;
 const MAX_DYNAMIC_HOT_EXPORT_NAMES: usize = 256;
 const SAGE_STAR_IMPORT_SENTINEL: &str = "__sage_star_import__";

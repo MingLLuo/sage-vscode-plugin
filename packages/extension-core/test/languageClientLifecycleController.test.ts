@@ -161,6 +161,8 @@ test("concurrent start requests queue exactly one follow-up restart", async () =
     restartQueued: false,
     operationInFlight: false,
     hasClient: true,
+    recoveryStopped: false,
+    consecutiveFailures: 0,
   });
 });
 
@@ -261,9 +263,40 @@ test("managed restarts and unexpected closes keep separate counters", async () =
 
   const snapshot = harness.controller.snapshot();
   assert.equal(snapshot.launchCount, 2);
-  assert.equal(snapshot.managedCloseCount, 1);
+  assert.equal(snapshot.managedCloseCount, 0);
   assert.equal(snapshot.unexpectedCloseCount, 1);
   assert.equal(harness.hooks[0].shouldAutoRestartOnClose(), false);
+});
+
+test("repeated crashes stop recovery until manual restart", async () => {
+  const harness = createHarness({ immediateStart: true });
+  await harness.controller.start();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    harness.hooks[attempt].onClose({ managedShutdown: false });
+    assert.equal(harness.controller.activeClient, undefined);
+    harness.runTimers();
+    await flushAsyncWork();
+    assert.equal(harness.clients.length, attempt + 2);
+  }
+  harness.hooks[4].onClose({ managedShutdown: false });
+  assert.equal(harness.controller.snapshot().recoveryStopped, true);
+  harness.runTimers();
+  await flushAsyncWork();
+  assert.equal(harness.clients.length, 5);
+  await harness.controller.manualRestart();
+  assert.equal(harness.clients.length, 6);
+  assert.equal(harness.controller.snapshot().recoveryStopped, false);
+  assert.equal(harness.controller.snapshot().consecutiveFailures, 0);
+});
+
+test("deactivation cancels a pending crash recovery", async () => {
+  const harness = createHarness({ immediateStart: true });
+  await harness.controller.start();
+  harness.hooks[0].onClose({ managedShutdown: false });
+  await harness.controller.deactivate();
+  harness.runTimers();
+  await flushAsyncWork();
+  assert.equal(harness.clients.length, 1);
 });
 
 test("a restart clears status refresh before stopping the active client", async () => {

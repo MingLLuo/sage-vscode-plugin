@@ -307,12 +307,7 @@ fn workspace_symbol_rank(symbol: &SymbolInformation, query: &str) -> (u8, usize)
 }
 
 fn is_identifier_query(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|character| character == '_' || character.is_ascii_alphanumeric())
+    sage_index::identifiers::is_identifier(value)
 }
 
 #[cfg(all(test, unix))]

@@ -18,6 +18,7 @@ async function main(): Promise<void> {
   const smokeWorkspacePath = await cloneSmokeWorkspace(repositoryRoot, tempRoot);
   const externalSageSourceRoot = await createExternalSageSourceRoot(tempRoot);
   const plainPythonWorkspacePath = await createPlainPythonWorkspace(tempRoot);
+  const multiRootWorkspacePath = await createMultiRootWorkspace(tempRoot);
   let completedSuccessfully = false;
 
   try {
@@ -43,6 +44,16 @@ async function main(): Promise<void> {
       externalSageSourceRoot,
     });
 
+    await runExtensionHostSuite({
+      vscodeExecutablePath,
+      extensionDevelopmentPath,
+      extensionTestsPath,
+      workspacePath: multiRootWorkspacePath,
+      userDataDir: path.join(tempRoot, "userdata-multi-root"),
+      extensionsDir: path.join(tempRoot, "extensions-multi-root"),
+      mode: "multi-root",
+    });
+
     completedSuccessfully = true;
   } finally {
     if (completedSuccessfully && process.env.SAGE_TEST_KEEP_TEMP !== "1") {
@@ -60,7 +71,7 @@ async function runExtensionHostSuite(options: {
   workspacePath: string;
   userDataDir: string;
   extensionsDir: string;
-  mode: "plain-python" | "smoke";
+  mode: "plain-python" | "smoke" | "multi-root";
   nativeSage?: { sourceRoot?: string; executable?: string };
   externalSageSourceRoot?: string;
 }): Promise<void> {
@@ -128,6 +139,19 @@ async function createPlainPythonWorkspace(tempRoot: string): Promise<string> {
     ].join("\n"),
   );
   return targetWorkspace;
+}
+
+async function createMultiRootWorkspace(tempRoot: string): Promise<string> {
+  const folders = ["alpha", "beta"];
+  for (const folder of folders) {
+    const sourceRoot = path.join(tempRoot, folder, "src");
+    await fs.mkdir(sourceRoot, { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, "demo.sage"), `def ${folder}_value():\n    return 1\n\n${folder}_value()\n`);
+    await fs.writeFile(path.join(sourceRoot, "demo.py"), `from sage.all import QQ\nvalue = QQ\n`);
+  }
+  const workspacePath = path.join(tempRoot, "multi-root.code-workspace");
+  await fs.writeFile(workspacePath, JSON.stringify({ folders: folders.map((folder) => ({ path: folder })) }));
+  return workspacePath;
 }
 
 async function createExternalSageSourceRoot(tempRoot: string): Promise<string> {

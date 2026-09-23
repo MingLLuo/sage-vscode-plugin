@@ -140,24 +140,7 @@ pub(super) fn word_at_position(text: &str, position: Position) -> Option<(String
             character -= 1;
         }
     }
-    let bytes = line.as_bytes();
-    if character >= bytes.len() {
-        return None;
-    }
-    if !is_word_byte(bytes[character]) && character > 0 && is_word_byte(bytes[character - 1]) {
-        character -= 1;
-    }
-    if !is_word_byte(bytes[character]) {
-        return None;
-    }
-    let mut start = character;
-    let mut end = character + 1;
-    while start > 0 && is_word_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    while end < bytes.len() && is_word_byte(bytes[end]) {
-        end += 1;
-    }
+    let (start, end) = sage_index::identifiers::span_at(line, character)?;
     Some((
         line[start..end].to_string(),
         Range {
@@ -174,5 +157,5 @@ pub(super) fn word_at_position(text: &str, position: Position) -> Option<(String
 }
 
 pub(super) fn is_word_byte(byte: u8) -> bool {
-    byte == b'_' || byte.is_ascii_alphanumeric()
+    byte == b'_' || byte.is_ascii_alphanumeric() || byte >= 0x80
 }

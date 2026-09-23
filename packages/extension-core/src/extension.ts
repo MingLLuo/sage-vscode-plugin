@@ -97,6 +97,7 @@ import {
 import { LanguageServerStatusRefreshController } from "./statusRefreshController";
 
 let languageClientLifecycleController: LanguageClientLifecycleController<LanguageClient> | undefined;
+let controllers = new Map<string, LanguageClientLifecycleController<LanguageClient>>();
 let configurationProfileUpdateDepth = 0;
 let suppressedConfigurationRestartCount = 0;
 let lastIndexStatus: IndexStatusSummary | undefined;
@@ -122,7 +123,7 @@ interface TestConfigureWorkspaceProfileResult {
 function currentWorkspaceRuntimeState(): WorkspaceRuntimeState {
   return {
     trusted: vscode.workspace.isTrusted,
-    hasVirtualWorkspace: (vscode.workspace.workspaceFolders ?? []).some((folder) => folder.uri.scheme !== "file"),
+    hasVirtualWorkspace: activeWorkspaceFolder()?.uri.scheme !== "file",
   };
 }
 
@@ -211,6 +212,34 @@ function languageClientLifecycleSnapshot(): Record<string, boolean | number> {
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   extensionDeactivating = false;
+  controllers = new Map<string, LanguageClientLifecycleController<LanguageClient>>();
+  const statuses = new Map<string, { index?: IndexStatusSummary; docs?: DocsStatusSummary }>();
+  let activeScope = "";
+  const folderKey = (folder: vscode.WorkspaceFolder | undefined): string => folder?.uri.toString() ?? "__no_workspace__";
+  const selectActiveScope = (): void => {
+    const key = vscode.window.activeTextEditor?.document.uri.scheme === SAGE_SOURCE_SCHEME && activeScope
+      ? activeScope
+      : folderKey(activeWorkspaceFolder());
+    if (key === activeScope) {
+      languageClientLifecycleController = controllers.get(key);
+      return;
+    }
+    if (activeScope) statuses.set(activeScope, { index: lastIndexStatus, docs: lastDocsStatus });
+    activeScope = key;
+    const status = statuses.get(key);
+    lastIndexStatus = status?.index;
+    lastDocsStatus = status?.docs;
+    languageClientLifecycleController = controllers.get(key);
+    void runtimeSourceRootDiscoveryController?.invalidateAndSchedule("active-project-change");
+  };
+  const currentProjectFolder = (): vscode.WorkspaceFolder | undefined => {
+    const editor = vscode.window.activeTextEditor;
+    if (editor?.document.uri.scheme === SAGE_SOURCE_SCHEME) {
+      return vscode.workspace.workspaceFolders?.find((folder) => folderKey(folder) === activeScope)
+        ?? activeWorkspaceFolder();
+    }
+    return activeWorkspaceFolder();
+  };
   const outputChannel = vscode.window.createOutputChannel("Sage");
   const languageOutputChannel = vscode.window.createOutputChannel("Sage Language Server");
   const logger = createOutputLogger(outputChannel);
@@ -232,9 +261,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.info("execution", message, fields);
   };
   const buildEnvironmentPresentationInput = (languageServerStarting = false): EnvironmentPresentationInput => {
-    const settings = readSettings(activeWorkspaceFolder());
+    const settings = readSettings(currentProjectFolder());
     const workspaceData = buildWorkspaceInitializationData(
-      workspaceFolderPaths(),
+      currentProjectFolder() ? [currentProjectFolder()!.uri.fsPath] : workspaceFolderPaths(),
       effectiveInitializationSourceRoots(settings),
       {
         interpreterPath: settings.interpreterPath,
@@ -261,6 +290,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       workspaceRuntimeState: currentWorkspaceRuntimeState(),
       languageServerStarting,
       languageServerAvailable: Boolean(languageClientLifecycleController?.activeClient),
+      languageServerFailed: languageClientLifecycleController?.hasStoppedRecovery,
+      workspaceLabel: (vscode.workspace.workspaceFolders?.length ?? 0) > 1 ? currentProjectFolder()?.name : undefined,
     };
   };
 
@@ -284,7 +315,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   const activeEditorSettings = (): ReturnType<typeof readSettings> => {
     const activeDocument = vscode.window.activeTextEditor?.document;
-    return readSettings(activeDocument ? vscode.workspace.getWorkspaceFolder(activeDocument.uri) : activeWorkspaceFolder());
+    return readSettings(activeDocument && activeDocument.uri.scheme !== SAGE_SOURCE_SCHEME
+      ? vscode.workspace.getWorkspaceFolder(activeDocument.uri) ?? currentProjectFolder()
+      : currentProjectFolder());
   };
 
   const activeOrVisibleSageEditor = (): vscode.TextEditor | undefined => {
@@ -338,7 +371,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     reason: string,
     showCompletionMessage: boolean,
   ): Promise<TestConfigureWorkspaceProfileResult | undefined> => {
-    const workspaceFolder = activeWorkspaceFolder();
+    const workspaceFolder = currentProjectFolder();
     if (!workspaceFolder) {
       void vscode.window.showWarningMessage("Open a workspace folder before configuring Sage.");
       return undefined;
@@ -407,7 +440,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (showCompletionMessage) {
       languageClientLifecycleController?.startInBackground(reason, true);
     } else {
-      await languageClientLifecycleController?.start();
+      await languageClientLifecycleController?.manualRestart();
     }
 
     if (showCompletionMessage) {
@@ -431,6 +464,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const updateStatusBar = (): void => {
+    selectActiveScope();
     const policyInput = activationPolicyInput();
     if (!shouldExposeSageExperience(policyInput)) {
       statusBarItem.hide();
@@ -485,14 +519,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const ensureLanguageClientReady = async (action: string): Promise<LanguageClient | undefined> => {
+    selectActiveScope();
+    const controller = languageClientLifecycleController;
     if (!(await ensureWorkspaceRuntimeAvailable(action))) {
       return undefined;
     }
-    if (!languageClientLifecycleController?.activeClient) {
-      if (!languageClientLifecycleController?.operation) {
-        languageClientLifecycleController?.startInBackground(action, true);
+    if (!controller?.activeClient) {
+      if (!controller?.operation) {
+        controller?.startInBackground(action, true);
       }
-      const operation = languageClientLifecycleController?.operation;
+      const operation = controller?.operation;
       if (operation) {
         const waitResult = await vscode.window.withProgress(
           {
@@ -511,9 +547,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         }
       }
     }
-    const activeClient = languageClientLifecycleController?.activeClient;
+    const activeClient = controller?.activeClient;
     if (!activeClient) {
-      void vscode.window.showWarningMessage("Sage language server is not available yet.");
+      void vscode.window.showWarningMessage(controller?.hasStoppedRecovery
+        ? "Sage language server stopped after repeated failures. Run 'Sage: Restart Language Server' to retry."
+        : "Sage language server is not available yet.");
       return undefined;
     }
     return activeClient;
@@ -528,11 +566,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }),
   );
 
-  const refreshLanguageServerStatus = async (): Promise<void> => {
-    const activeClient = languageClientLifecycleController?.activeClient;
+  const refreshLanguageServerStatus = async (
+    controller = languageClientLifecycleController,
+    scope = activeScope,
+  ): Promise<void> => {
+    const activeClient = controller?.activeClient;
     if (!activeClient) {
-      lastIndexStatus = undefined;
-      lastDocsStatus = undefined;
+      statuses.delete(scope);
+      if (scope === activeScope) {
+        lastIndexStatus = undefined;
+        lastDocsStatus = undefined;
+      }
       updateStatusBar();
       return;
     }
@@ -557,17 +601,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         "Sage language server status refresh",
         () => cancellation.cancel(),
       );
-      if (!languageClientLifecycleController?.isCurrent(activeClient) || extensionDeactivating) {
+      if (!controller?.isCurrent(activeClient) || extensionDeactivating) {
         return;
       }
-      lastIndexStatus = indexStatus ?? undefined;
-      lastDocsStatus = docsStatus ?? undefined;
-      maybePromptForIndexMaintenance(lastIndexStatus);
+      statuses.set(scope, { index: indexStatus ?? undefined, docs: docsStatus ?? undefined });
+      if (scope === activeScope) {
+        lastIndexStatus = indexStatus ?? undefined;
+        lastDocsStatus = docsStatus ?? undefined;
+        maybePromptForIndexMaintenance(lastIndexStatus);
+      }
     } catch (error) {
       logger.warn("extension", "failed to refresh language server status", { error: String(error) });
     } finally {
       cancellation.dispose();
-      if (!extensionDeactivating && languageClientLifecycleController?.isCurrent(activeClient)) {
+      if (!extensionDeactivating && controller?.isCurrent(activeClient) && scope === activeScope) {
         updateStatusBar();
       }
     }
@@ -618,13 +665,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     languageServerStatusRefreshController?.schedule();
   };
 
-  languageClientLifecycleController = new LanguageClientLifecycleController<LanguageClient>({
+  const createScopedController = (folder: vscode.WorkspaceFolder): LanguageClientLifecycleController<LanguageClient> => {
+    const scope = folderKey(folder);
+    let controller: LanguageClientLifecycleController<LanguageClient>;
+    controller = new LanguageClientLifecycleController<LanguageClient>({
     createClient: (hooks) => createLanguageClient(context, languageOutputChannel, {
       fileSystemWatcher: languageServerFileWatcher,
+      workspaceFolder: folder,
       shouldAutoRestartOnClose: hooks.shouldAutoRestartOnClose,
-      runtimeDiscoveredSourceRoots: [
+      runtimeDiscoveredSourceRoots: activeScope === scope ? [
         ...(runtimeSourceRootDiscoveryController?.discoveredRoots ?? []),
-      ],
+      ] : [],
       onClose: hooks.onClose,
     }),
     startClient: (nextClient) => startLanguageClientWithTimeout(nextClient, {
@@ -642,25 +693,28 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
       label,
     ),
-    beforeRestart: clearLanguageServerStatusRefresh,
+    beforeRestart: () => { if (scope === activeScope) clearLanguageServerStatusRefresh(); },
     beforeStart: () => runIndexCacheMaintenance("language-client-start"),
     canRun: () => isWorkspaceRuntimeAvailable(currentWorkspaceRuntimeState()),
-    shouldAutoStart: () => shouldAutoStartLanguageClient(activationPolicyInput()),
+    shouldAutoStart: () => scope === activeScope && shouldAutoStartLanguageClient(activationPolicyInput()),
     onRuntimeUnavailable: () => {
       const workspaceRuntimeState = currentWorkspaceRuntimeState();
-      lastIndexStatus = undefined;
-      lastDocsStatus = undefined;
-      updateStatusBar();
+      statuses.delete(scope);
+      if (scope === activeScope) {
+        lastIndexStatus = undefined;
+        lastDocsStatus = undefined;
+        updateStatusBar();
+      }
       logger.info("extension", "language client disabled by workspace runtime state", {
         trusted: workspaceRuntimeState.trusted,
         hasVirtualWorkspace: workspaceRuntimeState.hasVirtualWorkspace,
       });
     },
     afterStarted: async () => {
-      await refreshLanguageServerStatus();
-      scheduleLanguageServerStatusRefresh();
+      await refreshLanguageServerStatus(controller, scope);
+      if (scope === activeScope) scheduleLanguageServerStatusRefresh();
     },
-    onStateChanged: updateStatusBar,
+    onStateChanged: () => { if (scope === activeScope) updateStatusBar(); },
     onSlowStartNotice: (reason) => {
       logger.info("extension", "showing slow language-server startup notice", { reason });
       void vscode.window
@@ -685,15 +739,21 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     shutdownTimeoutMs: LANGUAGE_SERVER_SHUTDOWN_TIMEOUT_MS,
     slowStartNoticeMs: SLOW_LANGUAGE_SERVER_NOTICE_MS,
   });
+    return controller;
+  };
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    if (folder.uri.scheme === "file") controllers.set(folderKey(folder), createScopedController(folder));
+  }
+  selectActiveScope();
 
   runtimeSourceRootDiscoveryController = new RuntimeSourceRootDiscoveryController({
     loadCachedRoots: (snapshot) => {
-      const key = JSON.stringify([snapshot.interpreterPath, snapshot.interpreterArgs, snapshot.configuredSourceRoots]);
+      const key = JSON.stringify([snapshot.scopeKey, snapshot.interpreterPath, snapshot.interpreterArgs, snapshot.configuredSourceRoots]);
       const cached = context.globalState.get<Record<string, string[]>>("sage.runtimeSourceRoots.v1", {});
       return (cached[key] ?? []).filter((root) => fs.existsSync(path.join(root, "sage")));
     },
     saveCachedRoots: async (snapshot, roots) => {
-      const key = JSON.stringify([snapshot.interpreterPath, snapshot.interpreterArgs, snapshot.configuredSourceRoots]);
+      const key = JSON.stringify([snapshot.scopeKey, snapshot.interpreterPath, snapshot.interpreterArgs, snapshot.configuredSourceRoots]);
       const cached = context.globalState.get<Record<string, string[]>>("sage.runtimeSourceRoots.v1", {});
       const sageRoots = roots.filter((root) => fs.existsSync(path.join(root, "sage")));
       if (sageRoots.length > 0) {
@@ -708,13 +768,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         logger.debug("workspace", "runtime source-root discovery skipped outside Sage context", { reason });
         return undefined;
       }
-      const settings = readSettings(activeWorkspaceFolder());
+      const settings = readSettings(currentProjectFolder());
       if (!settings.runtimeIntrospectionEnabled || !settings.interpreterPath) {
         return undefined;
       }
       return {
-        scopeKey: activeWorkspaceFolder()?.uri.toString() ?? "workspace",
-        workspaceFolders: workspaceFolderPaths(),
+        scopeKey: currentProjectFolder()?.uri.toString() ?? "workspace",
+        workspaceFolders: currentProjectFolder() ? [currentProjectFolder()!.uri.fsPath] : workspaceFolderPaths(),
         configuredSourceRoots: settings.sourceRoots,
         interpreterPath: settings.interpreterPath,
         interpreterArgs: settings.interpreterArgs,
@@ -782,6 +842,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       cellCodeLensProvider.refresh();
       updateStatusBar();
       scheduleRuntimeSourceRootDiscovery("active-editor-change");
+      selectActiveScope();
       if (
         !languageClientLifecycleController?.activeClient
         && !languageClientLifecycleController?.operation
@@ -794,7 +855,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await setWorkspaceContexts();
       cellCodeLensProvider.refresh();
       scheduleRuntimeSourceRootDiscovery("workspace-trust-granted");
-      languageClientLifecycleController?.startInBackground("workspace-trust-granted");
+      for (const controller of controllers.values()) {
+        controller.startInBackground("workspace-trust-granted");
+      }
     }),
     vscode.commands.registerCommand("sage.openGettingStarted", async () => {
       await vscode.commands.executeCommand(
@@ -818,7 +881,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       if (!(await ensureWorkspaceRuntimeAvailable("Selecting a Sage interpreter"))) {
         return;
       }
-      const workspaceFolder = activeWorkspaceFolder();
+      const workspaceFolder = currentProjectFolder();
       const settings = readSettings(workspaceFolder);
       const detectedOptions = discoverInterpreterCandidates({
         currentPath: settings.interpreterPath,
@@ -875,13 +938,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       logger.info("extension", "restarting language server");
-      await languageClientLifecycleController?.start();
+      await languageClientLifecycleController?.manualRestart();
     }),
     vscode.commands.registerCommand("sage.configureWorkspace", async () => {
       if (!(await ensureWorkspaceRuntimeAvailable("Configuring the Sage workspace"))) {
         return;
       }
-      const workspaceFolder = activeWorkspaceFolder();
+      const workspaceFolder = currentProjectFolder();
       if (!workspaceFolder) {
         void vscode.window.showWarningMessage("Open a workspace folder before configuring Sage.");
         return;
@@ -910,6 +973,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       terminalManager,
       ensureWorkspaceRuntimeAvailable,
       workspaceFolderPaths,
+      activeProjectFolder: currentProjectFolder,
       showExecutionStatus,
     }),
     ...registerNavigationCommands({
@@ -943,6 +1007,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       },
       refreshLanguageServerStatus,
       activeEditorSettings,
+      activeProjectFolder: currentProjectFolder,
       workspaceFolderPaths,
       currentWorkspaceRuntimeState,
       buildEnvironmentPresentationInput,
@@ -962,7 +1027,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       if (event.affectsConfiguration("sage.interpreter.path") || event.affectsConfiguration("sage.interpreter.args")) {
-        terminalManager.resetReplTerminal();
+        for (const folder of vscode.workspace.workspaceFolders ?? []) {
+          if (event.affectsConfiguration("sage.interpreter.path", folder.uri)
+            || event.affectsConfiguration("sage.interpreter.args", folder.uri)) {
+            terminalManager.resetReplTerminal(folder.uri.fsPath);
+          }
+        }
       }
       const runtimeSourceRootInputsChanged = (
         event.affectsConfiguration("sage.interpreter.path")
@@ -990,10 +1060,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           });
           return;
         }
-        languageClientLifecycleController?.startInBackground("configuration-change");
+        for (const folder of vscode.workspace.workspaceFolders ?? []) {
+          if (shouldRestartLanguageServer((section) => event.affectsConfiguration(section, folder.uri))) {
+            controllers.get(folderKey(folder))?.startInBackground("configuration-change", true);
+          }
+        }
       }
     }),
-    vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+    vscode.workspace.onDidChangeWorkspaceFolders(async (event) => {
+      for (const folder of event.removed) {
+        const key = folderKey(folder);
+        const controller = controllers.get(key);
+        controllers.delete(key);
+        statuses.delete(key);
+        if (controller) await controller.deactivate();
+        terminalManager.resetReplTerminal(folder.uri.fsPath);
+      }
+      for (const folder of event.added) {
+        if (folder.uri.scheme === "file") controllers.set(folderKey(folder), createScopedController(folder));
+      }
+      if (activeScope && controllers.has(activeScope)) {
+        statuses.set(activeScope, { index: lastIndexStatus, docs: lastDocsStatus });
+      }
+      activeScope = "";
+      selectActiveScope();
       await setWorkspaceContexts();
       cellCodeLensProvider.refresh();
       void runtimeSourceRootDiscoveryController?.invalidateAndSchedule("workspace-folders-changed");
@@ -1045,7 +1135,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   void setWorkspaceContexts();
   updateStatusBar();
   scheduleRuntimeSourceRootDiscovery("activation");
-  languageClientLifecycleController.startInBackground("activation");
+  languageClientLifecycleController?.startInBackground("activation");
 }
 
 export async function deactivate(): Promise<void> {
@@ -1053,7 +1143,7 @@ export async function deactivate(): Promise<void> {
   clearLanguageServerStatusRefresh();
   const sourceRootDiscovery = runtimeSourceRootDiscoveryController?.beginDeactivation();
   try {
-    await languageClientLifecycleController?.deactivate();
+    await Promise.all([...controllers.values()].map((controller) => controller.deactivate()));
   } finally {
     await sourceRootDiscovery;
   }

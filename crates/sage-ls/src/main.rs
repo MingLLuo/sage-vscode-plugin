@@ -150,6 +150,7 @@ struct Backend {
     open_documents: Arc<RwLock<OpenDocumentMap>>,
     navigation_cache: Arc<RwLock<NavigationQueryCache>>,
     navigation_link_support: Arc<RwLock<NavigationLinkSupport>>,
+    versioned_workspace_edits: Arc<RwLock<bool>>,
     analysis_mode: Arc<RwLock<AnalysisMode>>,
     diagnostics_enabled: Arc<RwLock<bool>>,
     docs_on_hover_enabled: Arc<RwLock<bool>>,
@@ -186,6 +187,7 @@ impl Backend {
             open_documents: Arc::new(RwLock::new(OpenDocumentMap::new())),
             navigation_cache: Arc::new(RwLock::new(NavigationQueryCache::default())),
             navigation_link_support: Arc::new(RwLock::new(NavigationLinkSupport::default())),
+            versioned_workspace_edits: Arc::new(RwLock::new(false)),
             analysis_mode: Arc::new(RwLock::new(AnalysisMode::default())),
             diagnostics_enabled: Arc::new(RwLock::new(true)),
             docs_on_hover_enabled: Arc::new(RwLock::new(true)),
@@ -205,6 +207,13 @@ impl Backend {
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let initialize_started = Instant::now();
+        *self.versioned_workspace_edits.write().await = params
+            .capabilities
+            .workspace
+            .as_ref()
+            .and_then(|workspace| workspace.workspace_edit.as_ref())
+            .and_then(|edit| edit.document_changes)
+            .unwrap_or(false);
         *self.navigation_link_support.write().await =
             NavigationLinkSupport::from_client_capabilities(&params.capabilities);
         let options = parse_initialization_options(params.initialization_options);
@@ -333,13 +342,10 @@ impl LanguageServer for Backend {
                     ),
                 ),
                 execute_command_provider: Some(ExecuteCommandOptions {
-                    commands: vec![
-                        COMMAND_INDEX_STATUS.to_string(),
-                        COMMAND_DOCS_STATUS.to_string(),
-                        COMMAND_REBUILD_INDEX.to_string(),
-                        COMMAND_GET_DOCUMENTATION.to_string(),
-                        COMMAND_QUERY_AT_POSITION.to_string(),
-                    ],
+                    // The extension routes these internal requests to its selected project
+                    // client. Advertising them here makes each LanguageClient register the
+                    // same global VS Code command IDs, so the second workspace cannot start.
+                    commands: vec![],
                     ..ExecuteCommandOptions::default()
                 }),
                 ..ServerCapabilities::default()

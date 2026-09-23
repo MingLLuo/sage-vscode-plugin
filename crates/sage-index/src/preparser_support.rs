@@ -178,7 +178,7 @@ pub(super) fn preparser_assignment_re() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| {
         Regex::new(
-            r"(?s)^\s*(?P<parent>[A-Za-z_][A-Za-z0-9_]*)\.<(?P<symbols>[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*)>\s*=\s*(?P<rhs>.+)$",
+            r"(?s)^\s*(?P<parent>[\p{XID_Start}_][\p{XID_Continue}_]*)\.<(?P<symbols>[\p{XID_Start}_][\p{XID_Continue}_]*(?:\s*,\s*[\p{XID_Start}_][\p{XID_Continue}_]*)*)>\s*=\s*(?P<rhs>.+)$",
         )
         .unwrap()
     })

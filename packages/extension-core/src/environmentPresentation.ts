@@ -23,6 +23,8 @@ export interface EnvironmentPresentationInput {
   workspaceRuntimeState?: WorkspaceRuntimeState;
   languageServerStarting?: boolean;
   languageServerAvailable?: boolean;
+  languageServerFailed?: boolean;
+  workspaceLabel?: string;
 }
 
 export interface IndexStatusSummary {
@@ -84,32 +86,36 @@ export interface DocsStatusSummary {
 
 export function formatStatusBarText(input: EnvironmentPresentationInput): string {
   const interpreterLabel = path.basename(input.interpreterPath) || input.interpreterPath || "sage";
+  const scope = input.workspaceLabel ? ` [${input.workspaceLabel}]` : "";
   if (input.workspaceRuntimeState && !isWorkspaceRuntimeAvailable(input.workspaceRuntimeState)) {
-    return "$(shield) Sage: restricted";
+    return `$(shield) Sage${scope}: restricted`;
+  }
+  if (input.languageServerFailed) {
+    return `$(error) Sage${scope}: LSP stopped`;
   }
   if (input.languageServerStarting) {
-    return "$(sync~spin) Sage: starting LSP";
+    return `$(sync~spin) Sage${scope}: starting LSP`;
   }
   if (input.languageServerAvailable === false) {
-    return "$(warning) Sage: LSP unavailable";
+    return `$(warning) Sage${scope}: LSP unavailable`;
   }
   if (input.indexStatus?.last_error) {
-    return "$(error) Sage: index error";
+    return `$(error) Sage${scope}: index error`;
   }
   if (input.indexStatus?.cache_stale) {
-    return "$(warning) Sage: cache stale";
+    return `$(warning) Sage${scope}: cache stale`;
   }
   const pendingJobs = input.indexStatus?.pending_jobs ?? 0;
   if (pendingJobs > 0) {
     if (input.indexStatus?.pending_task === "cache-check") {
-      return `$(sync~spin) Sage: checking index (${pendingJobs})`;
+      return `$(sync~spin) Sage${scope}: checking index (${pendingJobs})`;
     }
     if (input.indexStatus?.pending_task === "rebuild") {
-      return `$(sync~spin) Sage: rebuilding index (${pendingJobs})`;
+      return `$(sync~spin) Sage${scope}: rebuilding index (${pendingJobs})`;
     }
-    return `$(sync~spin) Sage: indexing (${pendingJobs})`;
+    return `$(sync~spin) Sage${scope}: indexing (${pendingJobs})`;
   }
-  return `$(beaker) Sage: ready (${interpreterLabel})`;
+  return `$(beaker) Sage${scope}: ready (${interpreterLabel})`;
 }
 
 export function formatStatusBarTooltip(input: EnvironmentPresentationInput): string {
@@ -121,7 +127,8 @@ export function formatStatusBarTooltip(input: EnvironmentPresentationInput): str
   const lines = [
     `Interpreter: ${input.interpreterPath}`,
     `Language server: ${input.languageServerEngine ?? "rust-v2"}${input.languageServerPath ? ` (${input.languageServerPath})` : ""}`,
-    `Language server state: ${languageServerState}`,
+    `Language server state: ${input.languageServerFailed ? "stopped after repeated failures; run Sage: Restart Language Server" : languageServerState}`,
+    ...(input.workspaceLabel ? [`Workspace: ${input.workspaceLabel}`] : []),
     `Analysis mode: ${input.analysisMode}`,
     `Indexed source roots: ${input.sourceRoots.length}`,
     `Extra paths: ${input.extraPaths?.length ?? 0}`,
@@ -155,6 +162,7 @@ export function formatEnvironmentDetails(input: EnvironmentPresentationInput): s
   const extraPaths = input.extraPaths && input.extraPaths.length > 0 ? input.extraPaths.join(", ") : "none";
   return [
     `Interpreter: ${input.interpreterPath}`,
+    ...(input.workspaceLabel ? [`Workspace: ${input.workspaceLabel}`] : []),
     `Language server: ${input.languageServerEngine ?? "rust-v2"}${input.languageServerPath ? ` (${input.languageServerPath})` : ""}`,
     `Language server state: ${languageServerState}`,
     `Analysis: ${input.analysisMode}`,

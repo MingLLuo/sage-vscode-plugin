@@ -1,23 +1,10 @@
-use super::*;
-
 pub(super) const IDENTIFIER_FILTER_BYTES: usize = 8_192;
 const IDENTIFIER_FILTER_HASHES: u64 = 6;
 
 pub(super) fn identifier_filter_for_source(source: &str) -> Vec<u8> {
     let mut filter = vec![0; IDENTIFIER_FILTER_BYTES];
-    let bytes = source.as_bytes();
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes[index] != b'_' && !bytes[index].is_ascii_alphabetic() {
-            index += 1;
-            continue;
-        }
-        let start = index;
-        index += 1;
-        while index < bytes.len() && is_word_byte(bytes[index]) {
-            index += 1;
-        }
-        insert_identifier(&mut filter, &bytes[start..index]);
+    for (_, identifier) in crate::identifiers::spans(source) {
+        insert_identifier(&mut filter, identifier.as_bytes());
     }
     filter
 }

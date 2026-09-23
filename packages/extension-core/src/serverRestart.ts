@@ -15,8 +15,6 @@ export function shouldRestartLanguageServer(
   return SERVER_RESTART_SECTIONS.some((section) => affectsConfiguration(section));
 }
 
-export function shouldAutoRestartOnLanguageServerClose(
-  managedShutdown: boolean,
-): boolean {
-  return !managedShutdown;
+export function shouldStopOnTransportErrors(count: number | undefined): boolean {
+  return count !== undefined && count > 3;
 }

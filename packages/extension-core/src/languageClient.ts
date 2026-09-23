@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import * as vscode from "vscode";
 import {
   CloseAction,
@@ -20,7 +21,7 @@ import {
 import { buildDocumentSelector } from "./documentSelector";
 import { buildLanguageServerLaunch } from "./serverLaunch";
 import { buildSageSourceUri } from "./sageSourceView";
-import { shouldAutoRestartOnLanguageServerClose } from "./serverRestart";
+import { shouldStopOnTransportErrors } from "./serverRestart";
 import { workspaceAliasedSourcePath } from "./sourceRootPaths";
 import { buildWorkspaceInitializationData, resolveConfiguredPaths } from "./workspaceDiscovery";
 import { logToChannel } from "./extensionLogger";
@@ -48,8 +49,9 @@ export const SAGE_LANGUAGE_FILE_GLOB = "**/*.{sage,py,pyx,pxd,pxi,spyx}";
 
 export { buildDocumentSelector };
 
-export function rustIndexCacheDir(context: vscode.ExtensionContext): string {
-  return path.join(context.globalStorageUri.fsPath, "rust-index-v2");
+export function rustIndexCacheDir(context: vscode.ExtensionContext, folder?: vscode.WorkspaceFolder): string {
+  const root = path.join(context.globalStorageUri.fsPath, "rust-index-v2");
+  return folder ? path.join(root, createHash("sha256").update(folder.uri.toString()).digest("hex").slice(0, 16)) : root;
 }
 
 export interface LanguageClientLifecycle {
@@ -57,6 +59,7 @@ export interface LanguageClientLifecycle {
   shouldAutoRestartOnClose?: () => boolean;
   onClose?: (event: { managedShutdown: boolean; shouldRestart: boolean }) => void;
   runtimeDiscoveredSourceRoots?: readonly string[];
+  workspaceFolder?: vscode.WorkspaceFolder;
 }
 
 export function createLanguageClient(
@@ -64,8 +67,8 @@ export function createLanguageClient(
   outputChannel: vscode.OutputChannel,
   lifecycle: LanguageClientLifecycle,
 ): LanguageClient {
-  const workspaceFolders = vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath) ?? [];
-  const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+  const workspaceFolder = lifecycle.workspaceFolder ?? vscode.workspace.workspaceFolders?.[0];
+  const workspaceFolders = workspaceFolder ? [workspaceFolder.uri.fsPath] : [];
   const settings = readSettings(workspaceFolder);
   const effectiveSourceRoots = dedupeStrings([
     ...settings.sourceRoots,
@@ -118,13 +121,28 @@ export function createLanguageClient(
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: buildDocumentSelector(settings),
+    documentSelector: lifecycle.workspaceFolder
+      ? [
+        { language: "sagemath", scheme: "file", pattern: `${lifecycle.workspaceFolder.uri.fsPath.replaceAll("\\", "/")}/**/*` },
+        { language: "sagemath-cython", scheme: "file", pattern: `${lifecycle.workspaceFolder.uri.fsPath.replaceAll("\\", "/")}/**/*` },
+        ...(lifecycle.workspaceFolder.index === 0
+          ? [
+            { language: "sagemath", scheme: "untitled" },
+            { language: "sagemath-cython", scheme: "untitled" },
+          ]
+          : []),
+        ...(settings.pythonFilesEnabled
+          ? [{ language: "python", scheme: "file", pattern: `${lifecycle.workspaceFolder.uri.fsPath.replaceAll("\\", "/")}/**/*` }]
+          : []),
+      ]
+      : buildDocumentSelector(settings),
+    ...(lifecycle.workspaceFolder ? { workspaceFolder: lifecycle.workspaceFolder } : {}),
     outputChannel,
     initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData, {
       resolvedRustPath: launch.command,
       nodePath: process.execPath,
       pyrightServerPath: resolvePyrightServerPath(context.extensionPath),
-      cacheDir: rustIndexCacheDir(context),
+      cacheDir: rustIndexCacheDir(context, lifecycle.workspaceFolder),
     }),
     synchronize: {
       fileEvents: lifecycle.fileSystemWatcher,
@@ -161,11 +179,11 @@ export function createLanguageClient(
           "language server error",
           { message, count, error: String(error) },
         );
-        return { action: ErrorAction.Continue };
+        return { action: shouldStopOnTransportErrors(count) ? ErrorAction.Shutdown : ErrorAction.Continue };
       },
       closed: () => {
         const managedShutdown = !(lifecycle.shouldAutoRestartOnClose?.() ?? true);
-        const shouldRestart = shouldAutoRestartOnLanguageServerClose(managedShutdown);
+        const shouldRestart = false;
         lifecycle.onClose?.({ managedShutdown, shouldRestart });
         logToChannel(
           outputChannel,
@@ -174,10 +192,10 @@ export function createLanguageClient(
           "lsp-client",
           managedShutdown
             ? "language server connection closed during managed restart"
-            : "language server connection closed unexpectedly; restarting",
+            : "language server connection closed unexpectedly; recovery scheduled by extension",
           { managedShutdown, shouldRestart },
         );
-        return { action: shouldRestart ? CloseAction.Restart : CloseAction.DoNotRestart };
+        return { action: CloseAction.DoNotRestart, handled: true };
       },
     },
   };

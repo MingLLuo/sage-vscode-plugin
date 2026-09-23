@@ -6,28 +6,7 @@ pub(crate) fn word_at_source_position(
     character: u32,
 ) -> Option<(String, SourceRange)> {
     let source_line = text.lines().nth(line as usize)?;
-    let mut character = character.min(source_line.len() as u32) as usize;
-    if character == source_line.len() && character > 0 {
-        character -= 1;
-    }
-    let bytes = source_line.as_bytes();
-    if character >= bytes.len() {
-        return None;
-    }
-    if !is_word_byte(bytes[character]) && character > 0 && is_word_byte(bytes[character - 1]) {
-        character -= 1;
-    }
-    if !is_word_byte(bytes[character]) {
-        return None;
-    }
-    let mut start = character;
-    let mut end = character + 1;
-    while start > 0 && is_word_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    while end < bytes.len() && is_word_byte(bytes[end]) {
-        end += 1;
-    }
+    let (start, end) = crate::identifiers::span_at(source_line, character as usize)?;
     Some((
         source_line[start..end].to_string(),
         SourceRange {
@@ -71,9 +50,7 @@ fn range_for_symbols<'a>(
         .flat_map(move |(line_index, line)| {
             line.match_indices(symbol).filter_map(move |(start, _)| {
                 let end = start + symbol.len();
-                let starts_at_boundary = start == 0 || !is_word_byte(line.as_bytes()[start - 1]);
-                let ends_at_boundary = end == line.len() || !is_word_byte(line.as_bytes()[end]);
-                (starts_at_boundary && ends_at_boundary).then_some(SourceRange {
+                crate::identifiers::has_boundaries(line, start, end).then_some(SourceRange {
                     start_line: line_index as u32,
                     start_character: start as u32,
                     end_line: line_index as u32,
@@ -278,14 +255,9 @@ pub(crate) fn assignment_constructor_before_line(
 }
 
 pub(crate) fn is_word_byte(byte: u8) -> bool {
-    byte == b'_' || byte.is_ascii_alphanumeric()
+    byte == b'_' || byte.is_ascii_alphanumeric() || byte >= 0x80
 }
 
 pub(crate) fn is_valid_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    crate::identifiers::is_identifier(value)
 }

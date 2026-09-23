@@ -22,7 +22,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use tower_lsp::jsonrpc::Result;
 use tower_lsp::lsp_types::{
-    Location, Position, PrepareRenameResponse, Range, ReferenceParams, RenameParams,
+    DocumentChanges, Location, OneOf, OptionalVersionedTextDocumentIdentifier, Position,
+    PrepareRenameResponse, Range, ReferenceParams, RenameParams, TextDocumentEdit,
     TextDocumentPositionParams, TextEdit, Url, WorkspaceEdit,
 };
 
@@ -78,6 +79,9 @@ impl Backend {
         &self,
         params: RenameParams,
     ) -> Result<Option<WorkspaceEdit>> {
+        let versions_before: HashMap<Url, i32> = self.open_documents.read().await.iter()
+            .map(|(uri, document)| (uri.clone(), document.version))
+            .collect();
         let uri = &params.text_document_position.text_document.uri;
         let Some(target) = self
             .rename_target(uri, params.text_document_position.position)
@@ -86,6 +90,9 @@ impl Backend {
             return Ok(None);
         };
         if !is_valid_identifier(&params.new_name) {
+            return Ok(None);
+        }
+        if self.rename_would_collide(&target, &params.new_name).await {
             return Ok(None);
         }
         let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
@@ -109,11 +116,59 @@ impl Backend {
                 new_text: params.new_name.clone(),
             });
         }
-        Ok(Some(WorkspaceEdit {
-            changes: Some(changes),
-            document_changes: None,
-            change_annotations: None,
-        }))
+        if *self.versioned_workspace_edits.read().await {
+            let documents = self.open_documents.read().await;
+            if changes.keys().any(|uri| {
+                documents.get(uri).map(|document| document.version) != versions_before.get(uri).copied()
+            }) {
+                return Ok(None);
+            }
+            let edits = changes.into_iter().map(|(uri, edits)| {
+                let version = documents.get(&uri).map(|document| document.version);
+                TextDocumentEdit {
+                    text_document: OptionalVersionedTextDocumentIdentifier { uri, version },
+                    edits: edits.into_iter().map(OneOf::Left).collect(),
+                }
+            }).collect();
+            Ok(Some(WorkspaceEdit {
+                changes: None,
+                document_changes: Some(DocumentChanges::Edits(edits)),
+                change_annotations: None,
+            }))
+        } else {
+            Ok(Some(WorkspaceEdit {
+                changes: Some(changes),
+                document_changes: None,
+                change_annotations: None,
+            }))
+        }
+    }
+
+    async fn rename_would_collide(&self, target: &RenameTarget, new_name: &str) -> bool {
+        if target.word == new_name {
+            return false;
+        }
+        let text = if let Some(document) = self.document_for_uri(&target.declaration.uri).await {
+            document.text
+        } else if let Ok(on_disk) = std::fs::read_to_string(&target.definition.path) {
+            on_disk
+        } else {
+            return false;
+        };
+        let index = self.index.read().await;
+        let parsed = index.parse_source_for_query(&target.definition.path, &text);
+        let target_line = target.declaration.range.start.line as usize;
+        let target_indent = text.lines().nth(target_line)
+            .map(|line| line.len() - line.trim_start().len());
+        if target_indent != Some(0) {
+            return false;
+        }
+        parsed.symbols.iter().any(|symbol| {
+            symbol.name == new_name
+                && symbol.range.start_line != target.declaration.range.start.line
+                && text.lines().nth(symbol.range.start_line as usize)
+                    .is_some_and(|line| line.len() == line.trim_start().len())
+        })
     }
 
     pub(super) async fn prepare_rename_response(
@@ -362,12 +417,7 @@ fn source_range_from_lsp(text: &str, range: Range) -> Option<sage_index::SourceR
 }
 
 fn is_valid_identifier(value: &str) -> bool {
-    let mut chars = value.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    (first == '_' || first.is_ascii_alphabetic())
-        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
+    sage_index::identifiers::is_identifier(value)
 }
 
 fn push_reference_location(

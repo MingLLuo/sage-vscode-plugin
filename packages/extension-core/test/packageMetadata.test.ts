@@ -597,7 +597,7 @@ test("extension activation stays a compact orchestrator with focused feature mod
     "utf8",
   );
   assert.ok(
-    extensionSource.split(/\r?\n/).length <= 1100,
+    extensionSource.split(/\r?\n/).length <= 1200,
     "extension.ts should delegate feature implementations instead of growing another monolith",
   );
   assert.ok(

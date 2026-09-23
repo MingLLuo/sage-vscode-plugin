@@ -9,6 +9,7 @@ export function workspaceFolderPaths(): string[] {
 export function activeWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
   const activeDocument = vscode.window.activeTextEditor?.document;
   return (activeDocument && vscode.workspace.getWorkspaceFolder(activeDocument.uri))
+    || vscode.workspace.workspaceFolders?.find((folder) => folder.uri.scheme === "file")
     || vscode.workspace.workspaceFolders?.[0];
 }
 
