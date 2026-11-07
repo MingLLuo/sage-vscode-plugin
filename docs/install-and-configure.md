@@ -295,3 +295,11 @@ without starting Sage once its sources have been indexed; dynamic objects may st
 - Runtime fallback currently focuses on docs, definitions, and signature help; completion and richer semantic analysis still rely on static indexing.
 - Notebook and kernel integration are not wired yet.
 - Marketplace-ready native binary packaging and signing are not wired yet.
+
+## Reclaim Build Space
+
+Rust build caches can be much larger than the installed extension. Preview their size with
+`npm run clean:cache`, then remove them with `npm run clean:cache -- --yes`. This preserves
+the VSIX in `dist`, packaged language servers, Node dependencies, and the installed extension.
+The next Rust build recreates the cache and will take longer. The broader `npm run clean -- --yes`
+also removes packaged artifacts; use it when preparing a completely fresh build.

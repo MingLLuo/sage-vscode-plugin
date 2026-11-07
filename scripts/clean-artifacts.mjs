@@ -10,6 +10,10 @@ const args = parseArgs(process.argv.slice(2));
 const dryRun = args.yes !== true;
 const includeDeps = args.deps === true;
 const json = args.json === true;
+const cacheOnly = args.cacheOnly === true;
+if (cacheOnly && includeDeps) {
+  throw new Error("--cache-only cannot be combined with --deps");
+}
 
 const fixedPaths = [
   "target",
@@ -70,7 +74,7 @@ function buildReport() {
   const failures = [];
   const seen = new Set();
 
-  for (const relativePath of fixedPaths) {
+  for (const relativePath of cacheOnly ? ["target"] : fixedPaths) {
     collectPath(relativePath, "build-artifact");
   }
 
@@ -80,12 +84,12 @@ function buildReport() {
     }
   }
 
-  walk(repositoryRoot, (absolutePath, directoryEntry) => {
+  if (!cacheOnly) walk(repositoryRoot, (absolutePath, directoryEntry) => {
     const relativePath = toRelative(absolutePath);
     if (!relativePath || shouldSkipWalk(relativePath)) {
       return "skip";
     }
-  if (directoryEntry.isDirectory() && directoryNames.has(directoryEntry.name)) {
+    if (directoryEntry.isDirectory() && directoryNames.has(directoryEntry.name)) {
       collectPath(relativePath, "generated-directory");
       return "skip";
     }
@@ -116,6 +120,7 @@ function buildReport() {
     mode: dryRun ? "dry-run" : "delete",
     repository_root: repositoryRoot,
     include_dependencies: includeDeps,
+    cache_only: cacheOnly,
     actions,
     totals: {
       candidate_count: actions.length,
@@ -225,7 +230,8 @@ function printHuman(report) {
   console.log(`Candidates: ${report.totals.candidate_count}`);
   console.log(`Total size: ${formatBytes(report.totals.candidate_bytes)}`);
   if (report.mode === "dry-run") {
-    console.log("Run `npm run clean -- --yes` to delete these artifacts.");
+    const command = cacheOnly ? "npm run clean:cache -- --yes" : "npm run clean -- --yes";
+    console.log(`Run \`${command}\` to delete these artifacts.`);
     console.log("Add `--deps` only when you also want to remove dependencies and virtual environments.");
   }
 }
@@ -235,6 +241,8 @@ function parseArgs(values) {
   for (const value of values) {
     if (value === "--yes") {
       result.yes = true;
+    } else if (value === "--cache-only") {
+      result.cacheOnly = true;
     } else if (value === "--deps") {
       result.deps = true;
     } else if (value === "--json") {
@@ -249,9 +257,10 @@ function parseArgs(values) {
 }
 
 function printUsageAndExit() {
-  console.log(`Usage: node scripts/clean-artifacts.mjs [--yes] [--deps] [--json]
+  console.log(`Usage: node scripts/clean-artifacts.mjs [--yes] [--deps | --cache-only] [--json]
 
 Default mode is a dry run. Pass --yes to delete cleanup candidates.
+Pass --cache-only to remove only Rust build caches, preserving VSIX files and packaged binaries.
 Pass --deps to also include node_modules and virtualenvs.`);
   process.exit(0);
 }

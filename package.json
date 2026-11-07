@@ -30,6 +30,7 @@
     "cache:status": "node scripts/cache-maintenance.mjs",
     "cache:prune:dry-run": "node scripts/cache-maintenance.mjs --prune --max-age-days 30",
     "clean": "node scripts/clean-artifacts.mjs",
+    "clean:cache": "node scripts/clean-artifacts.mjs --cache-only",
     "clean:dry-run": "node scripts/clean-artifacts.mjs",
     "configure:workspace": "node scripts/configure-workspace.mjs",
     "test:configure-workspace": "node scripts/configure-workspace-smoke.mjs",
