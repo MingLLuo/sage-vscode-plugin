@@ -92,12 +92,21 @@ async function runExtensionHostSuite(options: {
   nativeSage?: { sourceRoot?: string; executable?: string };
   externalSageSourceRoot?: string;
 }): Promise<void> {
+  const selectedModes = process.env.SAGE_TEST_HOST_MODES?.split(",");
+  if (selectedModes && !selectedModes.includes(options.mode)) return;
+  await fs.mkdir(path.join(options.userDataDir, "User"), { recursive: true });
+  await fs.writeFile(path.join(options.userDataDir, "User", "settings.json"), JSON.stringify({
+    "window.confirmBeforeClose": "never",
+    "terminal.integrated.confirmOnExit": "never",
+    "terminal.integrated.confirmOnKill": "never",
+  }));
   const exitCode = await runTests({
     vscodeExecutablePath: options.vscodeExecutablePath,
     extensionDevelopmentPath: options.extensionDevelopmentPath,
     extensionTestsPath: options.extensionTestsPath,
     launchArgs: [
       options.workspacePath,
+      "--disable-gpu",
       "--disable-extensions",
       "--skip-release-notes",
       "--skip-welcome",

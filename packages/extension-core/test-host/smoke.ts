@@ -474,6 +474,16 @@ async function runMultiRootSmoke(): Promise<void> {
     assert.equal((terminal.creationOptions as vscode.TerminalOptions).cwd, folder.uri.fsPath);
     assert.equal((terminal.creationOptions as vscode.TerminalOptions).shellPath, folder === alpha ? "/bin/sh" : "/bin/zsh");
   }
+  const alphaTerminal = vscode.window.terminals.find((terminal) => terminal.name === `Sage REPL: ${alpha.name}`);
+  const betaTerminal = vscode.window.terminals.find((terminal) => terminal.name === `Sage REPL: ${beta.name}`);
+  await vscode.workspace.getConfiguration("sage", alpha.uri).update(
+    "analysis.extraPaths", ["vendor"], vscode.ConfigurationTarget.WorkspaceFolder,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.joinPath(alpha.uri, "src", "demo.sage")));
+  await vscode.commands.executeCommand("sage.startRepl");
+  assert.notEqual(vscode.window.terminals.find((terminal) => terminal.name === `Sage REPL: ${alpha.name}` && terminal !== alphaTerminal), undefined, "stale alpha receives a fresh REPL");
+  assert.ok(vscode.window.terminals.includes(betaTerminal!), "restarting stale alpha must preserve beta REPL");
   for (const folder of [alpha, beta]) {
     await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(vscode.Uri.joinPath(folder.uri, "src", "demo.sage")));
     let subscription: vscode.Disposable | undefined;
@@ -491,6 +501,7 @@ async function runMultiRootSmoke(): Promise<void> {
       const task = await started;
       assert.equal((task.execution as vscode.ProcessExecution).process, folder === alpha ? "/bin/sh" : "/bin/zsh");
       assert.equal((task.scope as vscode.WorkspaceFolder).uri.toString(), folder.uri.toString());
+      assert.equal((task.execution as vscode.ProcessExecution).options?.cwd, folder.uri.fsPath);
     } finally {
       subscription?.dispose();
     }

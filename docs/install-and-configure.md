@@ -123,7 +123,7 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
 15. The picker still includes advanced actions for custom Sage runtimes, custom legacy Python paths, and an explicit
    `auto` reset entry.
 16. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
-17. Set `sage.run.cleanupGeneratedPython = true` if you want terminal or managed-REPL `.sage` runs to remove generated `.sage.py` helper files automatically on POSIX shells.
+17. Set `sage.run.cleanupGeneratedPython = true` if you want standalone `.sage` runs to clean up newly generated `.sage.py` helpers. Existing files and overlapping runs are retained; REPL loads do not delete disk helpers.
 18. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
 19. Leave `sage.analysis.sourceRoots` empty to index the workspace plus nearby/runtime-discovered Sage roots, or set it
    to explicit roots when you want deterministic smoke fixtures. Configured roots are still supplemented with nearby
@@ -157,7 +157,7 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
   and signatures when static analysis alone is not enough.
 - `sage.run.cleanupGeneratedPython`
   Defaults to `false`. When enabled, standalone terminal runs and managed-REPL file loads of `.sage` files remove the
-  generated `.sage.py` helper file automatically after the command finishes on POSIX shells.
+  new `.sage.py` helper after an uncontended standalone run. Pre-existing helpers and overlapping runs are preserved.
 - Why this split exists:
   the editor needs a fast native LSP process while run commands and runtime-backed docs still target the selected Sage
   executable.
@@ -214,7 +214,7 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
 - `sage.docs.showOnHover`: show documentation previews in hover content when available.
 - `sage.logging.level`: extension and language-client log verbosity.
 - `sage.run.target`: choose standalone terminal execution or managed REPL loading.
-- `sage.run.cleanupGeneratedPython`: remove generated `.sage.py` helpers after POSIX terminal or managed-REPL file runs when enabled.
+- `sage.run.cleanupGeneratedPython`: clean up new `.sage.py` helpers from uncontended standalone runs; preserve pre-existing helpers and files shared by concurrent runs.
 - `sage.experimental.notebookSupport`: reserved preview switch for future notebook integration.
 
 ## Recommended Profiles
@@ -303,3 +303,7 @@ Rust build caches can be much larger than the installed extension. Preview their
 the VSIX in `dist`, packaged language servers, Node dependencies, and the installed extension.
 The next Rust build recreates the cache and will take longer. The broader `npm run clean -- --yes`
 also removes packaged artifacts; use it when preparing a completely fresh build.
+
+File runs and REPL sessions use the owning project folder as their working directory. Standalone files outside a project use their file directory. After changing source roots or extra import paths, use **Sage: Start REPL** to replace the stale session; this clears its variables and imported modules. Other projects keep their sessions.
+
+Language-server startup reports cache usage without deleting databases that another project or VS Code window may be using. Close Sage-enabled windows before explicitly pruning index caches from the maintenance CLI.

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import os from "node:os";
+import { parse, parseTree, modify, applyEdits } from "jsonc-parser";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -61,7 +62,7 @@ const nextSettings = buildSettings(existingSettings, {
   sourceRoots,
   workspaceRoot,
 });
-const changed = JSON.stringify(existingSettings) !== JSON.stringify(nextSettings);
+const changed = JSON.stringify(sortObject(existingSettings)) !== JSON.stringify(nextSettings);
 const report = {
   schema_version: 1,
   status: args.dryRun ? "dry-run" : changed ? "updated" : "unchanged",
@@ -81,7 +82,13 @@ const report = {
 
 if (!args.dryRun && changed) {
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  fs.writeFileSync(settingsPath, `${JSON.stringify(nextSettings, null, 2)}\n`, "utf8");
+  let source = fs.existsSync(settingsPath) ? fs.readFileSync(settingsPath, "utf8") : "{}\n";
+  for (const [key, value] of Object.entries(nextSettings)) {
+    if (JSON.stringify(existingSettings[key]) !== JSON.stringify(value)) {
+      source = applyEdits(source, modify(source, [key], value, { formattingOptions: { insertSpaces: true, tabSize: 2 } }));
+    }
+  }
+  fs.writeFileSync(settingsPath, source, "utf8");
 }
 
 if (args.json) {
@@ -525,11 +532,16 @@ function printHuman(report) {
 }
 
 function readJsonIfExists(filePath) {
-  try {
-    return JSON.parse(fs.readFileSync(filePath, "utf8"));
-  } catch {
-    return null;
-  }
+  let source;
+  try { source = fs.readFileSync(filePath, "utf8"); }
+  catch (error) { if (error.code === "ENOENT") return null; throw error; }
+  const errors = [];
+  const options = { allowTrailingComma: true, disallowComments: false };
+  const root = parseTree(source, errors, options);
+  if (errors.length || root?.type !== "object") throw new Error(`Invalid settings file: ${filePath}`);
+  const keys = root.children.map((property) => property.children[0].value);
+  if (new Set(keys).size !== keys.length) throw new Error(`Duplicate settings keys: ${filePath}`);
+  return parse(source, [], options);
 }
 
 function safeReadDir(directory) {

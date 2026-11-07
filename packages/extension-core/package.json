@@ -539,7 +539,7 @@
           "type": "boolean",
           "default": false,
           "scope": "resource",
-          "markdownDescription": "After running a `.sage` file in the terminal, remove the generated `.sage.py` helper file on POSIX shells."
+          "markdownDescription": "After an uncontended standalone `.sage` run, remove its new `.sage.py` helper. Existing files and concurrent runs are preserved. REPL loads never delete disk helpers."
         },
         "sage.experimental.notebookSupport": {
           "type": "boolean",

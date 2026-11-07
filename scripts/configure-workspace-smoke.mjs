@@ -36,6 +36,16 @@ try {
     assert.deepEqual(external.next_settings[key], [externalRoot], key);
   }
   assert.deepEqual(external.next_settings["ruff.configuration"].exclude, [externalRoot]);
+  const settingsPath = path.join(workspace, ".vscode", "settings.json");
+  fs.writeFileSync(settingsPath, '{\n// keep my settings\n"editor.fontSize": 17,\n}');
+  configure();
+  assert.match(fs.readFileSync(settingsPath, "utf8"), /keep my settings/);
+  assert.equal(configure().status, "unchanged");
+  const invalid = '{"editor.fontSize":';
+  fs.writeFileSync(settingsPath, invalid);
+  const rejected = spawnSync(process.execPath, [path.join(repositoryRoot, "scripts/configure-workspace.mjs"), "--workspace", workspace], { encoding: "utf8" });
+  assert.notEqual(rejected.status, 0);
+  assert.equal(fs.readFileSync(settingsPath, "utf8"), invalid);
   console.log(JSON.stringify({ status: "passed", checks: ["standard profile", "idempotent configuration", "external source excludes"] }));
 } finally {
   fs.rmSync(tempRoot, { recursive: true, force: true });

@@ -66,13 +66,7 @@ export function registerExecutionCommands(
           editor.document.uri.fsPath,
         );
       } catch (error) {
-        const action = await vscode.window.showErrorMessage(
-          `Sage could not run the current file: ${String(error)}`,
-          "Select Interpreter",
-        );
-        if (action === "Select Interpreter") {
-          await vscode.commands.executeCommand("sage.selectInterpreter");
-        }
+        await showTerminalLaunchError("run the current file", error);
         return;
       }
       terminal?.show(true);
@@ -167,7 +161,9 @@ export function registerExecutionCommands(
       const settings = readSettings(workspaceFolder);
       let terminal: vscode.Terminal;
       try {
-        terminal = dependencies.terminalManager.startRepl({ ...settings, workspaceFolderPath: workspaceFolder?.uri.fsPath });
+        terminal = dependencies.terminalManager.startRepl({ ...settings, workspaceFolderPath: workspaceFolder?.uri.fsPath,
+          runtimePythonPaths: resolveRuntimePythonPaths(workspaceFolder ? [workspaceFolder.uri.fsPath] : dependencies.workspaceFolderPaths(), settings.sourceRoots, settings.extraPaths),
+        });
       } catch (error) {
         await showTerminalLaunchError("start the Sage REPL", error);
         return;
@@ -192,8 +188,12 @@ function workspacePathsForDocument(
 async function showTerminalLaunchError(action: string, error: unknown): Promise<void> {
   const selectedAction = await vscode.window.showErrorMessage(
     `Sage could not ${action}: ${String(error)}`,
+    "Start REPL",
     "Select Interpreter",
   );
+  if (selectedAction === "Start REPL") {
+    await vscode.commands.executeCommand("sage.startRepl");
+  }
   if (selectedAction === "Select Interpreter") {
     await vscode.commands.executeCommand("sage.selectInterpreter");
   }

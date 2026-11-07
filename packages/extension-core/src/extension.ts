@@ -483,7 +483,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const runIndexCacheMaintenance = async (reason: string): Promise<void> => {
+    // Other projects or VS Code windows may have these databases open.
+    // Startup inspects usage; explicit offline maintenance owns deletion.
     const report = await maintainIndexCache({
+      dryRun: true,
       cacheDir: rustIndexCacheDir(context),
       maxAgeDays: DEFAULT_INDEX_CACHE_MAX_AGE_DAYS,
       maxTotalBytes: DEFAULT_INDEX_CACHE_MAX_TOTAL_BYTES,
@@ -915,7 +918,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         shouldResetRepl ||= update.section === "interpreter.path";
       }
       if (shouldResetRepl) {
-        terminalManager.resetReplTerminal();
+        terminalManager.resetReplTerminal(workspaceFolder?.uri.fsPath);
       }
       showExecutionStatus("Sage environment updated", {
         settings: updates.map((update) => `sage.${update.section}`).join(","),
@@ -1020,6 +1023,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
             || event.affectsConfiguration("sage.interpreter.args", folder.uri)) {
             terminalManager.resetReplTerminal(folder.uri.fsPath);
           }
+        }
+      }
+      for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        if (event.affectsConfiguration("sage.analysis.sourceRoots", folder.uri)
+          || event.affectsConfiguration("sage.analysis.extraPaths", folder.uri)) {
+          terminalManager.invalidateRepl(folder.uri.fsPath);
         }
       }
       const runtimeSourceRootInputsChanged = (

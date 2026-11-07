@@ -120,11 +120,14 @@ test("buildReplLoadCommand aligns REPL imports with configured runtime paths", (
   );
 });
 
-test("buildReplLoadCommand optionally removes generated .sage.py files", () => {
-  assert.equal(
-    buildReplLoadCommand("/tmp/example file.sage", [], true, "darwin"),
-    "import sys as __sage_vscode_sys; __sage_vscode_paths = [\"/tmp\"]; [__sage_vscode_sys.path.insert(0, __sage_vscode_path) for __sage_vscode_path in reversed(__sage_vscode_paths) if __sage_vscode_path not in __sage_vscode_sys.path]; exec(\"import os as __sage_vscode_os\\n__sage_vscode_generated = \\\"/tmp/example file.sage.py\\\"\\ntry:\\n    load(\\\"/tmp/example file.sage\\\")\\nfinally:\\n    if __sage_vscode_os.path.exists(__sage_vscode_generated):\\n        __sage_vscode_os.remove(__sage_vscode_generated)\")",
-  );
+test("REPL loading never deletes a helper owned by a separate task", () => {
+  assert.equal(buildReplLoadCommand("/tmp/example.sage", [], true),
+    buildReplLoadCommand("/tmp/example.sage", [], false));
+});
+
+test("file runs use the project working directory when available", () => {
+  assert.equal(buildRunFileProcessPlan({ interpreterPath: "sage", interpreterArgs: [],
+    workspaceFolderPath: "/project" }, "/project/scripts/demo.sage").cwd, "/project");
 });
 
 test("buildReplLoadCommand leaves Windows loads untouched when cleanup is enabled", () => {

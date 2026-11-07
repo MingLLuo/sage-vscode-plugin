@@ -3,6 +3,7 @@ import * as path from "node:path";
 import type { RunTarget } from "./settingsModel";
 
 export interface RunFileProcessInput {
+  workspaceFolderPath?: string;
   interpreterPath: string;
   interpreterArgs: readonly string[];
   cleanupGeneratedPython?: boolean;
@@ -38,7 +39,7 @@ export function buildRunFileProcessPlan(
   return {
     command: input.interpreterPath,
     args: [...input.interpreterArgs, resolvedFilePath],
-    cwd: platformPath.dirname(resolvedFilePath),
+    cwd: input.workspaceFolderPath ?? platformPath.dirname(resolvedFilePath),
     environment: pythonPath ? { PYTHONPATH: pythonPath } : {},
     cleanupPath: input.cleanupGeneratedPython && resolvedFilePath.endsWith(".sage")
       ? `${resolvedFilePath}.py`
@@ -92,24 +93,11 @@ function runtimePythonPaths(
 
 function buildReplLoadExpression(
   filePath: string,
-  cleanupGeneratedPython: boolean,
-  platform: NodeJS.Platform,
+  _cleanupGeneratedPython: boolean,
+  _platform: NodeJS.Platform,
 ): string {
-  if (!cleanupGeneratedPython || !filePath.endsWith(".sage") || platform === "win32") {
-    return `load(${JSON.stringify(filePath)})`;
-  }
-
-  const generatedPath = `${filePath}.py`;
-  const script = [
-    "import os as __sage_vscode_os",
-    `__sage_vscode_generated = ${JSON.stringify(generatedPath)}`,
-    "try:",
-    `    load(${JSON.stringify(filePath)})`,
-    "finally:",
-    "    if __sage_vscode_os.path.exists(__sage_vscode_generated):",
-    "        __sage_vscode_os.remove(__sage_vscode_generated)",
-  ].join("\n");
-  return `exec(${JSON.stringify(script)})`;
+  // Sage load() executes in memory. A sibling .sage.py may belong to another task.
+  return `load(${JSON.stringify(filePath)})`;
 }
 
 function dedupe(values: readonly string[]): string[] {
