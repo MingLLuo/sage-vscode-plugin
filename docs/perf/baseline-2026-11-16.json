@@ -1,0 +1,160 @@
+{
+  "status": "ok",
+  "recorded_at": "2026-11-16T12:33:24.218Z",
+  "profile": "release",
+  "platform": "darwin-arm64",
+  "cpus": 8,
+  "samples": 20,
+  "sage_source_root_files": 3842,
+  "large_file": {
+    "path": "sage/graphs/generic_graph.py",
+    "lines": 27706,
+    "bytes": 1147977,
+    "open_to_diagnostics_ms": 6,
+    "semantic_tokens_full": {
+      "count": 5,
+      "p50_ms": 1063.9,
+      "p95_ms": 1157.5,
+      "max_ms": 1157.5
+    },
+    "semantic_token_count": 2392,
+    "semantic_tokens_range": {
+      "count": 5,
+      "p50_ms": 216.9,
+      "p95_ms": 219.3,
+      "max_ms": 219.3
+    },
+    "document_symbol": {
+      "count": 5,
+      "p50_ms": 332.8,
+      "p95_ms": 339.3,
+      "max_ms": 339.3
+    },
+    "folding_range": {
+      "count": 5,
+      "p50_ms": 7.7,
+      "p95_ms": 7.9,
+      "max_ms": 7.9
+    },
+    "hover": {
+      "count": 20,
+      "p50_ms": 4.1,
+      "p95_ms": 53.9,
+      "max_ms": 53.9
+    },
+    "rapid_typing": {
+      "edits": 100,
+      "interval_ms": 30,
+      "typing_duration_ms": 3098.3,
+      "last_edit_to_final_diagnostics_ms": -30.1,
+      "hover_while_typing": {
+        "count": 10,
+        "p50_ms": 56,
+        "p95_ms": 65,
+        "max_ms": 65
+      },
+      "completion_while_typing": {
+        "count": 10,
+        "p50_ms": 57.7,
+        "p95_ms": 66.4,
+        "max_ms": 66.4
+      },
+      "semantic_tokens_after_typing_ms": 1076.6
+    }
+  },
+  "cold_start": {
+    "initialize_ms": 2.9,
+    "index_ready_ms": 3266.6,
+    "symbols": 126363,
+    "rss_after_ready_mb": 475.9,
+    "peak_rss_mb": 617.9,
+    "cache_dir_mb": 205.4,
+    "hover_during_indexing": {
+      "count": 3,
+      "p50_ms": 0.8,
+      "p95_ms": 18.1,
+      "max_ms": 18.1
+    },
+    "completion_during_indexing": {
+      "count": 3,
+      "p50_ms": 0.8,
+      "p95_ms": 1,
+      "max_ms": 1
+    },
+    "hover_after_six_saves_during_indexing_ms": 3125.4
+  },
+  "warm_start": {
+    "initialize_ms": 6.8,
+    "first_hover_ms": 16.3,
+    "index_ready_ms": 82.4,
+    "rss_after_ready_mb": 56.1
+  },
+  "warm_requests_small_file": {
+    "hover": {
+      "count": 20,
+      "p50_ms": 3.1,
+      "p95_ms": 6.1,
+      "max_ms": 6.1
+    },
+    "definition": {
+      "count": 20,
+      "p50_ms": 4.8,
+      "p95_ms": 7.8,
+      "max_ms": 7.8
+    },
+    "completion": {
+      "count": 20,
+      "p50_ms": 0.8,
+      "p95_ms": 1.6,
+      "max_ms": 1.6
+    },
+    "document_symbol": {
+      "count": 20,
+      "p50_ms": 0.1,
+      "p95_ms": 0.1,
+      "max_ms": 0.1
+    },
+    "semantic_tokens_full": {
+      "count": 20,
+      "p50_ms": 0.1,
+      "p95_ms": 2.7,
+      "max_ms": 2.7
+    }
+  },
+  "references": {
+    "matrix": {
+      "ms": 28831.3,
+      "locations": 1898,
+      "hover_while_running_ms": 28940.8,
+      "rss_before_mb": 61.9,
+      "rss_after_mb": 140.1
+    },
+    "QQ": {
+      "ms": 6193.3,
+      "locations": 2299,
+      "hover_while_running_ms": 6019.4,
+      "rss_before_mb": 140.1,
+      "rss_after_mb": 192
+    }
+  },
+  "watched_file_burst": {
+    "files": 31,
+    "hover_right_after_burst_ms": 10.4,
+    "settle_ms": 115.7,
+    "rss_after_mb": 218.2
+  },
+  "rebuild": {
+    "command_ms": 3,
+    "rss_before_mb": 218.2,
+    "rss_after_mb": 819.5,
+    "peak_rss_mb": 819.9,
+    "hover_after_rebuild": {
+      "count": 20,
+      "p50_ms": 4.4,
+      "p95_ms": 5.5,
+      "max_ms": 5.5
+    },
+    "cache_dir_mb": 205.4
+  },
+  "shutdown_ms": 21.8
+}

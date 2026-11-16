@@ -10,6 +10,7 @@ export class LspProcess {
     this.pending = new Map();
     this.buffer = Buffer.alloc(0);
     this.stderr = [];
+    this.onNotification = options.onNotification;
   }
 
   async start() {
@@ -123,6 +124,10 @@ export class LspProcess {
   handleMessage(message) {
     if (message.method && Object.hasOwn(message, "id")) {
       this.write({ jsonrpc: "2.0", id: message.id, result: null });
+      return;
+    }
+    if (message.method) {
+      this.onNotification?.(message.method, message.params);
       return;
     }
     const pending = this.pending.get(message.id);
