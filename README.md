@@ -61,7 +61,7 @@ home paths are not leaked.
 ## Goals
 
 - Deliver a maintainable Sage editor experience for `.sage` files.
-- Keep the client, Rust language server, legacy Python migration baseline, and syntax assets cleanly separated.
+- Keep the client, Rust language server, and syntax assets cleanly separated.
 - Record design decisions, progress, and commit-level development history in-repo from the start.
 
 ## Workspace Layout
@@ -69,14 +69,13 @@ home paths are not leaked.
 - `packages/extension-core`: VS Code extension and LSP client bootstrap.
 - `crates/sage-ls`: primary Rust language-server process.
 - `crates/sage-index`: Rust source index, SQLite cache, query, diagnostics, and semantic-token engine.
-- `packages/sage-lsp`: legacy Python `pygls` server retained as a migration and regression baseline.
 - `packages/syntax-pack`: grammar, snippets, and language configuration.
 - `docs/`: concise design notes, release gates, and current progress.
 - `examples/manual-smoke-workspace`: ready-to-open sample workspace for manual and automated smoke checks.
 
 ## Current Status
 
-- Repository bootstrap, Rust build, TypeScript build, syntax sync, and Python legacy tests are locally validated.
+- Repository bootstrap, Rust build, TypeScript build, and syntax sync are locally validated.
 - The extension launches `sage-ls` from `SAGE_LS_PATH`, `sage.languageServer.rustPath`, local `target/*`, or `PATH`.
 - The extension provides a Getting Started walkthrough, environment-first interpreter selection, status presentation, run
   commands, managed REPL, documentation panel, index/docs status commands, support bundle capture, rebuild, and an editor
@@ -133,7 +132,6 @@ npm run package:rust-binary
 npm run package:vsix
 npm run test:vsix-install
 npm run test:release
-npm run test:native-smoke
 npm run cache:status
 npm run clean:dry-run
 ```
@@ -198,4 +196,3 @@ If `.sage` opens as `Plain Text`, close that normal VS Code window and relaunch 
 
 1. Sign and publish native Rust binaries for marketplace-style distribution.
 2. Add notebook and kernel surfaces.
-3. Continue reducing the legacy Python LSP once Rust parity is explicitly accepted.

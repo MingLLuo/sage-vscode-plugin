@@ -317,7 +317,7 @@ test("macOS CI gate is public-repository safe", () => {
     assert.match(ciGate, new RegExp(expected.replaceAll("/", "\\/").replaceAll("+", "\\+")));
   }
 
-  for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:native-smoke", "test:extension-host"]) {
+  for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:extension-host"]) {
     assert.doesNotMatch(ciGate, new RegExp(localOnly.replaceAll(":", "\\:")));
   }
 
@@ -335,7 +335,7 @@ test("macOS CI gate is public-repository safe", () => {
   assert.match(workflow, /cache-dependency-path:\s*package-lock\.json/);
   assert.match(workflow, /actions\/checkout@v7/);
   assert.match(workflow, /actions\/setup-node@v7/);
-  assert.match(workflow, /actions\/setup-python@v7/);
+  assert.doesNotMatch(workflow, /setup-python|pip install/, "CI must not depend on a Python toolchain");
   const sageCheckout = workflow.match(
     /- name:\s*Check out latest Sage source([\s\S]*?)(?=\n\s+- name:|\n\s*$)/,
   )?.[1] ?? "";
@@ -352,7 +352,6 @@ test("macOS CI gate is public-repository safe", () => {
   assert.match(workflow, /Swatinem\/rust-cache@v2/);
   assert.match(workflow, /cache-on-failure:\s*true/);
   assert.match(workflow, /cargo fetch --locked/);
-  assert.match(workflow, /python -m pip install -e \.\/packages\/sage-lsp\[dev\]/);
   assert.match(workflow, /npm run test:ci/);
   assert.doesNotMatch(workflow, /npm run test:release/);
 });

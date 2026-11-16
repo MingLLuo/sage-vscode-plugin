@@ -25,8 +25,6 @@ const fixedPaths = [
   "packages/extension-core/out",
   "packages/extension-core/.vscode-test",
   "packages/syntax-pack/out",
-  "packages/sage-lsp/build",
-  "packages/sage-lsp/.pytest_cache",
   ".pytest_cache",
   ".coverage",
 ];

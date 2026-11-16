@@ -15,7 +15,6 @@ pub(super) struct InitializationOptions {
     pub(super) workspace: WorkspaceOptions,
     pub(super) documentation: DocumentationOptions,
     pub(super) rust: RustOptions,
-    pub(super) pyright: PyrightOptions,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -110,14 +109,6 @@ impl DocumentationPreferredSource {
 #[serde(default)]
 pub(super) struct RustOptions {
     pub(super) cache_dir: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[serde(default)]
-pub(super) struct PyrightOptions {
-    pub(super) node_path: Option<String>,
-    pub(super) server_path: Option<String>,
 }
 
 pub(super) fn parse_initialization_options(value: Option<Value>) -> InitializationOptions {

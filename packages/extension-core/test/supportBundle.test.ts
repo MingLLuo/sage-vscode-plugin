@@ -30,8 +30,6 @@ test("buildSupportBundle records troubleshootable state without source contents"
       interpreterPath: "sage",
       interpreterArgs: [],
       languageServerRustPath: "auto",
-      languageServerPythonPath: "auto",
-      languageServerPythonArgs: [],
       analysisMode: "default",
       extraPaths: ["src"],
       sourceRoots: ["/workspace/sage/src"],

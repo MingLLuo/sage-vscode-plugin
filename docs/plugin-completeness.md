@@ -37,9 +37,7 @@ coverage remains testable without maintaining parallel manuals.
 
 - `sage.interpreter.path`
 - `sage.interpreter.args`
-- `sage.languageServer.pythonPath`
 - `sage.languageServer.rustPath`
-- `sage.languageServer.pythonArgs`
 - `sage.analysis.mode`
 - `sage.analysis.extraPaths`
 - `sage.analysis.sourceRoots`

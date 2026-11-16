@@ -118,7 +118,9 @@ function buildSettings(existing, input) {
   const next = { ...existing };
 
   next["sage.languageServer.rustPath"] = "auto";
-  next["sage.languageServer.pythonPath"] = "auto";
+  // Removed settings from the retired Python language server would only show as unknown keys.
+  delete next["sage.languageServer.pythonPath"];
+  delete next["sage.languageServer.pythonArgs"];
   next["sage.analysis.mode"] = input.profile.analysisMode;
   next["sage.analysis.enablePythonFiles"] = input.profile.enablePythonFiles;
   next["sage.analysis.enablePyxParsing"] = input.profile.enablePyxParsing;

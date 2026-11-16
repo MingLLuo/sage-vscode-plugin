@@ -65,25 +65,24 @@ confirmed. This avoids silently jumping to or editing a different method with th
 
 ## Development Bootstrap
 
-1. Select any Node.js 22.9-or-newer runtime and the Rust/Cargo toolchain from `rust-toolchain.toml`; install Python 3.9
-   or newer. Node.js 26 is supported. Use npm 11 or newer; no exact Node/npm patch version is required, but npm must
+1. Select any Node.js 22.9-or-newer runtime and the Rust/Cargo toolchain from `rust-toolchain.toml`.
+   Node.js 26 is supported. Use npm 11 or newer; no exact Node/npm patch version is required, but npm must
    declare the selected Node.js runtime compatible.
 2. From the repository root, run `npm ci`.
 3. Build the Rust language server with `npm run build:rust`.
 4. Sync syntax assets with `npm run sync:syntax`.
 5. Build the workspace with `npm run build`.
-6. Optional: install the legacy Python LSP test package with `python -m pip install -e ./packages/sage-lsp[dev]`.
 
-Note: the primary language server is the Rust `sage-ls` binary. Python is still used by the legacy test suite and by
-optional runtime-backed Sage documentation probes, but it is no longer the default LSP transport.
+Note: the language server is the Rust `sage-ls` binary. No separate Python installation is required; optional
+runtime-backed Sage documentation probes use the Python that ships inside the selected Sage runtime.
 
 ## One-Command Development Setup
 
 - Run `npm run dev:vscode` to sync syntax assets, build the repository, and open the plugin repository in VS Code.
 - Run `npm run dev:vscode:smoke` to do the same prep work and then print the GUI checks for launching the smoke
   workspace in an extension-development host.
-- Run `./scripts/dev-vscode.sh --bootstrap --python /path/to/python` when you want the helper script to install Node
-  dependencies and editable-install the legacy `sage-lsp` package before opening VS Code.
+- Run `./scripts/dev-vscode.sh --bootstrap` when you want the helper script to install Node dependencies before
+  opening VS Code.
 - Run `npm run configure:workspace -- --workspace /path/to/project --profile auto` when you want a cross-platform
   command-line setup for `.sage`, Sage-heavy Python, Cython, or mixed research workspaces before opening VS Code. Add
   `-- --sage /path/to/sage --source-root /path/to/sage/src` when Sage is not on `PATH`.
@@ -120,8 +119,7 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
    installed Sage executable.
 14. Leave `sage.languageServer.rustPath = auto` for local development so the extension uses `target/debug/sage-ls` after
    `npm run build:rust`; set it only when you want a specific binary.
-15. The picker still includes advanced actions for custom Sage runtimes, custom legacy Python paths, and an explicit
-   `auto` reset entry.
+15. The picker ends with one manual action for entering a custom Sage runtime path.
 16. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
 17. Set `sage.run.cleanupGeneratedPython = true` if you want standalone `.sage` runs to clean up newly generated `.sage.py` helpers. Existing files and overlapping runs are retained; REPL loads do not delete disk helpers.
 18. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
@@ -136,9 +134,6 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
 
 - `sage.interpreter.path`
   Controls the Sage executable used for `Run Current File`, `Run Selection`, and `Start REPL`.
-- `sage.languageServer.pythonPath`
-  Legacy compatibility setting for old workspaces and Python LSP tests. The primary server path is
-  `sage.languageServer.rustPath`.
 - `sage.languageServer.rustPath`
   Controls the Rust `sage-ls` executable. `auto` prefers `SAGE_LS_PATH`, local `target/debug/sage-ls`, local
   `target/release/sage-ls`, then `sage-ls` on `PATH`.
@@ -192,9 +187,7 @@ optional runtime-backed Sage documentation probes, but it is no longer the defau
 
 - `sage.interpreter.path`: Sage executable used by run commands, REPL startup, and runtime-backed docs.
 - `sage.interpreter.args`: extra arguments passed to the Sage executable.
-- `sage.languageServer.pythonPath`: legacy Python LSP runtime path retained for older workspaces and migration tests.
 - `sage.languageServer.rustPath`: Rust `sage-ls` path; leave it as `auto` for local development.
-- `sage.languageServer.pythonArgs`: extra arguments passed to the legacy Python language server.
 - `sage.analysis.mode`: workspace-wide analysis breadth. `light`, `default`, and `full` return at most 50, 200, and
   1000 workspace-symbol matches respectively. The modes do not change definition/reference resolution semantics or
   override the dedicated diagnostics, runtime-introspection, and Cython-indexing switches. Changing the mode restarts

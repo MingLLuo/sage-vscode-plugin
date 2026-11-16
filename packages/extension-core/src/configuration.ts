@@ -15,8 +15,6 @@ export function readSettings(scope?: vscode.WorkspaceFolder | vscode.Uri): SageS
     interpreterPath: configuration.get<string>("interpreter.path", "sage"),
     interpreterArgs: configuration.get<string[]>("interpreter.args", []),
     languageServerRustPath: configuration.get<string>("languageServer.rustPath", "auto"),
-    languageServerPythonPath: configuration.get<string>("languageServer.pythonPath", "auto"),
-    languageServerPythonArgs: configuration.get<string[]>("languageServer.pythonArgs", []),
     analysisMode: configuration.get<AnalysisMode>("analysis.mode", "default"),
     extraPaths: configuration.get<string[]>("analysis.extraPaths", []),
     sourceRoots: configuration.get<string[]>("analysis.sourceRoots", []),

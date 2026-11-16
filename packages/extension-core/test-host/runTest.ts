@@ -116,7 +116,6 @@ async function runExtensionHostSuite(options: {
     ],
     extensionTestsEnv: {
       SAGE_TEST_HOST_MODE: options.mode,
-      SAGE_TEST_LSP_PYTHON: process.env.SAGE_TEST_LSP_PYTHON ?? "python",
       SAGE_TEST_WORKSPACE: options.workspacePath,
       ...(options.mode === "smoke"
         ? {

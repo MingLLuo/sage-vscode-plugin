@@ -9,7 +9,7 @@
 ## Phase 1: Editor MVP
 
 - Register the `sagemath` language.
-- Start the LSP client and `pygls` server successfully.
+- Start the LSP client and the `sage-ls` language server successfully.
 - Add baseline commands and environment display.
 
 ## Phase 2: Source Intelligence

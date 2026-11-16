@@ -3,7 +3,8 @@
 ## Repository Structure
 
 - `packages/extension-core`: VS Code extension client and command surfaces.
-- `packages/sage-lsp`: `pygls` language server and analysis package.
+- `crates/sage-ls`: Rust language-server process.
+- `crates/sage-index`: Rust source index, cache, and query engine.
 - `packages/syntax-pack`: language grammar, snippets, and editor metadata.
 - `docs/design`: design notes and accepted decisions.
 - `docs/process`: release-gate notes that are still test-covered.

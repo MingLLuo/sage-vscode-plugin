@@ -52,8 +52,6 @@ export function buildSupportBundle(input: SupportBundleInput): string {
       interpreter_path: input.settings.interpreterPath,
       interpreter_args: input.settings.interpreterArgs,
       language_server_rust_path: input.settings.languageServerRustPath,
-      language_server_python_path: input.settings.languageServerPythonPath,
-      language_server_python_args: input.settings.languageServerPythonArgs,
       analysis_mode: input.settings.analysisMode,
       source_roots: input.settings.sourceRoots,
       extra_paths: input.settings.extraPaths,

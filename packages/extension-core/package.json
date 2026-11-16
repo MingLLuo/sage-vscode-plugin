@@ -37,9 +37,7 @@
       "restrictedConfigurations": [
         "sage.interpreter.path",
         "sage.interpreter.args",
-        "sage.languageServer.pythonPath",
         "sage.languageServer.rustPath",
-        "sage.languageServer.pythonArgs",
         "sage.analysis.extraPaths",
         "sage.analysis.sourceRoots",
         "sage.analysis.enableRuntimeIntrospection",
@@ -401,26 +399,11 @@
           },
           "markdownDescription": "Extra arguments passed to the Sage executable."
         },
-        "sage.languageServer.pythonPath": {
-          "type": "string",
-          "default": "auto",
-          "scope": "resource",
-          "markdownDescription": "Legacy Python language-server runtime path retained for compatibility with old workspaces. Sage V2 uses `sage.languageServer.rustPath`."
-        },
         "sage.languageServer.rustPath": {
           "type": "string",
           "default": "auto",
           "scope": "resource",
           "markdownDescription": "Path to the Rust `sage-ls` language server. Use `auto` to prefer the repository-local `target/debug/sage-ls` during local development."
-        },
-        "sage.languageServer.pythonArgs": {
-          "type": "array",
-          "default": [],
-          "scope": "resource",
-          "items": {
-            "type": "string"
-          },
-          "markdownDescription": "Extra arguments passed to the Python executable that runs the language server."
         },
         "sage.analysis.mode": {
           "type": "string",

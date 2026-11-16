@@ -40,7 +40,7 @@
 
 - Use `npm run test:ci` for the public GitHub-compatible gate. It avoids private machine paths, desktop VS Code, and
   mandatory Sage runtime availability while still running Rust tests, clippy, TypeScript lint/tests, debug-web smoke,
-  legacy Python tests, LSP shutdown smoke, VSIX content/package checks, cache maintenance, and portable performance smoke.
+  LSP shutdown smoke, VSIX content/package checks, cache maintenance, and portable performance smoke.
 - Use `npm run test:repo-hygiene` after changing GitHub issue templates, PR templates, `SECURITY.md`, `SUPPORT.md`, or
   CI/release gate definitions, `.gitattributes`, or `.editorconfig`.
 - Use `npm run test:release` for local release candidates. It additionally exercises persistent LSP latency and

@@ -7,8 +7,6 @@ export interface SageSettings {
   interpreterPath: string;
   interpreterArgs: string[];
   languageServerRustPath: string;
-  languageServerPythonPath: string;
-  languageServerPythonArgs: string[];
   analysisMode: AnalysisMode;
   extraPaths: string[];
   sourceRoots: string[];
@@ -30,15 +28,10 @@ export interface LanguageServerInitializationOptions {
   interpreter: {
     path: string;
     args: string[];
-    pythonPath?: string;
   };
   rust: {
     binaryPath?: string;
     cacheDir?: string;
-  };
-  pyright: {
-    nodePath?: string;
-    serverPath?: string;
   };
   analysis: {
     mode: AnalysisMode;
@@ -76,32 +69,21 @@ export interface WorkspaceInitializationInput {
 export interface RuntimeInitializationInput {
   resolvedRustPath?: string;
   cacheDir?: string;
-  nodePath?: string;
-  pyrightServerPath?: string;
-  resolvedLanguageServerPythonPath?: string;
 }
 
 export function buildInitializationOptions(
   settings: SageSettings,
   workspace: WorkspaceInitializationInput,
-  runtimeInput: RuntimeInitializationInput | string = {},
+  runtime: RuntimeInitializationInput = {},
 ): LanguageServerInitializationOptions {
-  const runtime = typeof runtimeInput === "string"
-    ? { resolvedLanguageServerPythonPath: runtimeInput }
-    : runtimeInput;
   return {
     interpreter: {
       path: settings.interpreterPath,
       args: settings.interpreterArgs,
-      ...(runtime.resolvedLanguageServerPythonPath ? { pythonPath: runtime.resolvedLanguageServerPythonPath } : {}),
     },
     rust: {
       ...(runtime.resolvedRustPath ? { binaryPath: runtime.resolvedRustPath } : {}),
       ...(runtime.cacheDir ? { cacheDir: runtime.cacheDir } : {}),
-    },
-    pyright: {
-      ...(runtime.nodePath ? { nodePath: runtime.nodePath } : {}),
-      ...(runtime.pyrightServerPath ? { serverPath: runtime.pyrightServerPath } : {}),
     },
     analysis: {
       mode: settings.analysisMode,

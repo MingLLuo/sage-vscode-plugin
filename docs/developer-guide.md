@@ -16,10 +16,6 @@ current static-analysis baseline should be extended safely.
 - `crates/sage-index`
   Rust V2 indexing engine. Owns parallel file scanning, Sage/Python/Cython symbol extraction, source preprocessing,
   SQLite/FTS persistence, and release indexing benchmarks.
-- `packages/sage-lsp`
-  Legacy Python language server retained as a migration baseline. It still carries the previous `pygls` implementation,
-  tests, fixtures, and debug hooks, but new runtime work should target the Rust V2 crates unless a task explicitly
-  concerns migration parity.
 - `packages/syntax-pack`
   Shared syntax assets. Owns grammar, snippets, and language configuration for `.sage` and Sage-native Cython files.
 - `docs/design`
@@ -123,9 +119,9 @@ current static-analysis baseline should be extended safely.
   policy explicit during managed shutdown.
 - `src/serverLaunch.ts`
   Resolves the Rust language-server binary from `sage.languageServer.rustPath`, `SAGE_LS_PATH`, local `target/*`
-  builds, or `PATH`. The legacy Python launch resolver remains for migration tests.
+  builds, or `PATH`.
 - `src/interpreterDiscovery.ts`
-  Finds Sage runtime/Python candidates and resolves quick-pick selections into configuration updates. Keep path probing
+  Finds Sage runtime candidates and resolves quick-pick selections into configuration updates. Keep path probing
   and selection handling here so `extension.ts` only applies settings and reports the result.
 - `src/documentationRequest.ts`
   Normalizes documentation payloads into a render-friendly shape.
@@ -234,37 +230,6 @@ Rust index:
 - `crates/sage-index/src/bin/sage-index-bench.rs`
   Measures cold release indexing against a local Sage source checkout. Use release mode for performance validation.
 
-Legacy Python LSP:
-
-- `src/sage_lsp/parser.py`
-  Parses Python, loose `.sage`, and lightweight `.pyx`/`.pxd`/`.pxi` files into a common module model while preserving
-  conservative syntax diagnostics for valid preparser constructs.
-- `src/sage_lsp/index.py`
-  Compatibility facade for the historical public index import path. New index implementation work should live behind
-  `workspace_index.py` or smaller purpose-built modules.
-- `src/sage_lsp/workspace_index.py`
-  Builds workspace state, merges native declaration and implementation modules, and resolves symbols through imports,
-  star imports, lazy imports, workspace symbol search, references, rename edits, import diagnostics, and syntax
-  diagnostics.
-- `src/sage_lsp/index_db.py`
-  Persists lightweight module summaries in SQLite for warm global lookups, with JSON summary files retained as fallback
-  storage.
-- `src/sage_lsp/jedi_bridge.py`
-  Adds optional Jedi-backed local Python context completions and leaves Sage-specific static resolution in
-  `workspace_index.py`.
-- `src/sage_lsp/trace.py`
-  Emits bounded structured request and cache traces for debugging slow or unexpected language-server behavior.
-- `src/sage_lsp/source_map.py`
-  Hosts the first `.sage` preprocessing and bidirectional position mapping primitives.
-- `src/sage_lsp/server.py`
-  Wires the index and parser into `pygls` request handlers for hover, completion, definition, signature help,
-  references, rename, workspace symbols, and diagnostics publication.
-- `src/sage_lsp/runtime_introspection.py`
-  Queries a live Sage runtime through `sage.misc.sageinspect` when static indexing cannot supply docs, signatures, or
-  source locations.
-- `tests/fixtures/sage_src_lite`
-  Reduced Sage-aligned source corpus used for parser and index regression tests.
-
 ## Bootstrap Commands
 
 ```bash
@@ -276,9 +241,6 @@ npm run debug:web
 npm run build
 npm run test
 ```
-
-Install the legacy Python LSP package with `python -m pip install -e ./packages/sage-lsp[dev]` only when you need to run
-or modify the Python migration baseline directly.
 
 Shortcut:
 
@@ -300,7 +262,6 @@ npm run test:vsix-package
 npm run test:vsix-install
 npm run test:cache-maintenance
 npm run test:repo-hygiene
-npm run test:native-smoke
 npm run test:product-readiness
 npm run test:reference-export
 npm run test:performance
@@ -362,10 +323,6 @@ node scripts/cache-maintenance.mjs --prune --max-age-days 30 --max-total-bytes 2
 The VS Code extension applies the same conservative policy to its own global-storage `rust-index-v2` directory before
 starting `sage-ls`; `npm run test:cache-maintenance` validates the deletion path in a temporary directory.
 
-`npm run test:native-smoke` validates common library symbols such as `PolynomialRing`, `EllipticCurve`, `matrix`,
-`NumberField`, `Partitions`, and `graphs.PetersenGraph` against a real local Sage source checkout without launching VS
-Code.
-
 `Sage: Select Interpreter` is now environment-first. The primary choices should be `Local Sage development environment`
 for a nearby checkout paired with `conda` `sage-dev`, and `System Sage (stable)` for the installed standalone Sage
 runtime.
@@ -414,11 +371,10 @@ form deletes matching old SQLite cache files.
 2. Set `sage.logging.level` to `debug`, then run `Sage: Restart Language Server`.
 3. Use `Sage: Show Environment Details` to confirm source roots, extra paths, index mode, and runtime-introspection
    status.
-4. For Rust V2, run `Sage: Show Index Status`, `Sage: Show Docs Status`, or `Sage: Rebuild Index`. For legacy Python
-   tests, call `sage/__debug/indexStatus` to inspect generation, loaded roots, deferred roots, module counts, overlay
-   counts, and summary-cache state.
-5. Reduce hover, definition, or completion failures into a fixture under `packages/sage-lsp/tests/fixtures` or
-   `examples/manual-smoke-workspace` before changing resolver behavior.
+4. Run `Sage: Show Index Status`, `Sage: Show Docs Status`, or `Sage: Rebuild Index` to inspect generation, loaded
+   roots, cache state, and pending jobs.
+5. Reduce hover, definition, or completion failures into a Rust unit test under `crates/sage-index/src/tests/` or a
+   file in `examples/manual-smoke-workspace` before changing resolver behavior.
 6. If cache size or stale checkout state is suspected, run `npm run cache:status` first and use dry-run prune output
    before deleting any root-aware SQLite cache.
 
@@ -430,7 +386,6 @@ form deletes matching old SQLite cache files.
   existence checks, and user documentation coverage.
 - Rust-facing work should keep `cargo test` green and should record `cargo run --release -p sage-index --bin
   sage-index-bench -- /path/to/sage/src` when performance is relevant.
-- Python-facing work should keep `npm run test:python` green.
 - Syntax or generated branding work should keep `npm run sync:syntax`, `npm run test:generated-assets`, and syntax
   package checks green.
 - Cache maintenance or release tooling changes should keep `npm run test:cache-maintenance` green.
@@ -447,7 +402,8 @@ form deletes matching old SQLite cache files.
   runs locked Rust tests, clippy with `-D warnings`, TypeScript lint, the full non-desktop test suite, VSIX content/package
   install smoke, release index performance, persistent LSP latency, the real-file Sage-heavy smoke, and
   `git diff --check`.
-- Native Sage library work should also keep `npm run test:native-smoke` green when a local Sage checkout is present.
+- Native Sage library work should also keep `npm run test:debug-web:sage` and `npm run test:real-file-smoke` green when a
+  local Sage checkout is present.
 - Extension-host behavior that depends on the real VS Code client lifecycle should also keep `npm run test:extension-host`
   green.
 - The extension-host smoke suite now covers hover, definition, completion, references, rename, document/workspace

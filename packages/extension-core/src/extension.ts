@@ -876,12 +876,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const settings = readSettings(workspaceFolder);
       const detectedOptions = discoverInterpreterCandidates({
         currentPath: settings.interpreterPath,
-        languageServerPythonPath: settings.languageServerPythonPath,
         workspaceFolders: workspaceFolder ? [workspaceFolder.uri.fsPath] : workspaceFolderPaths(),
       });
       const picked = await vscode.window.showQuickPick(detectedOptions, {
         title: "Select Sage environment",
-        placeHolder: "Choose a complete Sage environment, or fall back to the advanced path actions below.",
+        placeHolder: "Choose a detected Sage runtime, or enter a custom path.",
         matchOnDescription: true,
         matchOnDetail: true,
       });
@@ -895,11 +894,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           title: "Sage runtime path",
           value: initialValue,
           prompt: "Enter the Sage executable used for run commands and the managed REPL.",
-        }),
-        languageServerPythonPath: (initialValue) => vscode.window.showInputBox({
-          title: "Language-server Python path",
-          value: initialValue,
-          prompt: "Enter the Python executable used to run sage_lsp.",
         }),
       });
       if (!updates || updates.length === 0) {

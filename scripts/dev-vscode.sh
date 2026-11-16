@@ -9,7 +9,6 @@ SKIP_BUILD=0
 SKIP_OPEN=0
 DRY_RUN=0
 CODE_BIN="${CODE_BIN:-code}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
 
 usage() {
   cat <<'EOF'
@@ -20,8 +19,7 @@ local F5 launch configurations can start the extension host.
 
 Options:
   --smoke         Print smoke-workspace follow-up steps after opening VS Code.
-  --bootstrap     Run npm install and editable-install the Python language server package first.
-  --python BIN    Python executable used for the optional editable install. Default: python
+  --bootstrap     Run npm install first.
   --code BIN      VS Code CLI executable to launch. Default: code
   --skip-build    Skip syntax sync and build steps.
   --no-open       Prepare the repo but do not launch VS Code.
@@ -31,7 +29,7 @@ Options:
 Examples:
   ./scripts/dev-vscode.sh
   ./scripts/dev-vscode.sh --smoke
-  ./scripts/dev-vscode.sh --bootstrap --python "$HOME/miniforge3/bin/python"
+  ./scripts/dev-vscode.sh --bootstrap
 EOF
 }
 
@@ -65,11 +63,6 @@ while [[ $# -gt 0 ]]; do
     --bootstrap)
       BOOTSTRAP=1
       ;;
-    --python)
-      shift
-      [[ $# -gt 0 ]] || { log "--python requires a value"; exit 1; }
-      PYTHON_BIN="$1"
-      ;;
     --code)
       shift
       [[ $# -gt 0 ]] || { log "--code requires a value"; exit 1; }
@@ -99,10 +92,6 @@ done
 
 require_command npm
 
-if [[ "$BOOTSTRAP" -eq 1 ]]; then
-  require_command "$PYTHON_BIN"
-fi
-
 if [[ "$SKIP_OPEN" -eq 0 ]]; then
   require_command "$CODE_BIN"
 fi
@@ -110,9 +99,8 @@ fi
 cd "$ROOT_DIR"
 
 if [[ "$BOOTSTRAP" -eq 1 ]]; then
-  log "bootstrapping Node and Python dependencies"
+  log "bootstrapping Node dependencies"
   run_cmd npm install
-  run_cmd "$PYTHON_BIN" -m pip install -e "./packages/sage-lsp[dev]"
 fi
 
 if [[ "$SKIP_BUILD" -eq 0 ]]; then

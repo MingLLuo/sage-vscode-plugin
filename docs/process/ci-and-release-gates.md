@@ -10,7 +10,7 @@ portable while local release candidates still exercise real Sage-heavy workloads
 
 - Locked Rust tests and `cargo clippy --locked --all-targets --all-features -- -D warnings`.
 - Syntax and extension lint.
-- TypeScript, debug workbench, and legacy Python regression tests through `npm run test`.
+- TypeScript and debug workbench tests through `npm run test`.
 - The full 23-scenario real-Sage debug-workbench matrix through `npm run test:debug-web:sage`.
 - Repository-local LSP navigation contract smoke covering one-target high-confidence jumps, ordered ambiguous
   `LocationLink` candidates, exact `.pxd` declaration/`.pyx` implementation role selection, explanatory hover content,
@@ -30,7 +30,7 @@ portable while local release candidates still exercise real Sage-heavy workloads
   report a structured skip when no source checkout is present.
 - `git diff --check` for whitespace errors.
 
-Do not add `test:lsp-latency`, `test:real-file-smoke`, `test:native-smoke`, or `test:extension-host` to `test:ci`.
+Do not add `test:lsp-latency`, `test:real-file-smoke`, or `test:extension-host` to `test:ci`.
 Those gates intentionally depend on local Sage/source/VS Code state.
 
 Running `test:ci` directly requires a nearby Sage checkout or `SAGE_SOURCE_ROOT=/path/to/sage/src`; the public workflow
@@ -60,7 +60,7 @@ a machine where GUI automation is acceptable.
 ## Workflow Rules
 
 - GitHub Actions runs on `macos-latest`, uses the Node 22 baseline declared by `.node-version` and the exact Rust version
-  in `rust-toolchain.toml`, installs Python dependencies, restores Cargo build/cache state, runs `cargo fetch --locked`,
+  in `rust-toolchain.toml`, restores Cargo build/cache state, runs `cargo fetch --locked`,
   sparsely checks out the latest default-branch `sagemath/sage` sources for the real navigation UX matrix, then executes
   `npm run test:ci`. A lightweight Linux matrix covers Node.js 22/npm 11 and Node.js 26/npm 12, while a second macOS
   job packages the VSIX end to end with Node.js 26/npm 12.

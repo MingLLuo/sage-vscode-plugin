@@ -9,162 +9,95 @@ import {
   resolveInterpreterConfigurationUpdates,
 } from "../src/interpreterDiscovery";
 
-test("discoverInterpreterCandidates prioritizes local development and system Sage environments", () => {
+test("discoverInterpreterCandidates lists the current, local development, and system Sage runtimes once each", () => {
   const tempRoot = mkdtempSync(path.join(os.tmpdir(), "sage-discovery-"));
   const binDir = path.join(tempRoot, "bin");
   const workspaceDir = path.join(tempRoot, "workspace");
   const siblingSageDir = path.join(tempRoot, "sage");
-  const pathPython = path.join(binDir, "python3");
   const pathSage = path.join(binDir, "sage");
   const workspaceSage = path.join(siblingSageDir, "sage");
-  const homeDir = path.join(tempRoot, "home");
-  const sageDevPython = path.join(homeDir, "miniforge3", "envs", "sage-dev", "bin", "python");
-  const homePython = path.join(homeDir, "miniforge3", "bin", "python");
-  const workspaceSageBootstrap = path.join(siblingSageDir, "src", "bin", "sage");
-  const workspaceSagePackage = path.join(siblingSageDir, "src", "sage", "__init__.py");
 
-  writeExecutable(pathPython);
   writeExecutable(pathSage);
   writeExecutable(workspaceSage);
-  writeExecutable(workspaceSageBootstrap);
-  writeExecutable(homePython);
-  writeExecutable(sageDevPython);
-  writeExecutable(workspaceSagePackage);
+  writeExecutable(path.join(siblingSageDir, "src", "bin", "sage"));
+  writeExecutable(path.join(siblingSageDir, "src", "sage", "__init__.py"));
 
   const items = discoverInterpreterCandidates({
     currentPath: workspaceSage,
-    languageServerPythonPath: "auto",
     workspaceFolders: [workspaceDir],
     envPath: binDir,
-    homeDir,
-    environment: {},
   });
 
-  assertEnvironmentCandidate(
-    items,
-    workspaceSage,
-    sageDevPython,
-    "Local Sage development environment",
+  assertEnvironmentCandidate(items, workspaceSage, "Current local Sage development environment");
+  assertEnvironmentCandidate(items, pathSage, "System Sage (stable)");
+  assert.equal(
+    items.filter((item) => item.interpreterPath === workspaceSage).length,
+    1,
+    "the configured runtime and the detected checkout are the same environment",
   );
-  assertEnvironmentCandidate(
-    items,
-    pathSage,
-    pathPython,
-    "System Sage (stable)",
-  );
-  assert.ok(items.some((item) => item.selectionTarget === "runtimeCustom"));
-  assert.ok(items.some((item) => item.selectionTarget === "languageServerCustom"));
-  assert.ok(items.some((item) => item.selectionTarget === "languageServerAuto"));
-});
-
-test("resolveInterpreterConfigurationUpdates maps environment and auto selections", async () => {
   assert.deepEqual(
-    await resolveInterpreterConfigurationUpdates(
-      {
-        label: "Use auto-detected language-server Python",
-        selectionTarget: "languageServerAuto",
-      },
-      { interpreterPath: "/usr/bin/sage", languageServerPythonPath: "/usr/bin/python3" },
-      unusedPrompts(),
-    ),
-    [{ section: "languageServer.pythonPath", value: "auto" }],
-  );
-
-  assert.deepEqual(
-    await resolveInterpreterConfigurationUpdates(
-      {
-        label: "Detected",
-        selectionTarget: "environment",
-        updates: [
-          { section: "interpreter.path", value: "/opt/sage" },
-          { section: "languageServer.pythonPath", value: "/opt/python" },
-        ],
-      },
-      { interpreterPath: "/usr/bin/sage", languageServerPythonPath: "auto" },
-      unusedPrompts(),
-    ),
-    [
-      { section: "interpreter.path", value: "/opt/sage" },
-      { section: "languageServer.pythonPath", value: "/opt/python" },
-    ],
+    items.filter((item) => item.selectionTarget !== "environment").map((item) => item.selectionTarget),
+    ["runtimeCustom"],
+    "the picker offers exactly one manual action and no language-server Python entries",
   );
 });
 
-test("resolveInterpreterConfigurationUpdates prompts for custom paths", async () => {
+test("discoverInterpreterCandidates offers an unverified configured runtime as the current environment", () => {
+  const items = discoverInterpreterCandidates({
+    currentPath: "sage",
+    workspaceFolders: [],
+    envPath: "",
+  });
+
+  assertEnvironmentCandidate(items, "sage", "Current Sage environment");
+});
+
+test("resolveInterpreterConfigurationUpdates maps environment selections", async () => {
+  assert.deepEqual(
+    await resolveInterpreterConfigurationUpdates(
+      { label: "Detected", selectionTarget: "environment", interpreterPath: "/opt/sage" },
+      { interpreterPath: "/usr/bin/sage" },
+      unusedPrompts(),
+    ),
+    [{ section: "interpreter.path", value: "/opt/sage" }],
+  );
+});
+
+test("resolveInterpreterConfigurationUpdates prompts for a custom path", async () => {
   assert.deepEqual(
     await resolveInterpreterConfigurationUpdates(
       { label: "Custom Sage", selectionTarget: "runtimeCustom" },
-      { interpreterPath: "/old/sage", languageServerPythonPath: "auto" },
-      {
-        runtimePath: async (initialValue) => `${initialValue}-new`,
-        languageServerPythonPath: async () => {
-          throw new Error("unexpected language-server prompt");
-        },
-      },
+      { interpreterPath: "/old/sage" },
+      { runtimePath: async (initialValue) => `${initialValue}-new` },
     ),
     [{ section: "interpreter.path", value: "/old/sage-new" }],
-  );
-
-  assert.deepEqual(
-    await resolveInterpreterConfigurationUpdates(
-      { label: "Custom Python", selectionTarget: "languageServerCustom" },
-      { interpreterPath: "/usr/bin/sage", languageServerPythonPath: "auto" },
-      {
-        runtimePath: async () => {
-          throw new Error("unexpected runtime prompt");
-        },
-        languageServerPythonPath: async (initialValue) => initialValue || "/custom/python",
-      },
-    ),
-    [{ section: "languageServer.pythonPath", value: "/custom/python" }],
   );
 });
 
 test("resolveInterpreterConfigurationUpdates trims custom paths and skips no-op updates", async () => {
   assert.deepEqual(
     await resolveInterpreterConfigurationUpdates(
-      { label: "Current", selectionTarget: "languageServerAuto" },
-      { interpreterPath: "sage", languageServerPythonPath: "auto" },
-      unusedPrompts(),
-    ),
-    [],
-  );
-  assert.deepEqual(
-    await resolveInterpreterConfigurationUpdates(
       { label: "Custom Sage", selectionTarget: "runtimeCustom" },
-      { interpreterPath: "sage", languageServerPythonPath: "auto" },
-      {
-        ...unusedPrompts(),
-        runtimePath: async () => "  /opt/sage/bin/sage  ",
-      },
+      { interpreterPath: "sage" },
+      { runtimePath: async () => "  /opt/sage/bin/sage  " },
     ),
     [{ section: "interpreter.path", value: "/opt/sage/bin/sage" }],
   );
   assert.equal(
     await resolveInterpreterConfigurationUpdates(
       { label: "Blank", selectionTarget: "runtimeCustom" },
-      { interpreterPath: "sage", languageServerPythonPath: "auto" },
-      {
-        ...unusedPrompts(),
-        runtimePath: async () => "   ",
-      },
+      { interpreterPath: "sage" },
+      { runtimePath: async () => "   " },
     ),
     undefined,
   );
   assert.deepEqual(
     await resolveInterpreterConfigurationUpdates(
-      {
-        label: "Current environment",
-        selectionTarget: "environment",
-        updates: [
-          { section: "interpreter.path", value: "sage" },
-          { section: "languageServer.pythonPath", value: "/usr/bin/python3" },
-        ],
-      },
-      { interpreterPath: "sage", languageServerPythonPath: "auto" },
+      { label: "Current environment", selectionTarget: "environment", interpreterPath: "sage" },
+      { interpreterPath: "sage" },
       unusedPrompts(),
     ),
-    [{ section: "languageServer.pythonPath", value: "/usr/bin/python3" }],
+    [],
   );
 });
 
@@ -173,26 +106,22 @@ function unusedPrompts() {
     runtimePath: async () => {
       throw new Error("unexpected runtime prompt");
     },
-    languageServerPythonPath: async () => {
-      throw new Error("unexpected language-server prompt");
-    },
   };
 }
 
 function assertEnvironmentCandidate(
   items: ReturnType<typeof discoverInterpreterCandidates>,
   interpreterPath: string,
-  languageServerPythonPath: string,
   label: string,
 ): void {
   assert.ok(
     items.some(
       (item) =>
         item.interpreterPath === interpreterPath
-        && item.languageServerPythonPath === languageServerPythonPath
         && item.selectionTarget === "environment"
         && item.label === label,
     ),
+    `expected ${label} for ${interpreterPath}: ${JSON.stringify(items.map((item) => [item.label, item.interpreterPath]))}`,
   );
 }
 

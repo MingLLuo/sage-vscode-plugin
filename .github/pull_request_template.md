@@ -8,7 +8,6 @@
 - [ ] Rust LSP protocol surface
 - [ ] VS Code extension/client UX
 - [ ] Syntax assets
-- [ ] Legacy Python LSP baseline
 - [ ] Packaging/release/CI
 - [ ] Documentation only
 

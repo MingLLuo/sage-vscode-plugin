@@ -167,7 +167,7 @@ pushCheck("test:release includes LSP protocol contracts", includesScript("test:r
 pushCheck("default debug workbench smoke is fixture-only", scripts["test:debug-web"]?.includes("--smoke --fixture-only") === true, scripts["test:debug-web"]);
 pushCheck("strict debug workbench smoke requires Sage source", scripts["test:debug-web:sage"]?.includes("--smoke --require-sage-source") === true, scripts["test:debug-web:sage"]);
 
-for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:native-smoke", "test:extension-host"]) {
+for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:extension-host"]) {
   pushCheck(`test:ci excludes local-only ${localOnly}`, !includesScript("test:ci", localOnly), scripts["test:ci"]);
 }
 
@@ -179,8 +179,8 @@ pushCheck("GitHub workflow uses the pinned Rust runtime", /toolchain:\s*["']?1\.
 pushCheck("GitHub workflow covers Node 22/npm 11 and Node 26/npm 12", /node-version:\s*["']22\.x["'][\s\S]*?npm-version:\s*["']11["']/.test(workflow)
   && /node-version:\s*["']26\.x["'][\s\S]*?npm-version:\s*["']12["']/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow uses current official action majors", /actions\/checkout@v7/.test(workflow)
-  && /actions\/setup-node@v7/.test(workflow)
-  && /actions\/setup-python@v7/.test(workflow), ".github/workflows/ci.yml");
+  && /actions\/setup-node@v7/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow has no Python toolchain dependency", !/setup-python|pip install/.test(workflow), ".github/workflows/ci.yml");
 const sageCheckout = workflow.match(
   /- name:\s*Check out latest Sage source([\s\S]*?)(?=\n\s+- name:|\n\s*$)/,
 )?.[1] ?? "";

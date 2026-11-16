@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
 import * as vscode from "vscode";
@@ -93,11 +92,8 @@ export function createLanguageClient(
     interpreterPath: settings.interpreterPath,
     interpreterArgs: settings.interpreterArgs,
     languageServerRustPath: settings.languageServerRustPath,
-    languageServerPythonPath: settings.languageServerPythonPath,
-    languageServerPythonArgs: settings.languageServerPythonArgs,
     extensionPath: context.extensionPath,
     repositoryRoot: path.resolve(context.extensionPath, "../.."),
-    homeDir: process.env.HOME,
   });
   logToChannel(
     outputChannel,
@@ -140,8 +136,6 @@ export function createLanguageClient(
     outputChannel,
     initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData, {
       resolvedRustPath: launch.command,
-      nodePath: process.execPath,
-      pyrightServerPath: resolvePyrightServerPath(context.extensionPath),
       cacheDir: rustIndexCacheDir(context, lifecycle.workspaceFolder),
     }),
     synchronize: {
@@ -333,14 +327,6 @@ export async function requestDocumentation(
     },
   );
   return normalizeDocumentationResponse(response);
-}
-
-function resolvePyrightServerPath(extensionPath: string): string | undefined {
-  const candidates = [
-    path.resolve(extensionPath, "node_modules", "pyright", "langserver.index.js"),
-    path.resolve(extensionPath, "..", "..", "node_modules", "pyright", "langserver.index.js"),
-  ];
-  return candidates.find((candidate) => fs.existsSync(candidate));
 }
 
 function dedupeStrings(values: readonly string[]): string[] {

@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Removed
+
+- Removed the retired Python `pygls` language server (`packages/sage-lsp`), its test and CI steps, and the
+  `sage.languageServer.pythonPath` / `sage.languageServer.pythonArgs` settings. The interpreter picker now lists Sage
+  runtimes only; `Configure Workspace` drops the stale keys from existing settings files.
+
+### Fixed
+
+- Incoming call hierarchy now reports callers in the definition's own file while the background index is still being
+  built, instead of returning an empty list until indexing finishes.
+- Run, REPL, and cell commands no longer wait for an unanswered error notification before returning.
+
 ### Changed
 
 - Definition navigation now opens a single target only for unique, high-confidence type/import/scope evidence; ambiguous

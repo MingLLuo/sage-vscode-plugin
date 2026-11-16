@@ -6,7 +6,6 @@
 - Index/cache engine: `crates/sage-index` with SQLite-backed symbols, docs, references, and Sage export caches.
 - Extension surface: VS Code commands, status, documentation panel, REPL/run helpers, support bundle, UX self-check, and
   Extension Host smoke coverage.
-- Retained baseline: legacy Python LSP stays in `packages/sage-lsp` for regression comparison.
 
 ## Current Quality Gates
 

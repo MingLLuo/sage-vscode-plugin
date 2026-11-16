@@ -9,8 +9,6 @@
 - `crates/sage-index` owns workspace and Sage source discovery, Python/Sage/Cython source analysis, strict symbol
   resolution, documentation records, incremental refresh, and the root-aware SQLite cache.
 - `packages/syntax-pack` owns generated syntax assets so grammar changes remain independent of runtime analysis.
-- `packages/sage-lsp` is the legacy Python implementation retained for compatibility regression tests and migration
-  reference. It is not the production analysis authority.
 
 ## Navigation Contract
 
@@ -43,4 +41,3 @@
 - Local release gates additionally validate the latest discovered Sage source checkout, real-file behavior, and
   persistent LSP latency.
 - Notebook and remote execution remain separate milestones; they must not weaken the source-navigation contract.
-- Removal of the legacy Python server requires explicit parity evidence and a deliberate migration decision.

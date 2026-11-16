@@ -83,8 +83,6 @@ the query is a cold start or warm query. For navigation bugs, include the file t
   non-macOS release binaries are deferred.
 - Notebook and kernel UX are not part of this preview.
 - Pyright sidecar integration and deeper `.sage.py` overlay behavior remain future work.
-- The legacy Python LSP remains in the repository as a migration and regression baseline, but Rust is the primary runtime
-  path.
 
 ## Support and Security
 

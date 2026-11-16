@@ -4,7 +4,7 @@
 
 This design record tracks the V2 rewrite milestone that makes Rust the primary language-server runtime. The first milestone proved the performance skeleton; the current stabilization slice restores the most important editing behaviors while keeping Pyright sidecar integration out of scope.
 
-The Python LSP remains in the repository until deletion is explicitly approved. The extension launch path now selects `sage-ls` first, while legacy Python launch helpers stay available for compatibility tests and migration reference.
+The earlier Python `pygls` server was removed in 0.2.0 after the Rust server covered its regression surface. `sage-ls` is the only language-server runtime.
 
 ## Runtime Boundary
 

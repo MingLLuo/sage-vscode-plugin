@@ -2,8 +2,8 @@
 
 ## Purpose
 
-This note records the maintained production baseline for the Rust language server. The legacy Python server remains a
-compatibility oracle, but it is not the production analysis authority.
+This note records the maintained production baseline for the Rust language server. It is the only analysis
+authority; the earlier Python server was removed in 0.2.0.
 
 ## Editor Baseline
 
@@ -83,7 +83,7 @@ variant-dependent calls remain unknown.
 Changes to this surface should keep the following gates green:
 
 - Rust unit tests and strict Clippy
-- extension, syntax-pack, and legacy Python compatibility tests
+- extension and syntax-pack tests
 - LSP navigation and shutdown protocol smokes
 - debug-workbench interaction matrix
 - real-file smoke tests against the locally discovered Sage checkout
