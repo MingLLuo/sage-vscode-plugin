@@ -793,3 +793,58 @@ fn scoped_reference_locations_honor_include_declaration() {
     );
     assert_eq!(locations, vec![usage]);
 }
+
+#[tokio::test]
+async fn incoming_calls_find_same_file_callers_before_the_index_is_ready() {
+    let root = std::env::temp_dir().join(format!(
+        "sage-ls-cold-incoming-calls-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
+    let path = root.join("combination.py");
+    let text = "def leaf(value):\n    return value\n\ndef target(n, k=None):\n    return leaf(n)\n\ndef caller():\n    return target([1, 2, 3], 2)\n";
+    std::fs::write(&path, text).unwrap();
+
+    // A freshly constructed backend has an empty index, exactly like a server whose first
+    // background index pass has not finished; the file is never opened by the client.
+    let (service, _socket) = LspService::new(Backend::new);
+    let backend = service.inner();
+    let uri = Url::from_file_path(&path).unwrap();
+    let items = backend
+        .prepare_call_hierarchy(CallHierarchyPrepareParams {
+            text_document_position_params: TextDocumentPositionParams {
+                text_document: TextDocumentIdentifier { uri: uri.clone() },
+                position: Position::new(3, 5),
+            },
+            work_done_progress_params: Default::default(),
+        })
+        .await
+        .unwrap()
+        .unwrap_or_default();
+    let item = items
+        .into_iter()
+        .find(|item| item.name == "target")
+        .expect("call hierarchy preparation must not depend on the index");
+
+    let incoming = backend
+        .incoming_calls(CallHierarchyIncomingCallsParams {
+            item,
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+        })
+        .await
+        .unwrap()
+        .unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&root);
+
+    let callers: Vec<&str> = incoming.iter().map(|call| call.from.name.as_str()).collect();
+    assert_eq!(
+        callers,
+        vec!["caller"],
+        "same-file callers must be reported while the background index is still empty"
+    );
+}

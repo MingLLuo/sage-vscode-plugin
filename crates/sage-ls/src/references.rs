@@ -409,34 +409,78 @@ impl Backend {
             if !reference_path_is_collectible(&index, &live.path, mode) {
                 continue;
             }
-            let parsed = index.parse_source_for_query(&live.path, &live.document.text);
-            for reference in
-                sage_index::references_in_source(&live.path, &live.document.text, &target.word)
-            {
-                if !reference_candidate_matches_target_with_symbols(
+            collect_source_reference_locations(
+                &index,
+                &live.uri,
+                &live.path,
+                &live.document.text,
+                target,
+                include_declaration,
+                &mut locations,
+                &mut seen,
+            );
+        }
+        // Same-file references (sibling callers, recursion) must not depend on background index
+        // readiness: always scan the definition's own file when no live document covers it.
+        // Indexed hits for the same file use the same path-derived URI, so `seen` deduplicates.
+        let definition_path = &target.definition.path;
+        if !open_paths.contains(&canonical_path_for_comparison(definition_path))
+            && reference_path_is_collectible(&index, definition_path, mode)
+        {
+            if let (Ok(text), Ok(uri)) = (
+                std::fs::read_to_string(definition_path),
+                Url::from_file_path(definition_path),
+            ) {
+                collect_source_reference_locations(
                     &index,
-                    &live.path,
-                    &live.document.text,
-                    &reference.range,
+                    &uri,
+                    definition_path,
+                    &text,
                     target,
-                    Some(&parsed.symbols),
-                ) {
-                    continue;
-                }
-                push_scoped_reference_location(
+                    include_declaration,
                     &mut locations,
                     &mut seen,
-                    Location {
-                        uri: live.uri.clone(),
-                        range: lsp_range_for_text(&live.document.text, &reference.range),
-                    },
-                    target.declaration.as_ref(),
-                    include_declaration,
                 );
             }
         }
         drop(index);
         locations
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_source_reference_locations(
+    index: &WorkspaceIndex,
+    uri: &Url,
+    path: &Path,
+    text: &str,
+    target: &ResolvedReferenceTarget,
+    include_declaration: bool,
+    locations: &mut Vec<Location>,
+    seen: &mut BTreeSet<String>,
+) {
+    let parsed = index.parse_source_for_query(path, text);
+    for reference in sage_index::references_in_source(path, text, &target.word) {
+        if !reference_candidate_matches_target_with_symbols(
+            index,
+            path,
+            text,
+            &reference.range,
+            target,
+            Some(&parsed.symbols),
+        ) {
+            continue;
+        }
+        push_scoped_reference_location(
+            locations,
+            seen,
+            Location {
+                uri: uri.clone(),
+                range: lsp_range_for_text(text, &reference.range),
+            },
+            target.declaration.as_ref(),
+            include_declaration,
+        );
     }
 }
 

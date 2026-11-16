@@ -1,1 +1,0 @@
-"""Fixture calculus package."""
