@@ -66,7 +66,7 @@ export function registerExecutionCommands(
           editor.document.uri.fsPath,
         );
       } catch (error) {
-        await showTerminalLaunchError("run the current file", error);
+        void showTerminalLaunchError("run the current file", error);
         return;
       }
       terminal?.show(true);
@@ -104,7 +104,7 @@ export function registerExecutionCommands(
       try {
         terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths, workspaceFolderPath: workspaceFolder?.uri.fsPath }, selection);
       } catch (error) {
-        await showTerminalLaunchError("send the selection to the Sage REPL", error);
+        void showTerminalLaunchError("send the selection to the Sage REPL", error);
         return;
       }
       terminal.show(true);
@@ -140,7 +140,7 @@ export function registerExecutionCommands(
       try {
         terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths, workspaceFolderPath: workspaceFolder?.uri.fsPath }, cell.text);
       } catch (error) {
-        await showTerminalLaunchError("send the current cell to the Sage REPL", error);
+        void showTerminalLaunchError("send the current cell to the Sage REPL", error);
         return;
       }
       terminal.show(true);
@@ -165,7 +165,7 @@ export function registerExecutionCommands(
           runtimePythonPaths: resolveRuntimePythonPaths(workspaceFolder ? [workspaceFolder.uri.fsPath] : dependencies.workspaceFolderPaths(), settings.sourceRoots, settings.extraPaths),
         });
       } catch (error) {
-        await showTerminalLaunchError("start the Sage REPL", error);
+        void showTerminalLaunchError("start the Sage REPL", error);
         return;
       }
       terminal.show(true);
@@ -185,6 +185,8 @@ function workspacePathsForDocument(
   return workspaceFolder ? [workspaceFolder.uri.fsPath] : fallback;
 }
 
+// Launch failures are reported without blocking the command: an unanswered notification must not
+// keep `executeCommand` callers (keybindings, tests, other extensions) waiting indefinitely.
 async function showTerminalLaunchError(action: string, error: unknown): Promise<void> {
   const selectedAction = await vscode.window.showErrorMessage(
     `Sage could not ${action}: ${String(error)}`,

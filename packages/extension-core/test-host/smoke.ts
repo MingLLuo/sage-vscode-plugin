@@ -34,7 +34,27 @@ interface IndexStatusSnapshot {
   pending_task?: string | null;
 }
 
+const DEFAULT_SUITE_TIMEOUT_MS = 8 * 60_000;
+
+// A stalled command or provider must fail the suite instead of leaving the VS Code window open
+// forever: `runTests` only returns once the extension host reports a result.
 export async function run(): Promise<void> {
+  const timeoutMs = Number(process.env.SAGE_TEST_HOST_TIMEOUT_MS) || DEFAULT_SUITE_TIMEOUT_MS;
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`extension-host ${process.env.SAGE_TEST_HOST_MODE ?? "smoke"} suite exceeded ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    await Promise.race([runSuite(), timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function runSuite(): Promise<void> {
   if (process.env.SAGE_TEST_HOST_MODE === "first-run") {
     await runFirstRunSmoke();
     return;
