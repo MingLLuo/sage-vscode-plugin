@@ -331,7 +331,7 @@ function checkMaintenanceReadiness() {
     pushCheck("maintainability", `${scriptName} script exists`, Boolean(scripts[scriptName]), scripts[scriptName]);
   }
   pushCheck("maintainability", "interpreter selection logic stays outside the extension entrypoint", readText("packages/extension-core/src/interpreterDiscovery.ts").includes("resolveInterpreterConfigurationUpdates")
-    && readText("packages/extension-core/src/extension.ts").includes("resolveInterpreterConfigurationUpdates(picked, settings"), "packages/extension-core/src/interpreterDiscovery.ts");
+    && readText("packages/extension-core/src/setupCommands.ts").includes("resolveInterpreterConfigurationUpdates(picked, settings"), "packages/extension-core/src/interpreterDiscovery.ts");
   pushCheck("maintainability", "release gate includes product readiness", includesScript("test:release", "npm run test:product-readiness"), scripts["test:release"]);
   pushCheck("maintainability", "CI gate includes product readiness", includesScript("test:ci", "npm run test:product-readiness"), scripts["test:ci"]);
   for (const doc of [
