@@ -56,6 +56,7 @@ use source_analysis::{
     source_import_from_at_range, source_imported_sage_all_star_lookup, SourceImportLookup,
 };
 use source_paths::*;
+pub use source_paths::{canonicalize_path, strip_verbatim_prefix};
 use symbol_support::*;
 use syntax_support::*;
 

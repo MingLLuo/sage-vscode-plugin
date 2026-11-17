@@ -346,7 +346,7 @@ fn documentation_preferred_source_parses_known_values() {
 
 #[test]
 fn documentation_source_position_covers_external_definition_files() {
-    let path = PathBuf::from("/workspace/sage/combinat/combination.py");
+    let path = crate::test_path("/workspace/sage/combinat/combination.py");
     let source = [
         "def Combinations(mset, k=None, *, as_tuples=False):",
         "    \"\"\"",
@@ -360,10 +360,10 @@ fn documentation_source_position_covers_external_definition_files() {
     ]
     .join("\n");
     let index = WorkspaceIndex::new(IndexOptions {
-        roots: vec![PathBuf::from("/workspace")],
+        roots: vec![crate::test_path("/workspace")],
         editable_roots: Vec::new(),
         exclude_globs: Vec::new(),
-        cache_dir: PathBuf::from("/tmp/sage-ls-doc-position-test"),
+        cache_dir: crate::test_path("/tmp/sage-ls-doc-position-test"),
         enable_pyx: true,
     });
 
@@ -557,7 +557,7 @@ fn sage_selection_ranges_expand_symbol_line_blocks_and_document() {
 
 #[test]
 fn document_symbols_nest_classes_functions_and_locals() {
-    let path = PathBuf::from("/workspace/demo.sage");
+    let path = crate::test_path("/workspace/demo.sage");
     let source = [
         "class Solver:",
         "    def build(self):",
@@ -601,7 +601,7 @@ fn document_symbols_nest_classes_functions_and_locals() {
 
 #[test]
 fn document_symbols_hide_module_and_import_metadata() {
-    let path = PathBuf::from("/workspace/demo.py");
+    let path = crate::test_path("/workspace/demo.py");
     let source = [
         "\"\"\"Module-level documentation.\"\"\"",
         "from sage.all import PolynomialRing",
@@ -809,7 +809,7 @@ fn call_hierarchy_scanner_skips_calls_in_multiline_strings() {
 
 #[test]
 fn call_hierarchy_enclosing_item_finds_nearest_function_block() {
-    let path = PathBuf::from("/workspace/demo.sage");
+    let path = crate::test_path("/workspace/demo.sage");
     let uri = Uri::from_file_path(&path).unwrap();
     let source = [
         "def helper(A):",
@@ -832,7 +832,7 @@ fn call_hierarchy_enclosing_item_finds_nearest_function_block() {
 
 #[test]
 fn call_hierarchy_local_fast_path_only_matches_declarations() {
-    let path = PathBuf::from("/workspace/demo.py");
+    let path = crate::test_path("/workspace/demo.py");
     let uri = Uri::from_file_path(&path).unwrap();
     let source = [
         "from sage.all import zero_matrix",
@@ -872,7 +872,7 @@ fn call_hierarchy_local_fast_path_only_matches_declarations() {
 
 #[test]
 fn sage_document_links_cover_load_attach_and_cython_include() {
-    let path = PathBuf::from("/workspace/project/src/demo.sage");
+    let path = crate::test_path("/workspace/project/src/demo.sage");
     let source = [
         "load(\"helpers/setup.sage\")",
         "attach('../shared/tools.sage')",
@@ -890,10 +890,16 @@ fn sage_document_links_cover_load_attach_and_cython_include() {
         .map(|uri| uri_to_path(uri).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(links.len(), 4);
-    assert!(targets.contains(&PathBuf::from("/workspace/project/src/helpers/setup.sage")));
-    assert!(targets.contains(&PathBuf::from("/workspace/project/shared/tools.sage")));
-    assert!(targets.contains(&PathBuf::from("/workspace/project/src/native_include.pxi")));
-    assert!(targets.contains(&PathBuf::from("/workspace/project/src/native_support.pxd")));
+    assert!(targets.contains(&crate::test_path(
+        "/workspace/project/src/helpers/setup.sage"
+    )));
+    assert!(targets.contains(&crate::test_path("/workspace/project/shared/tools.sage")));
+    assert!(targets.contains(&crate::test_path(
+        "/workspace/project/src/native_include.pxi"
+    )));
+    assert!(targets.contains(&crate::test_path(
+        "/workspace/project/src/native_support.pxd"
+    )));
     assert_eq!(
         links[0].range,
         Range::new(Position::new(0, 6), Position::new(0, 24))
@@ -902,7 +908,7 @@ fn sage_document_links_cover_load_attach_and_cython_include() {
 
 #[test]
 fn import_modules_for_prewarm_extracts_local_targets() {
-    let path = PathBuf::from("/workspace/project/src/demo.sage");
+    let path = crate::test_path("/workspace/project/src/demo.sage");
     let source = [
         "from local_docs import PolynomialNotebook",
         "from package_demo import named_polynomial, AffineNote",
@@ -1073,7 +1079,7 @@ fn multiline_function_folds_and_call_hierarchy_include_column_zero_string_lines(
             .any(|fold| fold.start_line == 0 && fold.end_line == 6),
         "{folds:?}"
     );
-    let path = PathBuf::from("/tmp/multiline-caller.sage");
+    let path = crate::test_path("/tmp/multiline-caller.sage");
     let uri = Uri::from_file_path(&path).unwrap();
     let item = enclosing_call_hierarchy_item(&uri, &path, source, Position::new(6, 6)).unwrap();
     assert_eq!(item.name, "caller");

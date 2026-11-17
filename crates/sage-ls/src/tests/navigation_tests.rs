@@ -4,7 +4,7 @@ use super::*;
 fn runtime_definition_validates_source_line_and_utf16_range() {
     let uri = parse_uri("file:///workspace/trig.py").unwrap();
     let source = crate::runtime_docs::RuntimeSourceLocation {
-        path: PathBuf::from("/workspace/trig.py"),
+        path: crate::test_path("/workspace/trig.py"),
         line: 1,
         source_text: "class Function_sin: # π 😀".to_string(),
     };
@@ -249,7 +249,7 @@ fn navigation_links_fall_back_to_ordered_exact_locations() {
 
 #[test]
 fn python_sage_import_items_are_detected_for_duplicate_navigation_suppression() {
-    let path = PathBuf::from("/workspace/demo.py");
+    let path = crate::test_path("/workspace/demo.py");
     let source = [
         "from sage.all import (",
         "    GF,",
@@ -261,7 +261,7 @@ fn python_sage_import_items_are_detected_for_duplicate_navigation_suppression() 
     .join("\n");
     let definition = QueryDefinition {
         name: "PolynomialRing".to_string(),
-        path: PathBuf::from("/sage/sage/rings/polynomial/polynomial_ring_constructor.py"),
+        path: crate::test_path("/sage/sage/rings/polynomial/polynomial_ring_constructor.py"),
         range: sage_index::SourceRange {
             start_line: 60,
             start_character: 4,
@@ -375,7 +375,7 @@ fn lsp_utf16_positions_resolve_symbols_after_unicode_prefixes() {
 
 #[test]
 fn open_document_definition_range_reparses_live_unicode_text() {
-    let path = PathBuf::from("/workspace/live_definition.py");
+    let path = crate::test_path("/workspace/live_definition.py");
     let definition = QueryDefinition {
         name: "target".to_string(),
         path,
@@ -397,7 +397,7 @@ fn open_document_definition_range_reparses_live_unicode_text() {
 
 #[test]
 fn open_document_definition_range_preserves_verified_live_parameter() {
-    let path = PathBuf::from("/workspace/live_parameter.py");
+    let path = crate::test_path("/workspace/live_parameter.py");
     let definition = QueryDefinition {
         name: "value".to_string(),
         path,
@@ -420,7 +420,7 @@ fn open_document_definition_range_preserves_verified_live_parameter() {
 
 #[test]
 fn open_document_definition_range_uses_method_owner_detail() {
-    let path = PathBuf::from("/workspace/live_methods.py");
+    let path = crate::test_path("/workspace/live_methods.py");
     let definition = QueryDefinition {
         name: "target".to_string(),
         path,

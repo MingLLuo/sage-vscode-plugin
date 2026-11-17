@@ -583,3 +583,19 @@ fn hydrating_marks_the_database_as_recently_used() {
     );
     fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn windows_verbatim_prefixes_are_removed_from_canonical_paths() {
+    assert_eq!(
+        strip_verbatim_prefix(r"\\?\C:\Users\me\sage\all.py").as_deref(),
+        Some(r"C:\Users\me\sage\all.py")
+    );
+    assert_eq!(
+        strip_verbatim_prefix(r"\\?\UNC\server\share\sage").as_deref(),
+        Some(r"\\server\share\sage")
+    );
+    assert_eq!(strip_verbatim_prefix(r"\\?\GLOBALROOT\Device\X"), None);
+    assert_eq!(strip_verbatim_prefix("/home/me/sage"), None);
+    let here = canonicalize_path(Path::new(".")).unwrap();
+    assert!(!here.to_string_lossy().starts_with(r"\\?\"), "{here:?}");
+}

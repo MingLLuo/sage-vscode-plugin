@@ -113,15 +113,38 @@ pub(super) fn normalize_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 pub(super) fn normalize_path(path: PathBuf) -> PathBuf {
-    if let Ok(canonical) = path.canonicalize() {
+    if let Ok(canonical) = canonicalize_path(&path) {
         return canonical;
     }
     if let (Some(parent), Some(file_name)) = (path.parent(), path.file_name()) {
-        if let Ok(canonical_parent) = parent.canonicalize() {
+        if let Ok(canonical_parent) = canonicalize_path(parent) {
             return canonical_parent.join(file_name);
         }
     }
     path
+}
+
+/// `fs::canonicalize` without Windows verbatim prefixes.
+///
+/// On Windows it returns `\\?\C:\...` paths. Turned into URIs those become
+/// `file:////?/C:/...`, which editors cannot open, and they never compare equal to the paths
+/// the client sends. Ordinary drive and UNC paths are returned in their normal form.
+pub fn canonicalize_path(path: &Path) -> std::io::Result<PathBuf> {
+    let canonical = path.canonicalize()?;
+    Ok(strip_verbatim_prefix(&canonical.to_string_lossy())
+        .map(PathBuf::from)
+        .unwrap_or(canonical))
+}
+
+/// `\\?\C:\dir` -> `C:\dir`, `\\?\UNC\server\share` -> `\\server\share`; other paths -> `None`.
+pub fn strip_verbatim_prefix(path: &str) -> Option<String> {
+    let rest = path.strip_prefix(r"\\?\")?;
+    if let Some(unc) = rest.strip_prefix(r"UNC\") {
+        return Some(format!(r"\\{unc}"));
+    }
+    let bytes = rest.as_bytes();
+    (bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':')
+        .then(|| rest.to_string())
 }
 
 /// Name of the cache database. Source roots are deliberately not part of it: every project

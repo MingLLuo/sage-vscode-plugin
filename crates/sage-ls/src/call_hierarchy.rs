@@ -597,13 +597,12 @@ mod tests {
     use super::*;
     use sage_index::IndexOptions;
     use std::fs;
-    use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn indexed_call_target_is_reparsed_from_live_alias_text() {
-        let indexed_path = PathBuf::from("/workspace/physical.py");
-        let alias_path = PathBuf::from("/workspace/alias.py");
+        let indexed_path = crate::test_path("/workspace/physical.py");
+        let alias_path = crate::test_path("/workspace/alias.py");
         let indexed = parse_source("physical", &indexed_path, "def target():\n    return 1\n")
             .symbols
             .into_iter()
@@ -664,7 +663,7 @@ mod tests {
     fn call_hierarchy_definitions_require_high_confidence() {
         let definition = QueryDefinition {
             name: "target".to_string(),
-            path: PathBuf::from("/workspace/target.py"),
+            path: crate::test_path("/workspace/target.py"),
             range: sage_index::SourceRange::default(),
             detail: "Function target".to_string(),
             module: "target".to_string(),

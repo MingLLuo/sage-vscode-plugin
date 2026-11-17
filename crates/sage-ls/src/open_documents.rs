@@ -144,12 +144,12 @@ pub(super) fn parse_uri(value: &str) -> Option<Uri> {
 }
 
 pub(super) fn canonical_path_for_comparison(path: &Path) -> PathBuf {
-    if let Ok(canonical) = std::fs::canonicalize(path) {
+    if let Ok(canonical) = sage_index::canonicalize_path(path) {
         return canonical;
     }
     let lexical = normalize_path_lexically(path.to_path_buf());
     if let (Some(parent), Some(file_name)) = (lexical.parent(), lexical.file_name()) {
-        if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+        if let Ok(canonical_parent) = sage_index::canonicalize_path(parent) {
             return canonical_parent.join(file_name);
         }
     }

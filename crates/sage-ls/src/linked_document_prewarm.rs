@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn newer_document_revision_supersedes_queued_work() {
         let prewarmer = LinkedDocumentPrewarmer::default();
-        let path = PathBuf::from("/workspace/demo.sage");
+        let path = crate::test_path("/workspace/demo.sage");
         let first = prewarmer.register_revision(path.clone(), 1);
         let second = prewarmer.register_revision(path.clone(), 2);
 
@@ -206,8 +206,8 @@ mod tests {
     #[test]
     fn shutdown_cancels_all_queued_revisions() {
         let prewarmer = LinkedDocumentPrewarmer::default();
-        let first_path = PathBuf::from("/workspace/first.sage");
-        let second_path = PathBuf::from("/workspace/second.sage");
+        let first_path = crate::test_path("/workspace/first.sage");
+        let second_path = crate::test_path("/workspace/second.sage");
         let first = prewarmer.register_revision(first_path.clone(), 1);
         let second = prewarmer.register_revision(second_path.clone(), 1);
 

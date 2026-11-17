@@ -235,7 +235,7 @@ fn parameter_reference_candidates_do_not_cross_function_or_file_bindings() {
 
 #[test]
 fn import_alias_rename_target_uses_local_binding_instead_of_source_definition() {
-    let path = PathBuf::from("/workspace/consumer.py");
+    let path = crate::test_path("/workspace/consumer.py");
     let uri = Uri::from_file_path(&path).unwrap();
     let source = "from provider import target as alias\nvalue = alias()\n";
     let usage_range = Range::new(Position::new(1, 8), Position::new(1, 13));
@@ -289,7 +289,7 @@ fn import_alias_rename_target_uses_local_binding_instead_of_source_definition() 
 
 #[test]
 fn import_alias_rename_and_references_stop_at_visible_rebindings() {
-    let path = PathBuf::from("/workspace/consumer.py");
+    let path = crate::test_path("/workspace/consumer.py");
     let uri = Uri::from_file_path(&path).unwrap();
     let source = [
         "from provider import target as alias",
@@ -365,7 +365,7 @@ fn import_alias_rename_and_references_stop_at_visible_rebindings() {
 
 #[test]
 fn nested_relative_import_alias_rename_keeps_the_workspace_module_identity() {
-    let path = PathBuf::from("/workspace/pkg/sub/consumer.py");
+    let path = crate::test_path("/workspace/pkg/sub/consumer.py");
     let uri = Uri::from_file_path(&path).unwrap();
     let source = "from .provider import target as alias\nvalue = alias()\n";
     let symbols = parse_source("pkg.sub.consumer", &path, source).symbols;
@@ -406,7 +406,7 @@ fn nested_relative_import_alias_rename_keeps_the_workspace_module_identity() {
 
 #[test]
 fn import_alias_rename_candidates_stay_in_the_alias_binding_scope() {
-    let path = PathBuf::from("/workspace/consumer.py");
+    let path = crate::test_path("/workspace/consumer.py");
     let uri = Uri::from_file_path(&path).unwrap();
     let source = [
         "def first():",
@@ -460,7 +460,7 @@ fn import_alias_rename_candidates_stay_in_the_alias_binding_scope() {
         &target,
     ));
 
-    let other_path = PathBuf::from("/workspace/other.py");
+    let other_path = crate::test_path("/workspace/other.py");
     let other_source = "from provider import target as alias\nvalue = alias()\n";
     let other_reference = sage_index::references_in_source(&other_path, other_source, "alias")
         .into_iter()
@@ -736,7 +736,7 @@ fn method_definition_identity_keeps_owner_specific_targets_separate() {
 
 #[test]
 fn definition_identity_separates_same_path_nested_definitions() {
-    let path = PathBuf::from("/workspace/nested.py");
+    let path = crate::test_path("/workspace/nested.py");
     let first = QueryDefinition {
         name: "target".to_string(),
         path: path.clone(),

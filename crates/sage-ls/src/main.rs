@@ -1948,3 +1948,13 @@ fn modifier_bitset(modifiers: &[String]) -> u32 {
 
 #[cfg(test)]
 mod tests;
+
+/// Absolute test path for `unix` (`/workspace/a.py`) that is also absolute on Windows (`C:\workspace\a.py`).
+#[cfg(test)]
+pub(crate) fn test_path(unix: &str) -> std::path::PathBuf {
+    if cfg!(windows) {
+        std::path::PathBuf::from(format!("C:{}", unix.replace('/', "\\")))
+    } else {
+        std::path::PathBuf::from(unix)
+    }
+}
