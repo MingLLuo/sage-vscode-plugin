@@ -1,92 +1,54 @@
 # Sage VS Code Extension
 
-Preview VS Code support for SageMath projects, Sage-heavy Python files, and Sage native Cython sources.
-
-The extension identifier is `sage-vscode.sage-vscode-extension`.
+SageMath support for VS Code: `.sage` files, Sage-heavy Python, and Sage's Cython sources, backed by a fast Rust
+language server. Extension identifier: `sage-vscode.sage-vscode-extension`.
 
 ## What It Provides
 
-- Sage language support for `.sage`, `.pyx`, `.pxd`, and `.pxi`.
-- Opt-in Sage-aware analysis for ordinary `.py` files through `sage.analysis.enablePythonFiles`.
-- Rust-backed hover, documentation, definition, completion, signature help, diagnostics, semantic tokens, symbols,
-  references, rename, inlay hints, folding, selection ranges, document links, call hierarchy, and quick fixes.
-- Fast SQLite-backed indexing for Sage, Python, and Cython source roots.
-- Static Sage API resolution for common `sage.all` constructors, matrix/vector/polynomial/free-module/finite-field
-  methods, and real Sage source navigation.
-- Accuracy-first navigation: unique high-confidence matches jump directly; uncertain members show multiple ordered source
-  candidates when available and never enable an unsafe rename or reference result.
-- Runtime-backed documentation fallback when a configured Sage runtime is available.
-- Run current file, run selection, run cell/region, and managed Sage REPL commands. In Sage editors, `Shift+Enter`
-  sends the selection to the REPL and `Ctrl+Enter` (`Cmd+Enter` on macOS) runs the current cell in files that contain `# %%` cells.
-- Status, environment, index, docs, support bundle, and UX self-check commands for troubleshooting.
+- Hover with rendered Sage documentation, completion, signature help, and inlay hints.
+- Go to definition, declaration, and implementation; references, rename, call hierarchy, document and workspace
+  symbols, semantic highlighting, folding, and syntax diagnostics.
+- Navigation into the Sage library from its sources; Sage does not have to be installed for editing.
+- Run Current File, Run Selection in REPL (`Shift+Enter`), Run Cell (`Ctrl+Enter` / `Cmd+Enter` in files with `# %%`
+  cells), and a managed Sage REPL per project.
+- English and Simplified Chinese.
 
 ## First Run
 
-1. Install the VSIX or marketplace package.
-2. Open a local trusted workspace containing Sage files, Sage-heavy Python files, or native Sage Cython files.
-3. Open a `.sage` file. Hover a symbol or use Go to Definition, then run `Sage: Run Current File` to check execution.
-4. If Sage was not found, run `Sage: Select Sage Interpreter` and choose the intended executable.
-5. For Sage-heavy `.py` files or Cython projects, run `Sage: Configure Workspace` and choose the matching profile.
+1. Open a trusted folder containing a `.sage` file. The `Sage:` status bar item shows startup and indexing; click it
+   when something is not ready.
+2. Hover a name, press `F12`, or run `Sage: Run Current File`.
+3. If Sage is not found, run `Sage: Select Sage Interpreter`.
+4. For Sage-heavy `.py` files or Cython projects, run `Sage: Configure Workspace` and pick the matching profile.
 
-The Sage status bar item shows language-server and indexing progress. Click it for status commands when something does
-not become ready. `Sage: Open Getting Started` offers an optional guided walkthrough.
-
-Hover a symbol for its signature and a short documentation preview; use `Sage: Show Documentation` for the full
-available source or runtime text. `F12` and Ctrl/Cmd-click navigate to verified definitions. When several methods
-share a name and the receiver type is unknown, the extension shows candidates and their documentation instead of
-choosing an arbitrary target. A known constructor or an explicit `sage.analysis.sourceRoots` entry can improve
-resolution. Signature help matches named arguments such as `width=7` to the corresponding parameter.
-
-For predictable Sage library navigation, configure the Sage source root when it is not discovered automatically:
-
-```json
-{
-  "sage.languageServer.rustPath": "auto",
-  "sage.analysis.enablePythonFiles": true,
-  "sage.analysis.sourceRoots": ["/path/to/sage/src"],
-  "sage.interpreter.path": "/path/to/sage"
-}
-```
-
-The extension runs in the VS Code workspace extension host because it starts local language-server and optional Sage
-runtime processes. In untrusted or virtual workspaces, syntax browsing remains available while runtime/indexing features
-are intentionally limited.
+`Sage: Open Getting Started` walks through these steps. When a method name exists on several classes and the
+receiver's type is unknown, Go to Definition shows the candidates instead of guessing, and rename stays disabled.
 
 ## Important Settings
 
-- `sage.interpreter.path`: Sage executable for run commands, REPL, and runtime documentation fallback.
-- `sage.languageServer.rustPath`: Rust language-server binary path; `auto` prefers packaged binaries; repository builds are considered only in development mode.
-- `sage.analysis.mode`: Workspace-symbol search breadth: `light` (50), `default` (200), or `full` (1000); navigation semantics and the dedicated analysis switches are unchanged.
-- `sage.analysis.sourceRoots`: Sage or project source roots to index.
-- `sage.analysis.extraPaths`: Extra import/search roots.
-- `sage.analysis.enablePythonFiles`: Attach Sage LSP features to ordinary `.py` files.
-- `sage.analysis.enableRuntimeIntrospection`: Allow bounded Sage runtime documentation fallback.
-- `sage.docs.preferredSource`: Choose `auto`, `workspace`, `runtime`, or `reference` documentation behavior.
-- `sage.docs.showOnHover`: Control whether hover includes documentation previews.
+| Setting | Use |
+| --- | --- |
+| `sage.interpreter.path` | Sage executable for running code, the REPL, and runtime documentation |
+| `sage.analysis.sourceRoots` | Sage source trees to index when automatic discovery picks the wrong one |
+| `sage.analysis.enablePythonFiles` | attach the server to `.py` files in Sage-heavy Python projects |
+| `sage.docs.preferredSource` | prefer `workspace`, `runtime`, or `reference` documentation |
+
+The full list is in the repository's User Guide.
 
 ## Troubleshooting
 
-Use these commands before filing an issue:
+`Sage: Show Environment Details`, `Sage: Show Index Status`, and `Sage: Show Docs Status` show what the server is
+using. `Sage: Run UX Self Check` tests every editor feature at the cursor; `Sage: Find References` also works from
+read-only Sage library files. For bug reports attach `Sage: Copy Support Bundle` (settings and status, no source code).
 
-- `Sage: Show Environment Details`
-- `Sage: Show Index Status`
-- `Sage: Show Docs Status`
-- `Sage: Find References`
-- `Sage: Run UX Self Check`
-- `Sage: Copy Support Bundle`
+In untrusted or virtual workspaces only syntax highlighting is available.
 
-For slow hover, definition, completion, or documentation, include the support bundle plus the affected symbol and whether
-the query is a cold start or warm query. For navigation bugs, include the file type and the expected Sage source target.
+## Limitations
 
-## Preview Limitations
-
-- macOS arm64 native packaging is locally verified. Linux/Alpine and Windows packaging is implemented but awaits native CI
-  verification. Signing and Marketplace upload remain outside this internal preview.
-- Notebook and kernel UX are not part of this preview.
-- Pyright sidecar integration and deeper `.sage.py` overlay behavior remain future work.
+- No notebook or Jupyter kernel integration.
+- Distributed through GitHub releases; not signed or published to the Marketplace.
 
 ## Support and Security
 
-Use the repository issue templates for bugs, performance regressions, and feature requests. See `SUPPORT.md` for the
-expected diagnostic information and `SECURITY.md` for vulnerability reporting. Do not post exploit details or private
-workspace contents in public issues.
+Use the repository issue templates. See `SUPPORT.md` for what to include and `SECURITY.md` for reporting
+vulnerabilities; do not post exploit details or private workspace contents in public issues.

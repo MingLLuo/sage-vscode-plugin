@@ -7,7 +7,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this when an editor operation is slower than expected. Release targets are documented in `docs/process/ci-and-release-gates.md` and guarded by `npm run test:release`.
+        Use this when an editor operation is slower than expected. Release targets are documented in `docs/perf/README.md` and guarded by `npm run test:release`.
   - type: textarea
     id: operation
     attributes:

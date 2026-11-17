@@ -1,4 +1,4 @@
-# Install and Configure
+# User Guide
 
 ## Install a Released Package
 
@@ -31,306 +31,118 @@ on startup and rebuilt automatically when it changes.
 source files. Running files, the REPL, and runtime-backed documentation need a Sage installation; the extension finds
 it on `PATH` or asks you to select it with **Sage: Select Sage Interpreter**.
 
-## Build From Source
+## First Steps
 
-Use this path when you want to build the extension from this repository:
+1. Open a trusted folder that contains a `.sage` file. The status bar item that starts with `Sage:` shows startup and
+   indexing; click it for details and recovery actions.
+2. Hover a name, press `F12` to go to its definition, or `Shift+F12` for references.
+3. Run **Sage: Run Current File**, select lines and press `Shift+Enter`, or split a file into `# %%` cells and press
+   `Ctrl+Enter` (`Cmd+Enter` on macOS).
+4. **Sage: Open Getting Started** walks through the same steps.
 
-```bash
-npm ci
-npm run package:vsix   # writes dist/sage-vscode-extension-0.2.0-<platform>.vsix for this machine
-npm run doctor:mac
-code --install-extension dist/sage-vscode-extension-0.2.0-darwin-arm64.vsix --force
-```
+### Project types
 
-Use the file that matches your platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `alpine-x64`,
-`alpine-arm64`, `win32-x64`, `win32-arm64`). Prebuilt packages for every platform are attached to each tagged GitHub
-release and to every run of the **Platform packages** workflow.
+`.sage` files need no settings. For other projects run **Sage: Configure Workspace** once and pick a profile:
 
-This packaging path supports Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer. `.node-version` selects the
-Node 22 CI/development baseline without rejecting newer supported releases; `rust-toolchain.toml` selects the matching
-Rust compiler automatically. The packaging check also validates the selected Node/npm pair against npm's own engine
-declaration.
+| Profile | Use for |
+| --- | --- |
+| Standard Sage workspace | mostly `.sage` worksheets and scripts |
+| Sage-heavy Python workspace | `.py` files that import `sage.all` (turns on `sage.analysis.enablePythonFiles`) |
+| Sage native/Cython workspace | `.pyx`, `.pxd`, `.pxi` sources |
+| Full Sage research workspace | a mix of the above |
 
-Open a trusted local folder with a `.sage` file, hover a symbol or use Go to Definition, then run **Sage: Run Current
-File**. The packaged language server and nearby Sage source roots are discovered automatically. The Sage status bar
-item reports startup and indexing; click it for details when a feature does not become ready.
+From a terminal, `npm run configure:workspace -- --workspace /path/to/project --profile auto` writes the same settings
+(add `--sage /path/to/sage --source-root /path/to/sage/src` when Sage is not on `PATH`).
 
-Run **Sage: Select Sage Interpreter** only when Sage was not found or the wrong runtime was selected. Run **Sage: Configure
-Workspace** only when you need Sage analysis for `.py` files or a Cython/mixed profile. You can instead configure before
-opening VS Code with `npm run configure:workspace -- --workspace /path/to/project --profile auto`.
+### When Sage or its sources are not found
 
-For Sage-heavy `.py` files, choose the `Sage-heavy Python workspace` profile. For mixed `.sage`, `.py`, and Cython
-projects, choose `Full Sage research workspace`.
-
-## Minimal Settings
-
-Most local Sage checkouts only need these settings:
+- **Sage: Select Sage Interpreter** lists detected Sage installations, or lets you enter a path. It sets
+  `sage.interpreter.path`.
+- Set `sage.analysis.sourceRoots` to your Sage `src` directory when automatic discovery picks the wrong tree or you
+  want predictable indexing:
 
 ```json
 {
-  "sage.languageServer.rustPath": "auto",
-  "sage.analysis.enablePythonFiles": true,
-  "sage.analysis.sourceRoots": [
-    "/path/to/sage/src"
-  ],
-  "sage.interpreter.path": "/path/to/sage"
+  "sage.interpreter.path": "/path/to/sage",
+  "sage.analysis.sourceRoots": ["/path/to/sage/src"]
 }
 ```
 
-Use an explicit `sage.analysis.sourceRoots` entry for predictable Sage source indexing and fast definition jumps into the
-Sage library. Leave it empty only when you want automatic nearby/runtime discovery.
+### How navigation decides
 
-## Editing, Documentation, and Navigation
+Go to Definition jumps only when the target is certain. When a method name exists on several classes and the receiver's
+type is unknown, VS Code shows the candidates instead, and references and rename stay unavailable rather than editing
+the wrong method. Assigning the receiver from a known constructor or keeping its import visible lets the index narrow
+the target.
 
-Open a `.sage` file and hover a symbol to see its signature, module, and a documentation preview. Run **Sage: Show
-Documentation** on the symbol for the full available source or runtime documentation. Runtime documentation requires a
-usable Sage interpreter; local definitions and indexed source documentation work without starting Sage.
+## Commands
 
-Use **Go to Definition** (`F12`) or Ctrl/Cmd-click on an imported name, local function, constructor, or method call.
-**Find All References** and **Call Hierarchy** work best when the index can identify one concrete definition. For a
-call such as `trace_window(poly, width=7)`, signature help highlights `width` by its parameter name, even if an
-earlier optional parameter was omitted. Calls with Unicode function names follow the same parsing rules.
+| Command | ID | What it does |
+| --- | --- | --- |
+| Open Getting Started | `sage.openGettingStarted` | first-run walkthrough |
+| Select Sage Interpreter | `sage.selectInterpreter` | choose the Sage used for running code and runtime docs |
+| Configure Workspace | `sage.configureWorkspace` | write a project profile (see above) |
+| Restart Language Server | `sage.restartLanguageServer` | restart `sage-ls` |
+| Run Current File | `sage.runCurrentFile` | run the file in a terminal or the REPL (`sage.run.target`) |
+| Run Selection in REPL | `sage.runSelection` | send the selection (`Shift+Enter`) |
+| Run Current Cell | `sage.runCurrentCell` | send the `# %%` or `# region` cell (`Ctrl/Cmd+Enter`) |
+| Start REPL | `sage.startRepl` | start or show the project's Sage REPL; restart it after changing import paths |
+| Show Documentation | `sage.showDocumentation` | full documentation for the symbol in a side panel |
+| Find References | `sage.findReferences` | references, including from read-only Sage library sources |
+| Show Environment Details | `sage.showEnvironmentDetails` | Sage, source roots, server path, and mode |
+| Show Index Status | `sage.showIndexStatus` | indexed files, symbols, cache path, pending work |
+| Show Docs Status | `sage.showDocsStatus` | static docs and runtime docs worker health |
+| Copy Support Bundle | `sage.copySupportBundle` | settings and status as JSON, without source contents, for bug reports |
+| Run UX Self Check | `sage.runUxSelfCheck` | run every editor feature at the cursor and log the results |
+| Build Persistent Database | `sage.buildDatabase` | index the Sage library now and keep the database from automatic cleanup |
+| Rebuild Index | `sage.rebuildIndex` | re-index from scratch after source roots or Sage itself changed |
 
-Some Sage methods have the same name in different classes. If the receiver's type cannot be established, Go to
-Definition shows the matching implementations when there are several and the documentation panel lists each
-candidate's signature, available documentation, module, and source. A single unproved candidate is not treated as a
-confirmed target. Assigning the receiver from a known constructor, keeping its import visible, or adding its source
-root can let the index narrow the target. In that state, references and rename remain unavailable until one target is
-confirmed. This avoids silently jumping to or editing a different method with the same name.
+## Settings
 
-## Development Bootstrap
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `sage.interpreter.path` | `sage` | Sage executable for running code, the REPL, and runtime docs |
+| `sage.interpreter.args` | `[]` | extra arguments for that executable |
+| `sage.languageServer.rustPath` | `auto` | `sage-ls` binary; `auto` uses the packaged one |
+| `sage.analysis.mode` | `default` | workspace-symbol breadth: `light` 50, `default` 200, `full` 1000 results |
+| `sage.analysis.extraPaths` | `[]` | extra import paths for analysis and the REPL |
+| `sage.analysis.sourceRoots` | `[]` | Sage source trees to index; empty means discover nearby and from the Sage installation |
+| `sage.analysis.enableDiagnostics` | `true` | report syntax errors |
+| `sage.analysis.enableRuntimeIntrospection` | `true` | ask a running Sage for docs, definitions, and signatures that static analysis misses |
+| `sage.analysis.enablePyxParsing` | `true` | index `.pyx`, `.pxd`, `.pxi` |
+| `sage.analysis.enablePythonFiles` | `false` | attach the server to `.py` files (Sage-heavy Python projects only) |
+| `sage.indexing.exclude` | `.git`, `__pycache__`, `.venv`, `build` | globs matched inside each source root |
+| `sage.docs.preferredSource` | `auto` | prefer `workspace`, `runtime`, or `reference` documentation |
+| `sage.docs.showOnHover` | `true` | show the documentation preview in hovers |
+| `sage.logging.level` | `info` | log detail in the Sage output channels |
+| `sage.run.target` | `terminal` | run files in a terminal or `load(...)` them into the REPL |
+| `sage.run.showCellCodeLens` | `true` | show Run Cell above `# %%` cells |
+| `sage.run.cleanupGeneratedPython` | `false` | delete the `.sage.py` file a terminal run creates |
 
-1. Select any Node.js 22.9-or-newer runtime and the Rust/Cargo toolchain from `rust-toolchain.toml`.
-   Node.js 26 is supported. Use npm 11 or newer; no exact Node/npm patch version is required, but npm must
-   declare the selected Node.js runtime compatible.
-2. From the repository root, run `npm ci`.
-3. Build the Rust language server with `npm run build:rust`.
-4. Sync syntax assets with `npm run sync:syntax`.
-5. Build the workspace with `npm run build`.
+## Index Cache
 
-Note: the language server is the Rust `sage-ls` binary. No separate Python installation is required; optional
-runtime-backed Sage documentation probes use the Python that ships inside the selected Sage runtime.
+The index is stored in VS Code's global storage (`rust-index-v2`). All projects share one database per index format, so
+a Sage tree used by several projects is indexed once (about 200 MB for the full Sage library). Changed files are
+re-indexed on startup and on save. Databases unused for 30 days are deleted automatically; **Build Persistent Database**
+marks the current one to keep. **Rebuild Index** starts over when results look stale.
 
-## One-Command Development Setup
+## Troubleshooting
 
-- Run `npm run dev:vscode` to sync syntax assets, build the repository, and open the plugin repository in VS Code.
-- Run `npm run dev:vscode:smoke` to do the same prep work and then print the GUI checks for launching the smoke
-  workspace in an extension-development host.
-- Run `./scripts/dev-vscode.sh --bootstrap` when you want the helper script to install Node dependencies before
-  opening VS Code.
-- Run `npm run configure:workspace -- --workspace /path/to/project --profile auto` when you want a cross-platform
-  command-line setup for `.sage`, Sage-heavy Python, Cython, or mixed research workspaces before opening VS Code. Add
-  `-- --sage /path/to/sage --source-root /path/to/sage/src` when Sage is not on `PATH`.
-- Development commands and release packaging require Node.js 22.9 or newer and npm 11 or newer. `.node-version` records
-  the rolling Node 22 baseline. The packaging check validates their compatibility using npm's installed package
-  metadata. Fixed archive metadata and normalized file modes keep repeated packages reproducible within a supported
-  runtime; package-content tests cover runtime-independent structure and modes.
+1. Click the `Sage:` status bar item; it lists the problem and the fix (select Sage, restart, rebuild).
+2. Open the **Sage** and **Sage Language Server** output channels. For more detail set `sage.logging.level` to
+   `debug` and run **Restart Language Server**.
+3. **Show Environment Details**, **Show Index Status**, and **Show Docs Status** show what the server uses.
+4. For a bug report, attach the output of **Copy Support Bundle** (no source code is included). See
+   [SUPPORT.md](../SUPPORT.md).
 
-## Extension Development Host
+## Offline Reference
 
-1. Open the repository in VS Code.
-2. Press `F5`. `Sage Plugin: Smoke Workspace` is the first/default launch target for GUI smoke testing; choose
-   `Sage Plugin: Extension Host` only when you specifically want the repository itself in the host.
-3. The repository-level `build` task runs automatically before the extension host starts.
-4. In the new `[Extension Development Host]` window, open `src/01_hover_and_definition.sage` and confirm the status bar
-   language mode is `SageMath`, not `Plain Text`.
-5. Confirm the left status bar contains `Sage: ...`, then run `Sage: Show Index Status` or `Sage: Run UX Self Check`
-   from the command palette before deeper inspection.
-6. If the host opens with no folder, use `Open Folder` inside that `[Extension Development Host]` window and select
-   `examples/manual-smoke-workspace`.
-7. If `.sage` files show `Plain Text` or Sage commands are missing, you are in a normal VS Code window rather than the
-   extension-development host; close it and start again from the repository with `F5`.
-8. Do not use a direct `code --extensionDevelopmentPath=...` command as the manual smoke path. It is not a reliable
-   user-facing VS Code CLI flow and can open a normal window where the development extension is not loaded.
-9. Use `Sage: Open Getting Started` when you want the guided first-run path inside VS Code. It walks through interpreter
-   selection, workspace profile setup, index/docs status, and UX self-check.
-10. Use `Sage: Configure Workspace` to write a conservative workspace profile. Choose `Sage-heavy Python workspace` for
-   `.py` projects that import `sage.all`, `Sage native/Cython workspace` for `.pyx/.pxd/.pxi`, or `Full Sage research
-   workspace` for mixed projects.
-11. Use `Sage: Select Sage Interpreter` to pick a complete detected environment first.
-12. The preferred local-development path is `Local Sage development environment`, which points run commands and runtime
-   docs at a nearby Sage checkout such as `.../sage/sage`.
-13. The preferred stable-runtime path is `System Sage (stable)`, which points run commands and runtime-backed docs at an
-   installed Sage executable.
-14. Leave `sage.languageServer.rustPath = auto` for local development so the extension uses `target/debug/sage-ls` after
-   `npm run build:rust`; set it only when you want a specific binary.
-15. The picker ends with one manual action for entering a custom Sage runtime path.
-16. Pick `sage.run.target = terminal` to run files as standalone commands, or `sage.run.target = repl` to load the current file into the managed Sage REPL with `load(...)`.
-17. Set `sage.run.cleanupGeneratedPython = true` if you want standalone `.sage` runs to clean up newly generated `.sage.py` helpers. Existing files and overlapping runs are retained; REPL loads do not delete disk helpers.
-18. Toggle `sage.docs.showOnHover` if you want hover popups to show either the short signature only or the full documentation preview.
-19. Leave `sage.analysis.sourceRoots` empty to index the workspace plus nearby/runtime-discovered Sage roots, or set it
-   to explicit roots when you want deterministic smoke fixtures. Configured roots are still supplemented with nearby
-   and interpreter-discovered Sage roots.
-20. Leave `sage.analysis.enableRuntimeIntrospection = true` if you want the server to fall back to a live Sage runtime for docs, definition jumps, and signature help when static indexing misses a symbol.
-21. Open or create a `.sage` file to exercise hover, completion, definition, references, rename, signature help, document symbols,
-   workspace symbols, diagnostics, and docs requests.
+`npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src` (from a source checkout)
+writes `.sage-reference/index.html`, a read-only, searchable reference of a project's symbols, documentation,
+definitions, and references that opens in any browser without VS Code or Sage. Local home paths are replaced by
+virtual paths such as `project://src/demo.py`.
 
-## Runtime Split
+## Limits
 
-- `sage.interpreter.path`
-  Controls the Sage executable used for `Run Current File`, `Run Selection in REPL`, and `Start REPL`.
-- `sage.languageServer.rustPath`
-  Controls the Rust `sage-ls` executable. `auto` prefers `SAGE_LS_PATH`, local `target/debug/sage-ls`, local
-  `target/release/sage-ls`, then `sage-ls` on `PATH`.
-- `Sage: Select Sage Interpreter`
-  Presents environment-first choices before advanced path actions. The main choices are `Local Sage development
-  environment` for a nearby checkout and `System Sage (stable)` for an installed executable.
-- `Sage: Configure Workspace`
-  Writes a small workspace profile for standard Sage, Sage-heavy Python, native Cython, or mixed research projects.
-  The command keeps `sage.languageServer.rustPath = auto` so future local rebuilds or packaged server updates are picked
-  up without rewriting the workspace by hand.
-- `sage.analysis.sourceRoots`
-  When set, these roots seed the project index. The extension then supplements them with nearby Sage checkouts and
-  roots inferred from the selected interpreter.
-- `sage.analysis.enableRuntimeIntrospection`
-  Defaults to `true` and lets the language server query the selected Sage runtime for documentation, source locations,
-  and signatures when static analysis alone is not enough.
-- `sage.run.cleanupGeneratedPython`
-  Defaults to `false`. When enabled, standalone terminal runs and managed-REPL file loads of `.sage` files remove the
-  new `.sage.py` helper after an uncontended standalone run. Pre-existing helpers and overlapping runs are preserved.
-- Why this split exists:
-  the editor needs a fast native LSP process while run commands and runtime-backed docs still target the selected Sage
-  executable.
-
-## Command Reference
-
-- `npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src`: generate
-  `/path/to/project/.sage-reference/index.html`, a static offline reference viewer for sharing symbol docs, definitions,
-  references, and source snapshots without VS Code, Sage, this extension, or a local server.
-- `sage.openGettingStarted`: open the VS Code Getting Started walkthrough for first-run setup.
-- `sage.selectInterpreter`: choose a detected Sage runtime profile or a custom path.
-- `sage.configureWorkspace`: write a conservative workspace profile for standard Sage, Sage-heavy Python, native Cython,
-  or full research projects.
-- `sage.restartLanguageServer`: restart the Rust language server after rebuilding `sage-ls` or changing analysis settings.
-- `sage.runCurrentFile`: run the active `.sage` file with the selected Sage runtime.
-- `sage.runSelection`: run the current editor selection with the selected Sage runtime.
-- `sage.startRepl`: start or reveal the managed Sage REPL terminal.
-- `sage.showDocumentation`: open the documentation panel for the active symbol.
-- `sage.findReferences`: find Sage-aware references for the active symbol, including workspace usages when the cursor is in
-  an indexed external Sage source definition.
-- `sage.showEnvironmentDetails`: show interpreter, source-root, runtime-introspection, and language-server details.
-- `sage.showIndexStatus`: show indexed file, symbol, doc, cache, and pending-job counts.
-- `sage.showDocsStatus`: show static docs and runtime docs worker health.
-- `sage.copySupportBundle`: copy a reviewable JSON diagnostics bundle with paths/settings/status but no source contents,
-  selected text, or environment variables.
-- `sage.runUxSelfCheck`: run hover, docs, definition, completion, references, rename, signature, and diagnostics checks
-  for the active editor position.
-- `sage.buildDatabase`: discover Sage sources, build a persistent SQLite database of source symbols and documentation, and protect it from automatic cache cleanup.
-- `sage.rebuildIndex`: rebuild the Rust source index for the current workspace.
-
-## Setting Reference
-
-- `sage.interpreter.path`: Sage executable used by run commands, REPL startup, and runtime-backed docs.
-- `sage.interpreter.args`: extra arguments passed to the Sage executable.
-- `sage.languageServer.rustPath`: Rust `sage-ls` path; leave it as `auto` for local development.
-- `sage.analysis.mode`: workspace-wide analysis breadth. `light`, `default`, and `full` return at most 50, 200, and
-  1000 workspace-symbol matches respectively. The modes do not change definition/reference resolution semantics or
-  override the dedicated diagnostics, runtime-introspection, and Cython-indexing switches. Changing the mode restarts
-  the language server. The Rust index-status payload (and copied support bundle) reports the effective mode and limit as
-  `analysis_mode` and `workspace_symbol_limit`.
-- `sage.analysis.extraPaths`: additional import paths supplied to the language server.
-- `sage.analysis.sourceRoots`: explicit source roots to index before discovered workspace and runtime roots.
-- `sage.analysis.enableDiagnostics`: enable or suppress language-server diagnostics.
-- `sage.analysis.enableRuntimeIntrospection`: allow live Sage runtime fallback for docs, definitions, and signatures.
-- `sage.analysis.enablePyxParsing`: enable lightweight `.pyx`, `.pxd`, and `.pxi` indexing.
-- `sage.analysis.enablePythonFiles`: attach the Sage language server to ordinary `.py` files while keeping Python language mode.
-  Keep this disabled for general Python workspaces; enable it for Sage-heavy Python projects that import `sage.all`.
-  The extension may activate on Python files, but it does not start the Sage LSP or show Sage editor commands for ordinary
-  Python files unless this setting or explicit Sage source roots are configured.
-- `sage.indexing.exclude`: glob patterns excluded from indexing.
-- `sage.docs.preferredSource`: documentation source preference, one of `auto`, `workspace`, `runtime`, or `reference`.
-- `sage.docs.showOnHover`: show documentation previews in hover content when available.
-- `sage.logging.level`: extension and language-client log verbosity.
-- `sage.run.target`: choose standalone terminal execution or managed REPL loading.
-- `sage.run.cleanupGeneratedPython`: clean up new `.sage.py` helpers from uncontended standalone runs; preserve pre-existing helpers and files shared by concurrent runs.
-
-## Recommended Profiles
-
-- Local Sage development:
-  choose `Local Sage development environment` when you work against a nearby `sage` checkout.
-- Stable installed Sage:
-  choose `System Sage (stable)` when you want run commands and runtime-backed docs to target the installed Sage
-  executable instead of the mutable checkout.
-- Advanced overrides:
-  only fall back to the custom path entries when the automatic environment profiles do not match your machine.
-
-If the language server still fails to start, run `npm run build:rust`, keep `sage.languageServer.rustPath = auto`, and
-check the `Sage Language Server` output channel for the resolved binary path.
-
-## Manual Smoke Workspace
-
-- A ready-made manual test workspace lives in `examples/manual-smoke-workspace`.
-- It includes `.sage`, `.py`, `.pyx`, `.pxd`, and `.pxi` files plus workspace-local settings for `sourceRoots` and `extraPaths`.
-- Advanced files now cover graph constructors, elliptic curves, polynomial ideals, symbolic integration, combinatorics,
-  and dotted runtime lookups that rely on runtime-backed docs or signature help.
-- Use the `Sage Plugin: Smoke Workspace` launch configuration to open it in the extension host. A correct GUI session has
-  a `[Extension Development Host]` window title, `SageMath` language mode for `.sage`, Sage commands in the command
-  palette, and a left status-bar item beginning with `Sage:`.
-- The automated `npm run test:extension-host` path reuses a copied version of this workspace in an unattended local VS
-  Code session so it can validate real extension behavior without mutating repository fixtures.
-- The Browser Use workbench is available through `npm run debug:web`; it exposes scopes, semantic spans, diagnostics,
-  symbols, index/docs status, and UX matrix checks in a browser surface suitable for MCP-driven inspection.
-- The release performance gate is available through `npm run test:performance`. Set `SAGE_SOURCE_ROOT=/path/to/sage/src`
-  when the Sage checkout is not beside this repository; use `-- --skip-workbench` to run only the release index budgets.
-
-## Offline Reference Package
-
-Use the offline reference export when you need a read-only project reference that another person can open locally without
-installing the Sage VS Code plugin or Sage:
-
-```bash
-npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src
-```
-
-The generated `.sage-reference/` directory contains only static files:
-
-- `index.html`: browser entrypoint.
-- `assets/viewer.css` and `assets/viewer.js`: light/dark interactive viewer.
-- `data/manifest.js`: project name, generated time, and counts.
-- `data/symbols.js`: symbol summaries, search index, references, and source metadata.
-- `data/sources/source-*.js`: lazily loaded source snapshots or snippets.
-
-The viewer is designed for quick reading and navigation: global search, grouped symbol list, source browser with line
-numbers, definition/reference highlights, documentation panel, recent history, copy actions, theme toggle, and URL hashes
-for sharing state. It is intentionally read-only; use VS Code for editing, rename, diagnostics, and live LSP behavior.
-
-By default, project source is snapshotted and Sage source is limited to related files. Use `--source-mode snippets` to
-reduce Sage source size, or `--source-mode none` when you only want symbol metadata and docs. The exporter writes virtual
-paths such as `project://src/main.py` and `sage://sage/rings/...`, sanitizes source/doc text, and fails if a generated
-package contains private local home paths.
-
-## Persistent database
-
-Run **Sage: Build Persistent Database** once after selecting your interpreter. The command waits for
-Sage source discovery, indexes the library and project, and saves the database in the extension's global
-storage. **Sage: Show Index Status** displays its path, file/symbol/doc counts, and lookup timings.
-Subsequent sessions reuse the database and refresh changed sources. Discovered Sage paths are remembered
-for the same interpreter and source-root configuration, allowing the index to load before Sage starts.
-
-Explicitly built databases have a `.sqlite.keep` marker and survive automatic age/size cleanup. To make
-an old database eligible for cleanup again, remove its `.keep` marker. A changed source-root configuration
-or index format can create a new database; rebuild it with the command when necessary. Static lookup works
-without starting Sage once its sources have been indexed; dynamic objects may still need runtime lookup.
-
-## Current Limits
-
-- Static analysis is broad enough for the current smoke fixtures and common Sage API lookup paths, but it is not a full
-  Sage runtime model.
-- Source mapping still focuses on the implemented `.sage` preprocessing slices and should be extended cautiously.
-- Interpreter discovery now prioritizes local `sage` checkout plus `sage-dev` and installed system Sage profiles, but unusual layouts may still require the advanced custom-path actions.
-- Runtime-derived source-root discovery covers common source and site-packages layouts, but unusual Sage packaging may still need manual `sage.analysis.sourceRoots`.
-- Runtime fallback currently focuses on docs, definitions, and signature help; completion and richer semantic analysis still rely on static indexing.
-- Notebook and kernel integration are not wired yet.
-- Marketplace-ready native binary packaging and signing are not wired yet.
-
-## Reclaim Build Space
-
-Rust build caches can be much larger than the installed extension. Preview their size with
-`npm run clean:cache`, then remove them with `npm run clean:cache -- --yes`. This preserves
-the VSIX in `dist`, packaged language servers, Node dependencies, and the installed extension.
-The next Rust build recreates the cache and will take longer. The broader `npm run clean -- --yes`
-also removes packaged artifacts; use it when preparing a completely fresh build.
-
-File runs and REPL sessions use the owning project folder as their working directory. Standalone files outside a project use their file directory. After changing source roots or extra import paths, use **Sage: Start REPL** to replace the stale session; this clears its variables and imported modules. Other projects keep their sessions.
-
-Language-server startup reports cache usage without deleting databases that another project or VS Code window may be using. Close Sage-enabled windows before explicitly pruning index caches from the maintenance CLI.
+- Static analysis covers common Sage API patterns, not every dynamic construct; runtime introspection fills some gaps.
+- No notebook or Jupyter kernel integration.

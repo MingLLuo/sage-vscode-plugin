@@ -160,6 +160,7 @@ jobs:
       CI: "1"
       SAGE_PERF_PARSE_MS: "3000"
       SAGE_PERF_REBUILD_INTERNAL_MS: "3000"
+      SAGE_PERF_REBUILD_ELAPSED_MS: "8000"
       SAGE_PERF_SKIP_WORKBENCH: "1"
       SAGE_SOURCE_ROOT: ${{ github.workspace }}/sage/src
     steps:

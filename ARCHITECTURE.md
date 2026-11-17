@@ -23,8 +23,9 @@
 
 ## Index and Lifecycle
 
-- Cache namespaces are derived from normalized workspace/source roots and parser options, allowing different Sage
-  checkouts to coexist without mixing symbols.
+- All projects share one SQLite database per index format, exclude list, and Cython switch. Rows are scoped by source
+  root, so different Sage checkouts coexist without mixing symbols and a tree used by several projects is stored once.
+  Databases unused for 30 days are deleted before the server starts.
 - Initialization publishes an empty index immediately. A single index actor hydrates and reconciles the persistent
   cache on a dedicated worker. Save and watcher notifications enqueue coalesced path events; they never wait for indexing.
 - Readers load immutable `ArcSwap` snapshots. Indexed files are shared through `Arc`, and one writer publishes completed
@@ -40,7 +41,7 @@
 - Shutdown stops queued indexing and diagnostics, and transport exit has a bounded runtime shutdown even with stdin open.
   Runtime documentation uses replaceable sessions, a bounded request lane and independent process control, so slow imports
   cannot block shutdown or reconfiguration. Unix workers own a process group; Windows workers are assigned to a kill-on-close
-  Job Object (native Windows validation remains pending). Complete cancellation coverage for other handlers remains tracked work.
+  Job Object. Paths are canonicalized without Windows `\\?\` prefixes so returned URIs open in VS Code.
 - Runtime docs use a private protocol descriptor with echoed request ID and symbol. Python/native stdout is diverted away
   from the protocol. Isolated Python imports Sage before appending workspace paths; per-process cache directories are private
   and removed after reaping. Missing symbols have a 30-second negative cache, startup failures back off, and positive/negative
@@ -55,10 +56,11 @@
 
 ## Maintained Boundaries
 
-- Rust is pinned; Node.js 22.9+ and npm 11+ use minimum compatibility ranges, with their runtime pairing checked
-  against npm's own Node.js engine declaration and Node 22 and 26 covered in CI.
-  CI uses repository-local fixtures plus a sparse checkout of the latest public Sage source and must not depend on
-  maintainer-private paths or an installed Sage runtime.
+- Rust is pinned; Node.js 22.9+ and npm 11+ use minimum compatibility ranges, with Node 22 and 26 covered in CI.
+  CI runs on macOS, Linux, and Windows with repository-local fixtures plus a sparse checkout of the latest public Sage
+  source; it must not depend on maintainer-private paths or an installed Sage runtime.
 - Local release gates additionally validate the latest discovered Sage source checkout, real-file behavior, and
   persistent LSP latency.
-- Notebook and remote execution remain separate milestones; they must not weaken the source-navigation contract.
+- Each platform package carries its own `sage-ls` (static musl on Linux). The extension is a workspace extension, so in
+  Remote SSH, WSL, and containers it runs next to the files.
+- Notebook integration remains a separate milestone; it must not weaken the source-navigation contract.

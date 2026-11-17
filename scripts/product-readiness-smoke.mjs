@@ -20,12 +20,8 @@ const checks = [];
 
 const docs = {
   readme: readText("README.md"),
-  quickStart: readText("docs/quick-start.md"),
   install: readText("docs/install-and-configure.md"),
   developer: readText("docs/developer-guide.md"),
-  completeness: readText("docs/plugin-completeness.md"),
-  releaseGates: readText("docs/process/ci-and-release-gates.md"),
-  taskBoard: readText("docs/progress/task-board.md"),
   support: readText("SUPPORT.md"),
   security: readText("SECURITY.md"),
   featureTemplate: readText(".github/ISSUE_TEMPLATE/feature_request.yml"),
@@ -175,8 +171,7 @@ function checkPerformanceReadiness() {
   pushCheck("performance", "release gate includes real Sage-heavy smoke", includesScript("test:release", "npm run test:real-file-smoke"), scripts["test:release"]);
   pushCheck("performance", "performance regression template asks for latency evidence", docs.performanceTemplate.includes("observed latency")
     && docs.performanceTemplate.includes("npm run test:lsp-latency"), ".github/ISSUE_TEMPLATE/performance_regression.yml");
-  pushCheck("performance", "task board tracks V2 latency budgets", docs.taskBoard.includes("V2-STABLE")
-    && docs.taskBoard.includes("latency budgets"), "docs/progress/task-board.md");
+  pushCheck("performance", "performance doc records targets", readText("docs/perf/README.md").includes("Target"), "docs/perf/README.md");
 }
 
 function checkDiagnosticsAndDebuggability() {
@@ -184,7 +179,7 @@ function checkDiagnosticsAndDebuggability() {
     pushCheck("debuggability", `${command} is documented`, combinedDocs.includes(command) || commandDocsTitlePresent(command), command);
   }
   pushCheck("debuggability", "support bundle avoids source contents by policy", docs.support.includes("without source contents")
-    || docs.completeness.includes("without source contents"), "SUPPORT.md / docs/plugin-completeness.md");
+    || docs.install.includes("without source contents"), "SUPPORT.md / docs/install-and-configure.md");
   pushCheck("debuggability", "browser workbench exposes UX matrix", readText("scripts/debug-workbench.mjs").includes("UX Defect Matrix")
     && readText("scripts/debug-workbench.mjs").includes("Run UX Matrix"), "scripts/debug-workbench.mjs");
   pushCheck("debuggability", "debug web smoke validates query documentation and latency", readText("scripts/debug-workbench.mjs").includes("expected documentation payload")
@@ -266,8 +261,6 @@ function checkVisualPolishReadiness() {
     const relativePath = markdownPath ? `packages/extension-core/${markdownPath.replace(/^\.\//, "")}` : "";
     pushCheck("visual-polish", `walkthrough step has markdown media: ${step.id}`, Boolean(markdownPath) && exists(relativePath), markdownPath ?? step.id);
   }
-  pushCheck("visual-polish", "visual polish is part of public readiness docs", includesCaseInsensitive(combinedDocs, "visual polish")
-    || includesCaseInsensitive(combinedDocs, "interface"), "docs/plugin-completeness.md");
 }
 
 function checkMacPackagingReadiness() {
@@ -346,8 +339,6 @@ function checkMaintenanceReadiness() {
     "SECURITY.md",
     "SUPPORT.md",
     "docs/developer-guide.md",
-    "docs/plugin-completeness.md",
-    "docs/progress/task-board.md",
   ]) {
     pushCheck("maintainability", `maintenance doc exists: ${doc}`, exists(doc), doc);
   }
@@ -356,9 +347,6 @@ function checkMaintenanceReadiness() {
 function checkModernPluginComparisonCoverage() {
   pushCheck("modern-plugin-comparison", "feature template asks for Pyright/rust-analyzer comparison", docs.featureTemplate.includes("Pyright")
     && docs.featureTemplate.includes("rust-analyzer"), ".github/ISSUE_TEMPLATE/feature_request.yml");
-  for (const dimension of ["interaction", "latency", "status", "workspace", "diagnostics", "visual polish"]) {
-    pushCheck("modern-plugin-comparison", `public docs mention ${dimension} dimension`, includesCaseInsensitive(combinedDocs, dimension), dimension);
-  }
   pushCheck("modern-plugin-comparison", "extension uses workspace trust and virtual workspace capability limits", manifest.capabilities?.untrustedWorkspaces?.supported === "limited"
     && (typeof manifest.capabilities?.virtualWorkspaces === "object"
       ? manifest.capabilities.virtualWorkspaces.supported === "limited"

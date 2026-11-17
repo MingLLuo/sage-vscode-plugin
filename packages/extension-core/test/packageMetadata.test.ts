@@ -191,7 +191,7 @@ test("packaged README is user-facing and support-oriented", () => {
     "First Run",
     "Important Settings",
     "Troubleshooting",
-    "Preview Limitations",
+    "Limitations",
     "Support and Security",
     "Sage: Open Getting Started",
     "Sage: Select Sage Interpreter",
@@ -770,7 +770,6 @@ test("user docs cover every command and setting", () => {
   const userDocs = [
     fs.readFileSync(path.join(repositoryRoot, "README.md"), "utf-8"),
     fs.readFileSync(path.join(repositoryRoot, "docs", "install-and-configure.md"), "utf-8"),
-    fs.readFileSync(path.join(repositoryRoot, "docs", "plugin-completeness.md"), "utf-8"),
   ].join("\n");
 
   for (const command of manifest.contributes?.commands ?? []) {

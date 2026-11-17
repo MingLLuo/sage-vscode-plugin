@@ -11,17 +11,15 @@
 
 ## Commit Rules
 
-- Use Conventional Commits.
-- Keep scope aligned with the subsystem you changed.
-- Prefer one coherent change per commit.
-- Update progress records in the same change when milestone state moves.
+- Use Conventional Commits, scoped to the subsystem you changed.
+- Prefer one coherent change per commit, with its tests.
 
 ## Documentation Rules
 
-- Design-level changes belong in `docs/design/`.
-- Process or workflow changes belong in `docs/process/`.
-- Milestone and task movement belongs in `docs/progress/`.
-- New packages or important scripts must be reflected in the root docs.
+- User-visible behavior: [User Guide](docs/install-and-configure.md) and the changelog.
+- Build, test, debug, and release steps: [Developer Guide](docs/developer-guide.md).
+- Design decisions that should outlive a code review: `ARCHITECTURE.md` or `docs/design/`.
+- Delete notes that no longer describe the current code instead of adding new ones next to them.
 
 ## Repository Hygiene
 
@@ -38,14 +36,7 @@
 
 ## Verification Gates
 
-- Use `npm run test:ci` for the public GitHub-compatible gate. It avoids private machine paths, desktop VS Code, and
-  mandatory Sage runtime availability while still running Rust tests, clippy, TypeScript lint/tests, debug-web smoke,
-  LSP shutdown smoke, VSIX content/package checks, cache maintenance, and portable performance smoke.
-- Use `npm run test:repo-hygiene` after changing GitHub issue templates, PR templates, `SECURITY.md`, `SUPPORT.md`, or
-  CI/release gate definitions, `.gitattributes`, or `.editorconfig`.
-- Use `npm run test:release` for local release candidates. It additionally exercises persistent LSP latency and
-  real-file Sage-heavy smoke against the configured local Sage checkout and local research fixtures.
-- Use Node.js 22.9 or newer and npm 11 or newer for release packaging; Node.js 26 is covered by CI. `.node-version`
-  records the Node 22 baseline without rejecting newer releases. The packaging check rejects Node/npm combinations
-  outside the installed npm release's own Node.js engine range. Rust remains pinned by `rust-toolchain.toml`.
-- Use `npm run test:full` only when the machine may launch the VS Code Extension Host.
+See [Tests](docs/developer-guide.md#tests). In short: `cargo test` and `npm run test` for every change, `npm run test:ci`
+before pushing, `npm run test:release` and `npm run test:extension-host` before a release, and
+`npm run test:repo-hygiene` after editing `SECURITY.md`, `SUPPORT.md`, `.gitattributes`, `.editorconfig`, templates, or
+workflows. Node.js 22.9+ and npm 11+; Rust is pinned by `rust-toolchain.toml`.

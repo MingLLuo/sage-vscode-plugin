@@ -1,62 +1,117 @@
 # Developer Guide
 
-## Purpose
+For people changing the plugin. Users start with the [User Guide](./install-and-configure.md); the design is in
+[ARCHITECTURE.md](../ARCHITECTURE.md).
 
-This guide is for engineers working on the plugin itself. It explains how the repository is organized and how the
-current static-analysis baseline should be extended safely.
+## Setup
+
+Node.js 22.9+ (26 is covered too) and npm 11+; Rust comes from `rust-toolchain.toml`.
+
+```bash
+npm ci
+npm run build:rust      # target/debug/sage-ls
+npm run build           # extension + syntax assets
+```
+
+`npm run dev:vscode` does the same and opens the repository in VS Code.
 
 ## Repository Map
 
-- `packages/extension-core`
-  VS Code extension client. Owns activation, command registration, configuration plumbing, status presentation,
-  documentation panel rendering, workspace discovery, and LSP client startup.
-- `crates/sage-ls`
-  Rust V2 language-server process. Owns the primary LSP entrypoint, request dispatch, open-document overlays,
-  semantic-token encoding, and Rust status/rebuild/documentation commands.
-- `crates/sage-index`
-  Rust V2 indexing engine. Owns parallel file scanning, Sage/Python/Cython symbol extraction, source preprocessing,
-  SQLite/FTS persistence, and release indexing benchmarks.
-- `packages/syntax-pack`
-  Shared syntax assets. Owns grammar, snippets, and language configuration for `.sage` and Sage-native Cython files.
-- `docs/design`
-  Architecture notes and accepted design decisions.
-- `docs/plugin-completeness.md`
-  Manifest-to-documentation completeness reference. The extension metadata tests require every contributed command and
-  setting to appear in the English user docs.
-- `docs/process`
-  Release-gate notes that are still exercised by repository hygiene tests.
-- `docs/progress`
-  Short current status and active task tracking.
-- `.vscode`
-  Repository-local launch and task definitions for starting the extension development host with `F5`.
-- `scripts/dev-vscode.sh`
-  Helper entrypoint that can bootstrap dependencies, sync syntax assets, build the repo, and open VS Code in one step.
-- `scripts/debug-workbench.mjs`
-  Local Browser Use debugging workbench. It serves smoke fixtures with TextMate scope matches, Rust semantic spans,
-  diagnostics, symbols, and index/docs status without depending on VS Code Web screenshots.
-- `scripts/export-reference.mjs`
-  Static offline reference exporter. It writes `.sage-reference/index.html` plus local JS/CSS/data shards so a project can
-  be searched and read without VS Code, Sage, this extension, or a local server.
-- `scripts/reference-viewer`
-  Source assets for the offline reference viewer. Keep presentation and browser interaction work here; the exporter
-  should stay focused on inspection, data shaping, sanitization, and file emission.
-- `scripts/cache-maintenance.mjs`
-  Safe inventory and prune helper for root-aware Rust SQLite index caches. Inventory is the default; prune mode is a
-  dry-run unless `--yes` is explicitly supplied.
-- `examples/manual-smoke-workspace`
-  Self-contained manual smoke-test workspace used to exercise hover, definition, completion, docs, `.pyx`, `.pxd`,
-  `.pxi`, and `.sage` cases plus heavier runtime-backed Sage examples.
+| Path | Owns |
+| --- | --- |
+| `packages/extension-core` | VS Code client: activation, commands, status, REPL/run, docs panel, LSP client startup |
+| `crates/sage-ls` | language server: LSP handlers, open documents, background index jobs, runtime docs worker |
+| `crates/sage-index` | indexing: discovery, `.sage`/Python/Cython parsing, symbol resolution, SQLite cache |
+| `packages/syntax-pack` | grammar, snippets, language configuration (generated into the extension) |
+| `examples/manual-smoke-workspace` | fixture workspace for manual and automated editor tests |
+| `scripts/` | packaging, smoke tests, perf tools, `configure-workspace`, `doctor`, `export-reference` |
+| `docs/design` | design notes that still describe current behavior |
 
-## Working Rules
+## Debugging
 
-1. Start by identifying the subsystem: `extension`, `lsp`, `syntax`, or `repo/docs`.
-2. Keep the client thin unless a UI concern truly belongs in VS Code.
-3. Keep new analysis behavior in the Rust V2 server/index crates; extension code should consume stable server payloads
-   rather than duplicate logic.
-4. Update progress records when milestone status changes.
-5. Add or update a design note when architecture or repository rules change.
+**In VS Code.** Press `F5` and choose **Sage Plugin: Smoke Workspace**. In the `[Extension Development Host]` window,
+`.sage` files show `SageMath` and the status bar shows `Sage: ...`. If a `.sage` file shows `Plain Text`, you are in a
+normal window; start again with `F5`. `sage.languageServer.rustPath = auto` picks up `target/debug/sage-ls` after
+`npm run build:rust`.
 
-## Key Extension Modules
+**Logs.** The **Sage** and **Sage Language Server** output channels; set `sage.logging.level` to `debug` and restart the
+server. **Sage: Run UX Self Check** runs hover, docs, definition, completion, references, rename, signature help, and
+diagnostics at the cursor and writes one report.
+
+**Without VS Code.**
+
+- `npm run debug:web` opens a browser workbench showing TextMate scopes, semantic tokens, diagnostics, symbols, and
+  index status for the fixture files.
+- `cargo run -p sage-index --bin sage-debug-inspect -- --root <dir> --file <file> --symbol <name>` prints what the
+  index resolves for one query.
+- `npm run snapshot:index -- /path/to/sage/src > before.jsonl`, then again after a parser change, and
+  `npm run snapshot:diff -- before.jsonl after.jsonl` shows every symbol, highlight, or diagnostic that changed.
+
+**Reduce, then fix.** Turn a wrong hover, definition, or completion into a unit test under
+`crates/sage-index/src/tests/` (or a fixture file) before changing resolver code.
+
+## Tests
+
+| Command | When | What it runs |
+| --- | --- | --- |
+| `cargo test` | any Rust change | unit and protocol tests for both crates |
+| `npm run test` | any TypeScript change | extension, syntax, script, and fixture-only workbench tests |
+| `npm run test:extension-host` | client lifecycle or UI changes | the real VS Code client against the fixture workspace (opens VS Code windows) |
+| `npm run test:ci` | before pushing | Rust tests + clippy, lint, all `test`s, LSP protocol/shutdown/concurrency smokes, real-Sage workbench matrix, VSIX checks, hygiene, readiness, portable perf |
+| `npm run test:release` | before tagging | `test:ci` plus VS Code CLI install, release index performance, persistent LSP latency, real-file smoke |
+
+`test:ci` and `test:release` need a Sage source tree: a sibling `../sage/src` checkout or `SAGE_SOURCE_ROOT`. A Sage
+executable is not required. Keep `test:lsp-latency`, `test:real-file-smoke`, and `test:extension-host` out of
+`test:ci`; they depend on local machine state.
+
+Focused gates: `test:generated-assets` after syntax or icon changes, `test:vsix-package` / `test:vsix-install` after
+packaging changes, `test:cache-maintenance` after cache cleanup changes, `test:repo-hygiene` after editing
+`SECURITY.md`, `SUPPORT.md`, `CONTRIBUTING.md`, `.gitattributes`, `.editorconfig`, issue templates, or workflows, and
+`test:reference-export` after offline reference changes.
+
+### CI
+
+- `ci.yml` (every push and PR): the macOS `test:ci` gate with a sparse `sagemath/sage` checkout, `cargo test` on Linux,
+  Windows, and Intel macOS, the Linux extension-host suite under `xvfb`, Node 22/26 compatibility, and a Node 26/npm 12
+  packaging check. Rust caches are saved even when a job fails.
+- `package.yml` (tags, PRs touching shipped code, manual runs): builds and tests the six native VSIX packages plus two
+  Alpine aliases. A manual run can be limited to some targets:
+
+```bash
+gh workflow run package.yml -f targets=linux-x64,win32-x64
+```
+
+On GitHub's shared runners, index parse and internal rebuild budgets are 3000 ms instead of the local 1500 ms, the
+end-to-end rebuild 8000 ms instead of 5000 ms, and the warm inspector queries get twice the local 1 s budget
+(`SAGE_LATENCY_BUDGET_SCALE`). Local numbers stay the optimization target.
+
+## Performance
+
+`npm run perf:baseline -- --out docs/perf/baseline-<date>.json` measures start, latency while indexing and typing,
+references, and memory against a full Sage tree. Compare with the files in [docs/perf](./perf/README.md).
+`cargo run --release -p sage-index --bin sage-index-bench -- /path/to/sage/src` times a cold index.
+
+## Index Cache Tools
+
+`npm run cache:status` lists index databases; `npm run cache:prune:dry-run` previews cleanup and
+`node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes` deletes. Close Sage windows before pruning.
+`npm run clean:cache -- --yes` removes Rust build caches; `npm run clean -- --yes` also removes packaged artifacts.
+
+## Releasing
+
+1. Bump the version in the root, `packages/extension-core`, and `packages/syntax-pack` `package.json` files and in
+   `package-lock.json` (`npm run test:repo-hygiene` checks they agree with the Cargo crates).
+2. Move the `packages/extension-core/CHANGELOG.md` entries under `## <version> - <date>`.
+3. Run `SAGE_SOURCE_ROOT=../sage/src npm run test:release` and `npm run test:extension-host`.
+4. Push, wait for green CI, then tag: `git tag -a v<version> -m "..." && git push origin v<version>`.
+
+The tag runs the CI gate and all packaging jobs. Only if everything passes, the workflow checks the tag matches the
+extension version and that exactly eight VSIX files were built, then creates the GitHub release with this version's
+changelog section as notes. Re-running never replaces already uploaded files.
+
+## Module Map
+
+### Extension (`packages/extension-core/src`)
 
 - `src/extension.ts`
   Composition root for activation, deactivation, shared state, and module wiring. Keep feature implementations in the
@@ -131,9 +186,8 @@ current static-analysis baseline should be extended safely.
   Keeps the no-documentation action labels and command mapping in one place. Use it when adding diagnostics or recovery
   actions for documentation misses.
 
-## Key Language Server Modules
+### Language server and index
 
-Rust V2:
 
 - `crates/sage-ls/src/main.rs`
   Composition root for `tower-lsp` capabilities, request dispatch, shared server state, and internal `sage.__rust.*`
@@ -183,7 +237,7 @@ Navigation correctness depends on both boundaries above: identify a file by its 
 latest matching live buffer, return its original client URI, and convert byte columns to UTF-16 only at the LSP edge. Do
 not bypass `open_documents.rs` or `text_positions.rs` with direct disk reads or raw `SourceRange` construction.
 
-Rust index:
+Index (`crates/sage-index/src`):
 
 - `crates/sage-index/src/lib.rs`
   Thin crate entrypoint: declares modules, re-exports the public model/query surface, and selects a writable persistent or
@@ -229,184 +283,3 @@ Rust index:
   completion, editor-query, and Sage-navigation regressions by domain.
 - `crates/sage-index/src/bin/sage-index-bench.rs`
   Measures cold release indexing against a local Sage source checkout. Use release mode for performance validation.
-
-## Bootstrap Commands
-
-```bash
-npm ci
-npm run sync:syntax
-npm run test:generated-assets
-npm run build:rust
-npm run debug:web
-npm run build
-npm run test
-```
-
-Shortcut:
-
-```bash
-npm run dev:vscode
-```
-
-Automated verification:
-
-```bash
-cargo test
-npm run test:ci
-npm run package:vsix
-npm run configure:workspace -- --dry-run
-npm run doctor:mac
-npm run test
-npm run test:vsix-contents
-npm run test:vsix-package
-npm run test:vsix-install
-npm run test:cache-maintenance
-npm run test:repo-hygiene
-npm run test:product-readiness
-npm run test:reference-export
-npm run test:performance
-npm run test:lsp-navigation
-npm run test:lsp-shutdown
-npm run test:lsp-protocol
-npm run test:lsp-latency
-npm run test:extension-host
-npm run test:release
-npm run test:full
-```
-
-Use `npm run doctor:mac` when a local Mac package, VS Code CLI, Sage runtime, or Sage source root does not behave as
-expected. The command is diagnostic by default; add `-- --strict` for a shell-failing package-artifact check or
-`-- --json` for automation.
-
-Use `npm run configure:workspace -- --workspace /path/to/project --profile auto` to reproduce the VS Code
-`Sage: Configure Workspace` setup from a terminal on macOS, Linux, or Windows. Use `-- --dry-run --json` in tests or
-bug reports when you need to inspect the generated settings without writing files.
-
-Use `npm run test:ci` for the public GitHub-compatible macOS gate. It intentionally avoids private real-file paths and
-desktop VS Code while still checking Rust, clippy, lint, tests, package contents, generated VSIX structure, cache
-maintenance, repository hygiene, product readiness, and portable performance smoke. Use `npm run test:repo-hygiene`
-after changing issue templates, `SECURITY.md`, `SUPPORT.md`, PR templates, or gate definitions. Use
-`npm run test:product-readiness` after changing interaction surfaces, visual polish, performance gates, smoke fixtures,
-packaging, or future Sage-update support. Use `npm run test:product-readiness -- --json` when a machine-readable report
-is needed. Use `npm run test:release` for local release candidates
-that have access to a Sage checkout and the real Sage-heavy smoke inputs. See `docs/process/ci-and-release-gates.md` for
-the exact split.
-
-Rust release benchmark:
-
-```bash
-cargo run --release -p sage-index --bin sage-index-bench -- /path/to/sage/src
-```
-
-Release performance gate:
-
-```bash
-SAGE_SOURCE_ROOT=/path/to/sage/src npm run test:performance
-```
-
-Use `-- --skip-workbench` when you only need the release index budgets and do not want to run the Browser workbench
-latency smoke in the same pass. The performance smoke uses an isolated temporary `XDG_CACHE_HOME` by default so cold
-rebuild numbers are not polluted by an old or fragmented SQLite cache. Set `SAGE_PERF_CACHE_DIR=/path/to/cache` to inspect
-the generated cache, and set `SAGE_PERF_KEEP_CACHE=1` to reuse that cache intentionally.
-
-Rust index cache maintenance:
-
-```bash
-npm run cache:status
-npm run cache:prune:dry-run
-node scripts/cache-maintenance.mjs --prune --max-age-days 30 --max-total-bytes 2147483648 --keep-latest 2 --yes
-```
-
-`cache:status` reads the same default cache root as Rust (`$XDG_CACHE_HOME/sage-vscode-plugin/rust-index-v2`, or
-`$HOME/.cache/sage-vscode-plugin/rust-index-v2`). Prune mode only matches `sage-index-<digest>.sqlite` plus its SQLite
-`-wal`/`-shm` sidecars, keeps the newest namespaces, applies an optional total-size budget, and removes old orphan sidecars.
-The VS Code extension applies the same conservative policy to its own global-storage `rust-index-v2` directory before
-starting `sage-ls`; `npm run test:cache-maintenance` validates the deletion path in a temporary directory.
-
-`Sage: Select Sage Interpreter` is now environment-first. The primary choices should be `Local Sage development environment`
-for a nearby checkout paired with `conda` `sage-dev`, and `System Sage (stable)` for the installed standalone Sage
-runtime.
-
-`Sage: Run UX Self Check` runs the active editor position through the Rust query payload and writes a compact report to
-the Sage output channel. Use it before collecting logs for hover/docs/definition/completion/references/rename/signature
-or diagnostics regressions.
-
-Rust V2 documentation uses static indexed docstrings first. For weak built-in Sage placeholders such as
-`PolynomialRing` or `graphs.PetersenGraph`, `sage-ls` can ask a persistent Sage runtime worker for fuller
-`sageinspect` documentation. If the configured runtime cannot import Sage, `Sage: Show Docs Status` reports the
-degraded reason and hover/docs continue to use static fallback text.
-
-`npm run test:extension-host` launches the locally installed VS Code desktop in an unattended background test session.
-The harness copies the smoke workspace into a temp directory, captures extension-host and language-server logs, and
-fails the run on known runtime regressions. On macOS it recognizes both the current `Contents/MacOS/Code` application
-binary and older `Contents/MacOS/Electron` layouts; set `SAGE_TEST_VSCODE_EXECUTABLE` for custom installations.
-
-`npm run debug:web` builds the Rust debug inspector and starts the local Browser Use workbench. Open the printed
-`http://127.0.0.1:<port>/` URL to inspect `08_highlighting_structures.sage`, native Cython fixtures, TextMate scopes,
-semantic tokens, diagnostics, symbols, and Rust index/docs status in a stable browser surface.
-
-`npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src` generates a shareable
-`.sage-reference/` static viewer for a project. `npm run test:reference-export` validates the generated manifest, symbol
-index, source shards, keyboard/hash viewer behavior, documentation rendering, and private-path stripping in a temporary
-fixture.
-
-`npm run cache:status` inventories root-aware Rust index caches without deleting files. Use `npm run cache:prune:dry-run`
-to preview old-cache cleanup; only the explicit `node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes`
-form deletes matching old SQLite cache files.
-
-## Local Debugging
-
-- Press `F5` in this repository. `Sage Plugin: Smoke Workspace` is the first/default target for GUI smoke testing.
-- The repository-level `build` task runs first, then VS Code launches the extension from `packages/extension-core`.
-- Choose `Sage Plugin: Extension Host` only when you specifically want the current repository as the first workspace in
-  the extension host.
-- In a correct smoke session, the new window title starts with `[Extension Development Host]`, `.sage` files show
-  `SageMath`, the command palette contains Sage commands, and the left status bar starts with `Sage:`.
-- If the host opens empty, use `Open Folder` inside that host and select `examples/manual-smoke-workspace`. If `.sage`
-  shows `Plain Text`, close that normal window and relaunch from the repository with `F5`.
-
-## Language Intelligence Troubleshooting
-
-1. Open the `Sage` and `Sage Language Server` output channels.
-2. Set `sage.logging.level` to `debug`, then run `Sage: Restart Language Server`.
-3. Use `Sage: Show Environment Details` to confirm source roots, extra paths, index mode, and runtime-introspection
-   status.
-4. Run `Sage: Show Index Status`, `Sage: Show Docs Status`, or `Sage: Rebuild Index` to inspect generation, loaded
-   roots, cache state, and pending jobs.
-5. Reduce hover, definition, or completion failures into a Rust unit test under `crates/sage-index/src/tests/` or a
-   file in `examples/manual-smoke-workspace` before changing resolver behavior.
-6. If cache size or stale checkout state is suspected, run `npm run cache:status` first and use dry-run prune output
-   before deleting any root-aware SQLite cache.
-
-## Verification Strategy
-
-- TypeScript-facing work should keep `npm run build` and `npm run lint` green.
-- Manifest, command, setting, or user-facing documentation work should keep
-  `npm run test --workspace sage-vscode-extension` green; this includes command activation coverage, generated asset
-  existence checks, and user documentation coverage.
-- Rust-facing work should keep `cargo test` green and should record `cargo run --release -p sage-index --bin
-  sage-index-bench -- /path/to/sage/src` when performance is relevant.
-- Syntax or generated branding work should keep `npm run sync:syntax`, `npm run test:generated-assets`, and syntax
-  package checks green.
-- Cache maintenance or release tooling changes should keep `npm run test:cache-maintenance` green.
-- Cross-cutting changes should keep the full `npm run test` path green before commit.
-- Browser-debug-facing changes should keep the fixture-only `npm run test:debug-web` green. Navigation or Sage-library
-  resolution changes should also keep `npm run test:debug-web:sage` green against a nearby checkout or
-  `SAGE_SOURCE_ROOT=/path/to/sage/src`.
-- Packaging-facing changes should keep `npm run package:vsix`, `npm run test:vsix-package`, and
-  `npm run test:vsix-install` green; use Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer.
-  `.node-version` records the Node 22 baseline rather than an exact runtime lock; the toolchain gate verifies the
-  installed npm release supports that Node.js runtime. `package:vsix` stages a locked, path-remapped current-platform
-  release `sage-ls` before archive checks, and the package smoke verifies normalized modes under different umasks.
-- Release-candidate changes that do not need the desktop extension host should keep `npm run test:release` green. This
-  runs locked Rust tests, clippy with `-D warnings`, TypeScript lint, the full non-desktop test suite, VSIX content/package
-  install smoke, release index performance, persistent LSP latency, the real-file Sage-heavy smoke, and
-  `git diff --check`.
-- Native Sage library work should also keep `npm run test:debug-web:sage` and `npm run test:real-file-smoke` green when a
-  local Sage checkout is present.
-- Extension-host behavior that depends on the real VS Code client lifecycle should also keep `npm run test:extension-host`
-  green.
-- The extension-host smoke suite now covers hover, definition, completion, references, rename, document/workspace
-  symbols, native Cython navigation, managed restart stability, imported-helper save refresh, and optional native Sage
-  source-tree lookups.
-- Use `npm run test:full` when you need the release suite plus the extension-host smoke test in one command.

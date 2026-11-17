@@ -19,5 +19,4 @@ Cross-compilation requires the Rust target and native compiler/linker. CI uses s
 platform identifiers: macOS, Linux, Alpine, and Windows, each for x64 and arm64. Each VSIX contains only its own binary,
 SHA-256, build metadata, and generated third-party notices. Windows uses static CRT; Linux uses musl and mimalloc.
 
-macOS arm64 packaging is locally verified. Other platforms require a successful run of the new platform workflow before
-being considered supported release artifacts. See `docs/process/runtime-audit-2026-11-17.md` in the repository.
+Every platform is built and tested on its native GitHub runner (`package.yml`) before a release is published.

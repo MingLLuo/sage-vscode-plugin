@@ -1,210 +1,58 @@
 # Sage VS Code Plugin
 
-`Sage VS Code Plugin` is an independent monorepo for a SageMath-focused development experience in Visual Studio Code.
+SageMath support for Visual Studio Code: a fast Rust language server that understands `.sage` files, Sage-heavy
+Python, and Sage's Cython sources, plus commands to run code in Sage.
 
-It now includes a usable local development baseline: a VS Code client, a Rust language server, a persistent
-Sage/Python/Cython source index, Sage-aware `.sage` preprocessing, runtime-backed documentation fallback, and curated
-manual plus automated smoke tests.
+## Install
 
-## Quick Start
+1. Download the `.vsix` for your machine from the
+   [latest release](https://github.com/MingLLuo/sage-vscode-plugin/releases/latest) (`darwin-arm64`, `darwin-x64`,
+   `win32-x64`, `win32-arm64`, `linux-x64`, `linux-arm64`, `alpine-x64`, `alpine-arm64`).
+2. In VS Code run **Extensions: Install from VSIX...** and pick the file. In Remote SSH, WSL, or Dev Container windows,
+   pick the file for the remote machine.
+3. Open a folder with a `.sage` file. Sage sources nearby or in your Sage installation are found automatically.
 
-Download the `.vsix` for your machine from the
-[latest release](https://github.com/MingLLuo/sage-vscode-plugin/releases/latest) and install it with
-**Extensions: Install from VSIX...** (in Remote SSH or WSL windows, pick the remote machine's file). See
-[Install and Configure](./docs/install-and-configure.md#install-a-released-package) for the file list.
+The [User Guide](./docs/install-and-configure.md) covers settings, Sage-heavy Python projects, and troubleshooting.
 
-To build and install the package for your platform from source:
+## What You Get
 
-Development and release packaging support Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer. The
-`engines` ranges enforce only those minimums; `.node-version` selects the rolling Node 22 development/CI baseline
-without pinning a patch release. Packaging also verifies that the installed npm release declares the selected Node.js
-runtime compatible. CI packages on macOS with Node.js 26 and npm 12. Rust remains pinned by `rust-toolchain.toml`.
+| Area | Features |
+| --- | --- |
+| Understanding code | hover with rendered documentation, completion, signature help, inlay hints |
+| Navigation | go to definition / declaration / implementation, references, rename, call hierarchy, document symbols, workspace symbols |
+| Feedback | syntax diagnostics, semantic tokens (highlighting), folding |
+| Running | Run Current File, Run Selection in REPL (`Shift+Enter`), Run Cell (`Ctrl/Cmd+Enter` in files with `# %%` cells), managed REPL |
+| Help | Getting Started walkthrough, status bar with recovery actions, Show Environment / Index / Docs Status, Copy Support Bundle |
+
+Navigation works from Sage source files, so Sage does not have to be installed for editing. Running code and
+runtime-backed documentation use your Sage installation. The interface follows VS Code's display language (English or
+Simplified Chinese).
+
+Find References for a common name such as `matrix` across the whole Sage library returns in about 1 s, and the server
+answers hover and completion while it indexes. Measurements are in [docs/perf](./docs/perf/README.md).
+
+## Documentation
+
+- [User Guide](./docs/install-and-configure.md): install, settings, commands, troubleshooting.
+- [Changelog](./packages/extension-core/CHANGELOG.md)
+- [Developer Guide](./docs/developer-guide.md): build, test gates, debugging, release process.
+- [Architecture](./ARCHITECTURE.md) and [design notes](./docs/design/)
+- [Contributing](./CONTRIBUTING.md), [Support](./SUPPORT.md), [Security](./SECURITY.md)
+
+## Build From Source
 
 ```bash
 npm ci
-npm run package:vsix   # writes dist/sage-vscode-extension-0.2.0-<platform>.vsix for this machine
-npm run doctor:mac
+npm run package:vsix   # writes dist/sage-vscode-extension-<version>-<platform>.vsix for this machine
 code --install-extension dist/sage-vscode-extension-0.2.0-darwin-arm64.vsix --force
 ```
 
-Use the file that matches your platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `alpine-x64`,
-`alpine-arm64`, `win32-x64`, `win32-arm64`). Prebuilt packages for every platform are attached to each tagged GitHub
-release and to every run of the **Platform packages** workflow.
+Requires Node.js 22.9+ and npm 11+; Rust is pinned by `rust-toolchain.toml`. See the
+[Developer Guide](./docs/developer-guide.md) for the development host, tests, and tools such as
+`npm run configure:workspace`, `npm run doctor:mac`, and `npm run export:reference` (an offline, browser-only project
+reference).
 
-Open a trusted local folder containing a `.sage` file and edit it. The packaged language server and nearby Sage source
-roots are discovered automatically. Use **Run Current File** from the Sage command palette or editor title to run it.
-If Sage is not found, run **Sage: Select Sage Interpreter** once and choose its executable. The status bar shows startup and
-indexing progress; click it for environment details if a feature does not become ready.
+## Limits
 
-For Sage-heavy Python projects, run **Sage: Configure Workspace** and choose **Sage-heavy Python workspace**. This
-enables Sage analysis for `.py` files. To configure a workspace before opening VS Code, use
-`npm run configure:workspace -- --workspace /path/to/project --profile auto` instead of the editor command.
-
-Only set paths manually when discovery selects the wrong environment:
-
-```json
-{
-  "sage.languageServer.rustPath": "auto",
-  "sage.analysis.enablePythonFiles": true,
-  "sage.analysis.sourceRoots": ["/path/to/sage/src"],
-  "sage.interpreter.path": "/path/to/sage"
-}
-```
-
-See [Quick Start](./docs/quick-start.md) for the short user path.
-Use [Install and Configure](./docs/install-and-configure.md) for the full reference.
-
-## Offline Reference Export
-
-Generate a shareable static reference viewer for a project:
-
-```bash
-npm run export:reference -- --workspace /path/to/project --source-root /path/to/sage/src
-```
-
-The command writes `/path/to/project/.sage-reference/index.html`. Open that file directly in a browser to search symbols,
-read docs, inspect definitions, and follow references without VS Code, this plugin, Sage, or a local server. The exporter
-uses virtual paths such as `project://src/demo.py` and `sage://sage/rings/...`; generated packages are checked so local
-home paths are not leaked.
-
-## Goals
-
-- Deliver a maintainable Sage editor experience for `.sage` files.
-- Keep the client, Rust language server, and syntax assets cleanly separated.
-- Record design decisions, progress, and commit-level development history in-repo from the start.
-
-## Workspace Layout
-
-- `packages/extension-core`: VS Code extension and LSP client bootstrap.
-- `crates/sage-ls`: primary Rust language-server process.
-- `crates/sage-index`: Rust source index, SQLite cache, query, diagnostics, and semantic-token engine.
-- `packages/syntax-pack`: grammar, snippets, and language configuration.
-- `docs/`: concise design notes, release gates, and current progress.
-- `examples/manual-smoke-workspace`: ready-to-open sample workspace for manual and automated smoke checks.
-
-## Current Status
-
-- Repository bootstrap, Rust build, TypeScript build, and syntax sync are locally validated.
-- The extension launches `sage-ls` from explicit `sage.languageServer.rustPath`, `SAGE_LS_PATH`, the matching packaged binary, development-only `target/*`, or `PATH`.
-- The extension provides a Getting Started walkthrough, environment-first interpreter selection, status presentation, run
-  commands, managed REPL, documentation panel, index/docs status commands, support bundle capture, rebuild, and an editor
-  UX self-check command.
-- The Rust language server covers hover, documentation, definition, completion, signature help, inlay hints, diagnostics,
-  semantic tokens, document symbols, workspace symbols, references, rename, save/watch refresh, and native Cython
-  navigation.
-- Source indexing handles `.sage`, `.py`, `.pyx`, `.pxd`, and `.pxi`, persists SQLite cache data, and can supplement
-  workspace roots with nearby or runtime-discovered Sage source roots.
-- Runtime documentation fallback can query the selected Sage executable when static indexed docs or locations are weak.
-- A Browser Use debug workbench and a real VS Code extension-host smoke suite validate the user-facing edit loop.
-- VSIX packaging includes a generated extension icon, gallery banner metadata, bundled walkthrough resources, and
-  package-content smoke tests.
-- The extension is marked as a preview workspace extension because the Rust LSP and optional docs worker need access to
-  workspace-local files and processes.
-
-## Reference Inputs
-
-- `deep-research-report.md` in the sibling `sage-src` workspace defines the target product direction.
-- A sibling Sage checkout such as `../sage` can be used as a local source calibration checkout; alternatively set
-  `SAGE_SOURCE_ROOT` explicitly for the real-Sage UX matrix, CI-equivalent checks, performance, and release smokes.
-- Nearby repositories may be consulted for patterns, but this repository remains independently owned.
-
-## Development Workflow
-
-- Use Conventional Commits with narrow scopes.
-- Keep each small action or feature in its own commit when practical.
-- Update the short progress tracker when current release state changes.
-- Add or update design notes only when an architectural decision needs to survive code review.
-
-## Documentation Index
-
-- [Developer Guide](./docs/developer-guide.md)
-- [Changelog](./CHANGELOG.md)
-- [Quick Start](./docs/quick-start.md)
-- [Install and Configure](./docs/install-and-configure.md)
-- [Plugin Completeness and Verification](./docs/plugin-completeness.md)
-- [Rust LSP V2](./docs/design/rust-lsp-v2.md)
-- [Native Source Support](./docs/design/native-source-support.md)
-- [Design Overview](./docs/design/overview.md)
-- [Development Progress](./docs/progress/development-progress.md)
-- [Manual Smoke Workspace](./examples/manual-smoke-workspace/README.md)
-
-## Quick Verification
-
-```bash
-npm ci
-npm run build
-npm run test:ci
-npm run test:repo-hygiene
-npm run test:product-readiness
-npm run test:reference-export
-npm run package:rust-binary
-npm run package:vsix
-npm run test:vsix-install
-npm run test:release
-npm run cache:status
-npm run clean:dry-run
-```
-
-`npm run test:ci` is the public GitHub-compatible gate. It avoids private local files and desktop VS Code while covering
-Rust tests, clippy, lint, extension/debug/Python tests, generated asset drift checks, VSIX content/package smoke,
-cache-maintenance smoke, portable performance smoke, and whitespace checks.
-
-`npm run test:release` is the local non-desktop release gate. It adds VS Code CLI install smoke, release index
-performance against a local Sage checkout, persistent LSP latency, and real-file Sage-heavy smoke.
-
-`npm run test:repo-hygiene` verifies public GitHub maintenance files such as issue templates, `SECURITY.md`,
-`SUPPORT.md`, and CI/release-gate boundaries.
-
-`npm run test:product-readiness` verifies the high-level editor experience matrix: interaction, language coverage,
-visual polish, latency gates, debuggability, Mac packaging, future Sage-update resilience, and maintainability. Add
-`-- --json` for complete machine-readable details.
-
-`npm run test:reference-export` generates a temporary `.sage-reference` package and verifies the static viewer, source
-shards, search index, keyboard/hash interactions, documentation rendering, and private-path stripping.
-
-`npm run package:vsix` rebuilds and stages the current host release `sage-ls` binary, verifies generated assets and
-package contents, then writes `dist/sage-vscode-extension-0.2.0-<target>.vsix`. Use `-- --target darwin-arm64`
-(or another supported target) to select explicitly. The platform workflow builds six native binaries and eight VSIX
-variants including Alpine aliases; only macOS arm64 has been verified locally. See the
-[continuation audit](docs/process/runtime-audit-2026-11-17.md) for verification and outstanding production milestones.
-
-`npm run doctor:mac` (retained command name) checks the current host package, staged Rust language server, VS Code CLI, an importable Sage runtime,
-and the Sage source root before you open a workspace. A source checkout that prints its version but cannot import
-`sage.all` is reported as a warning instead of being treated as a usable runtime. Use `-- --json` for a machine-readable
-report or `-- --strict` to fail when required packaged artifacts are missing.
-
-`npm run configure:workspace -- --workspace /path/to/project --profile auto` writes cross-platform VS Code settings for
-Sage-heavy Python, `.sage`, mixed research, or Cython projects. Add `-- --sage /path/to/sage --source-root /path/to/sage/src`
-when Sage is not on `PATH`.
-
-`npm run test:extension-host` should be used when the local machine can launch the desktop VS Code app.
-`npm run debug:web` starts the browser workbench surface used by MCP/Browser Use inspection.
-
-The VSIX package root includes its own `README.md`, `CHANGELOG.md`, and `LICENSE`.
-`npm run test:vsix-contents` verifies these release artifacts together with runtime resources.
-`npm run test:vsix-package` verifies the generated VSIX archive structure, production dependency closure,
-content-type coverage, entry CRCs, compression and size limits, normalized file modes, repeated-build determinism, and
-that the packaged Rust binary does not expose build-machine paths.
-`npm run test:vsix-install` uses the VS Code CLI, when available, to install the generated VSIX into temporary user-data
-and extension directories without opening the desktop app.
-
-`npm run cache:status` inventories the root-aware Rust SQLite caches.
-`npm run cache:prune:dry-run` previews old-cache cleanup.
-Actual deletion requires:
-
-```bash
-node scripts/cache-maintenance.mjs --prune --max-age-days 30 --yes
-```
-
-`npm run clean:dry-run` previews macOS local build and test artifacts that can be removed after packaging or validation.
-Use `npm run clean -- --yes` to remove those artifacts.
-Add `--deps` only when you also want to remove `node_modules` and local virtualenvs.
-
-For manual GUI smoke testing, run `npm run dev:vscode:smoke`, press `F5`, and verify the new
-`[Extension Development Host]` window shows `.sage` files as `SageMath` with a left status-bar item beginning `Sage:`.
-If `.sage` opens as `Plain Text`, close that normal VS Code window and relaunch from the repository with `F5`.
-
-## Known Deferred Work
-
-1. Sign and publish native Rust binaries for marketplace-style distribution.
-2. Add notebook and kernel surfaces.
+- No notebook or Jupyter kernel integration yet.
+- Packages are distributed through GitHub releases only; they are not signed or published to the Marketplace.

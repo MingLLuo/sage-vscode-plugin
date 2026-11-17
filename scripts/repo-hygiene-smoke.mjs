@@ -18,7 +18,7 @@ const requiredFiles = [
   "CONTRIBUTING.md",
   "SECURITY.md",
   "SUPPORT.md",
-  "docs/process/ci-and-release-gates.md",
+  "docs/developer-guide.md",
   ".github/workflows/ci.yml",
   ".github/pull_request_template.md",
   ".github/ISSUE_TEMPLATE/config.yml",
@@ -264,7 +264,6 @@ pushCheck("support guide references docs and index status", support.includes("Sa
 const docs = [
   readText("README.md"),
   readText("CONTRIBUTING.md"),
-  readText("docs/process/ci-and-release-gates.md"),
   readText("docs/developer-guide.md"),
 ].join("\n");
 for (const expected of ["configure:workspace", "doctor:mac", "export:reference", "test:reference-export", "test:repo-hygiene", "SECURITY.md", "SUPPORT.md", ".gitattributes", ".editorconfig"]) {
@@ -285,8 +284,6 @@ for (const relativePath of [
   "SECURITY.md",
   "docs/developer-guide.md",
   "docs/install-and-configure.md",
-  "docs/plugin-completeness.md",
-  "docs/process/ci-and-release-gates.md",
   "docs/design/rust-lsp-v2.md",
   "packages/extension-core/README.md",
   "packages/extension-core/CHANGELOG.md",
