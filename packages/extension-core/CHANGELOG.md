@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- The language server logs every request that takes 1 s or more to the **Sage Language Server** output (method,
+  file:line:column, duration). With `sage.logging.level` set to `debug` it logs every request.
+
 ## 0.2.0 - 2026-11-17
 
 ### Highlights
