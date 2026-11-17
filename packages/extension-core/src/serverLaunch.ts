@@ -15,6 +15,7 @@ export interface LanguageServerLaunchInput {
   environment?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   arch?: string;
+  developmentMode?: boolean;
   exists?: (candidate: string) => boolean;
 }
 
@@ -25,23 +26,20 @@ export function buildLanguageServerLaunch(
   const platform = input.platform ?? process.platform;
   const configuredRust = input.languageServerRustPath.trim();
 
+  if (configuredRust && configuredRust !== "auto") {
+    return { command: configuredRust, args: [] };
+  }
   const environmentOverride = environment.SAGE_LS_PATH;
   if (environmentOverride) {
     return { command: environmentOverride, args: [] };
   }
-
-  if (configuredRust && configuredRust !== "auto") {
-    return { command: configuredRust, args: [] };
-  }
-
-  const localRustBinary = resolveLocalRustLanguageServer(input, platform);
-  if (localRustBinary) {
-    return { command: localRustBinary, args: [] };
-  }
-
   const packagedRustBinary = resolvePackagedRustLanguageServer(input, platform, input.arch ?? process.arch);
   if (packagedRustBinary) {
     return { command: packagedRustBinary, args: [] };
+  }
+  if (input.developmentMode) {
+    const localRustBinary = resolveLocalRustLanguageServer(input, platform);
+    if (localRustBinary) return { command: localRustBinary, args: [] };
   }
 
   return { command: platform === "win32" ? "sage-ls.exe" : "sage-ls", args: [] };
@@ -75,12 +73,12 @@ export function resolvePackagedRustLanguageServer(
   platform: NodeJS.Platform = process.platform,
   arch: string = process.arch,
 ): string | undefined {
-  if (!input.extensionPath || platform !== "darwin") {
+  if (!input.extensionPath || !["darwin", "linux", "win32"].includes(platform)) {
     return undefined;
   }
 
   const exists = input.exists ?? fs.existsSync;
-  const executable = "sage-ls";
+  const executable = platform === "win32" ? "sage-ls.exe" : "sage-ls";
   const platformDirectory = `${platform}-${arch}`;
   const candidate = path.resolve(input.extensionPath, "resources", "bin", platformDirectory, executable);
   return exists(candidate) ? candidate : undefined;

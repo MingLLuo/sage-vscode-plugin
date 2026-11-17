@@ -1,11 +1,10 @@
-import { withOperationTimeout } from "./boundedOperation";
-import type { StartableLanguageClient } from "./languageClientOperations";
-
+import { settleAndStopLanguageClient } from "./languageClientShutdown";
+import { isPermanentStartError } from "./serverStartup";
+import { stopLanguageClientWithTimeout, type StartableLanguageClient } from "./languageClientOperations";
 export interface LanguageClientLifecycleHooks {
   shouldAutoRestartOnClose(): boolean;
   onClose(event: { managedShutdown: boolean }): void;
 }
-
 export interface LanguageClientLifecycleSnapshot {
   launchCount: number;
   managedCloseCount: number;
@@ -29,7 +28,7 @@ export interface LanguageClientLifecycleControllerOptions<TClient extends Starta
   startClient(client: TClient): Promise<void>;
   stopClient(client: TClient, label: string): Promise<void>;
   beforeRestart(): void;
-  beforeStart(): Promise<void>;
+  beforeStart(signal: AbortSignal): Promise<void>;
   canRun(): boolean;
   shouldAutoStart(): boolean;
   onRuntimeUnavailable(): void;
@@ -54,6 +53,7 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
   private managedCloseCount = 0;
   private unexpectedCloseCount = 0;
   private deactivating = false;
+  private startupAbort: AbortController | undefined;
   private slowNoticeTimer: ReturnType<typeof setTimeout> | undefined;
   private slowNoticeShown = false;
   private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
@@ -155,43 +155,22 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
 
   async deactivate(): Promise<void> {
     this.deactivating = true;
+    this.startupAbort?.abort();
     this.clearRecoveryTimer();
     this.restartQueued = false;
     this.clearSlowStartNotice();
-    const operation = this.currentOperation;
-    if (operation) {
-      try {
-        await withOperationTimeout(
-          operation,
-          this.options.shutdownTimeoutMs,
-          "Sage language client operation during shutdown",
-        );
-      } catch {
-        // Continue with the best available client handle. A status request or
-        // startup handshake must never keep the extension host alive forever.
-      }
-    }
-
-    const activeClient = this.client ?? this.pendingClient;
-    if (!activeClient) {
-      return;
-    }
-    this.client = undefined;
-    this.pendingClient = undefined;
-    this.managedShutdown = true;
-    this.managedCloseCount += 1;
-    try {
-      await withOperationTimeout(
-        Promise.resolve().then(() => activeClient.stop()),
-        this.options.shutdownTimeoutMs,
-        "Sage language client stop",
-      );
-    } catch {
-      // VS Code is already deactivating; bounded shutdown is preferable to
-      // waiting indefinitely for a failed child-process transport.
-    } finally {
-      this.managedShutdown = false;
-    }
+    await settleAndStopLanguageClient({
+      operation: this.currentOperation,
+      timeoutMs: this.options.shutdownTimeoutMs,
+      takeClient: () => {
+        const active = this.client ?? this.pendingClient;
+        this.client = undefined;
+        this.pendingClient = undefined;
+        if (active) { this.managedShutdown = true; this.managedCloseCount += 1; }
+        return active;
+      },
+      afterStop: () => { this.managedShutdown = false; },
+    });
   }
 
   private async runRestartLoop(): Promise<void> {
@@ -229,12 +208,12 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
       }
 
       try {
-        await this.options.beforeStart();
+        this.startupAbort = new AbortController();
+        await this.options.beforeStart(this.startupAbort.signal);
         if (this.deactivating) {
           break;
         }
-        let nextClient: TClient;
-        nextClient = this.options.createClient({
+        const nextClient: TClient = this.options.createClient({
           shouldAutoRestartOnClose: () => (
             this.client === nextClient
             && !this.managedShutdown
@@ -277,11 +256,18 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
           launchCount: this.launchCount,
         });
       } catch (error) {
+        const failedClient = this.client;
         this.client = undefined;
         this.pendingClient = undefined;
+        if (failedClient) {
+          this.managedCloseCount += 1;
+          await stopLanguageClientWithTimeout(failedClient, this.options.shutdownTimeoutMs,
+            "Sage language client cleanup after failed start").catch(() => undefined);
+        }
         if (this.deactivating) {
           continue;
         }
+        if (isPermanentStartError(error)) { this.recoveryStopped = true; this.restartQueued = false; }
         this.options.onStartError(error);
         this.scheduleRecovery();
       }

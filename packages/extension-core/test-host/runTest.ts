@@ -29,6 +29,30 @@ async function main(): Promise<void> {
   let completedSuccessfully = false;
 
   try {
+    const failureWorkspace = path.join(tempRoot, "startup-failure");
+    await fs.cp(firstRunWorkspacePath, failureWorkspace, { recursive: true });
+    await fs.mkdir(path.join(failureWorkspace, ".vscode"));
+    await fs.writeFile(path.join(failureWorkspace, ".vscode", "settings.json"), JSON.stringify({
+      "sage.languageServer.rustPath": path.join(tempRoot, "missing-sage-ls"),
+      "sage.analysis.enableRuntimeIntrospection": false,
+    }));
+    await runExtensionHostSuite({
+      vscodeExecutablePath, extensionDevelopmentPath, extensionTestsPath,
+      workspacePath: failureWorkspace,
+      userDataDir: path.join(tempRoot, "userdata-startup-failure"),
+      extensionsDir: path.join(tempRoot, "extensions-startup-failure"), mode: "startup-failure",
+    });
+
+    const looseFile = path.join(tempRoot, "standalone.sage");
+    await fs.writeFile(looseFile, "def standalone(x):\n    return x + 1\nstandalone(2)\n");
+    await runExtensionHostSuite({
+      vscodeExecutablePath, extensionDevelopmentPath, extensionTestsPath,
+      workspacePath: looseFile,
+      userDataDir: path.join(tempRoot, "userdata-no-folder"),
+      extensionsDir: path.join(tempRoot, "extensions-no-folder"),
+      mode: "no-folder",
+    });
+
     await runExtensionHostSuite({
       vscodeExecutablePath,
       extensionDevelopmentPath,
@@ -88,7 +112,7 @@ async function runExtensionHostSuite(options: {
   workspacePath: string;
   userDataDir: string;
   extensionsDir: string;
-  mode: "first-run" | "plain-python" | "smoke" | "multi-root";
+  mode: "first-run" | "plain-python" | "smoke" | "multi-root" | "no-folder" | "startup-failure";
   nativeSage?: { sourceRoot?: string; executable?: string };
   externalSageSourceRoot?: string;
 }): Promise<void> {

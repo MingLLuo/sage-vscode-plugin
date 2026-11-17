@@ -11,6 +11,7 @@ interface LifecycleSnapshot {
   restartQueued: boolean;
   operationInFlight: boolean;
   hasClient: boolean;
+  recoveryStopped?: boolean;
 }
 
 interface SageContextSnapshot {
@@ -55,6 +56,8 @@ export async function run(): Promise<void> {
 }
 
 async function runSuite(): Promise<void> {
+  if (process.env.SAGE_TEST_HOST_MODE === "startup-failure") { await runStartupFailureSmoke(); return; }
+  if (process.env.SAGE_TEST_HOST_MODE === "no-folder") { await runNoFolderSmoke(); return; }
   if (process.env.SAGE_TEST_HOST_MODE === "first-run") {
     await runFirstRunSmoke();
     return;
@@ -1251,4 +1254,51 @@ function flattenSymbolNames(
 
 async function delay(milliseconds: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function runNoFolderSmoke(): Promise<void> {
+  assert.equal(vscode.workspace.workspaceFolders?.length ?? 0, 0);
+  const uri = vscode.Uri.file(process.env.SAGE_TEST_WORKSPACE!);
+  const document = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(document);
+  const extension = vscode.extensions.getExtension("sage-vscode.sage-vscode-extension");
+  assert.ok(extension);
+  await extension.activate();
+  await waitForCommand("sage.__test.getLifecycleSnapshot");
+  const deadline = Date.now() + 20_000;
+  let symbols: vscode.DocumentSymbol[] | undefined;
+  while (Date.now() < deadline) {
+    symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>("vscode.executeDocumentSymbolProvider", uri);
+    if (symbols?.some(symbol => symbol.name === "standalone")) break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.ok(symbols?.some(symbol => symbol.name === "standalone"), "a standalone Sage file must have language features without a workspace folder");
+  const hover = await vscode.commands.executeCommand<vscode.Hover[]>("vscode.executeHoverProvider", uri, new vscode.Position(2, 3));
+  assert.ok(hover?.length, "standalone Sage hover should respond");
+  const lifecycle = await vscode.commands.executeCommand<LifecycleSnapshot>("sage.__test.getLifecycleSnapshot");
+  assert.equal(lifecycle?.hasClient, true);
+}
+
+
+async function runStartupFailureSmoke(): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  assert.ok(folder);
+  const uri = vscode.Uri.joinPath(folder.uri, "hello.sage");
+  await vscode.window.showTextDocument(await vscode.workspace.openTextDocument(uri));
+  await vscode.extensions.getExtension("sage-vscode.sage-vscode-extension")!.activate();
+  await waitForCommand("sage.__test.getLifecycleSnapshot");
+  await assertEventually(async () => {
+    const state = await lifecycleSnapshot("sage.__test.getLifecycleSnapshot");
+    assert.equal(state.recoveryStopped, true, "an invalid executable must not enter a restart loop");
+    assert.equal(state.launchCount, 0, "preflight must reject it before creating an LSP client");
+  }, 15_000);
+  await vscode.commands.executeCommand("notifications.clearAll");
+  await vscode.workspace.getConfiguration("sage", folder.uri).update("languageServer.rustPath", "auto", vscode.ConfigurationTarget.Workspace);
+  await assertEventually(async () => {
+    const symbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>("vscode.executeDocumentSymbolProvider", uri);
+    assert.ok(symbols?.some(symbol => symbol.name === "square"));
+    const state = await lifecycleSnapshot("sage.__test.getLifecycleSnapshot");
+    assert.equal(state.hasClient, true);
+    assert.equal(state.recoveryStopped, false);
+  }, 30_000);
 }

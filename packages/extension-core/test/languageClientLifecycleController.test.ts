@@ -1,3 +1,4 @@
+import { LanguageServerLaunchError } from "../src/serverStartup";
 import assert from "node:assert/strict";
 import test from "node:test";
 
@@ -53,6 +54,8 @@ function createHarness(options: {
   immediateStart?: boolean;
   deferredStop?: boolean;
   shutdownTimeoutMs?: number;
+  afterStarted?: () => Promise<void>;
+  beforeStart?: (signal: AbortSignal) => Promise<void>;
 } = {}): Harness {
   const clients: FakeClient[] = [];
   const hooks: LanguageClientLifecycleHooks[] = [];
@@ -93,11 +96,11 @@ function createHarness(options: {
       await client.stop();
     },
     beforeRestart: () => { events.push("before-restart"); },
-    beforeStart: async () => { events.push("before-start"); },
+    beforeStart: options.beforeStart ?? (async () => { events.push("before-start"); }),
     canRun: () => canRun,
     shouldAutoStart: () => shouldAutoStart,
     onRuntimeUnavailable: () => { runtimeUnavailable += 1; },
-    afterStarted: async () => undefined,
+    afterStarted: options.afterStarted ?? (async () => undefined),
     onStateChanged: () => undefined,
     onSlowStartNotice: (reason) => slowNotices.push(reason),
     onStartError: (error) => errors.push(error),
@@ -366,4 +369,46 @@ test("startup and deactivation cannot stop the same pending client twice", async
 
   harness.stops[0].resolve();
   await harness.controller.operation;
+});
+
+test("a post-start hook failure stops the client before scheduling recovery", async () => {
+  const failure = new Error("status request failed");
+  const harness = createHarness({ immediateStart: true, afterStarted: async () => { throw failure; } });
+  await harness.controller.start();
+  assert.equal(harness.clients[0].stopCalls, 1);
+  assert.equal(harness.controller.activeClient, undefined);
+  assert.deepEqual(harness.errors, [failure]);
+  await harness.controller.deactivate();
+});
+
+
+test("permanent launch failures stop recovery until a manual retry", async () => {
+  let fail = true;
+  const harness = createHarness({ immediateStart: true, beforeStart: async () => {
+    if (fail) throw new LanguageServerLaunchError("Executable not found", "/missing/sage-ls");
+  } });
+  await harness.controller.start();
+  assert.equal(harness.controller.hasStoppedRecovery, true);
+  assert.equal(harness.clients.length, 0);
+  await harness.controller.start();
+  assert.equal(harness.errors.length, 1);
+  fail = false;
+  await harness.controller.manualRestart();
+  assert.equal(harness.controller.hasStoppedRecovery, false);
+  assert.equal(harness.clients.length, 1);
+  await harness.controller.deactivate();
+});
+
+test("deactivation aborts a pending startup probe", async () => {
+  let aborted = false;
+  const harness = createHarness({ beforeStart: (signal) => new Promise<void>((_resolve, reject) => {
+    signal.addEventListener("abort", () => { aborted = true; reject(new Error("cancelled")); }, { once: true });
+  }) });
+  const start = harness.controller.start();
+  await flushAsyncWork();
+  await harness.controller.deactivate();
+  await start;
+  assert.equal(aborted, true);
+  assert.equal(harness.clients.length, 0);
+  assert.equal(harness.errors.length, 0);
 });

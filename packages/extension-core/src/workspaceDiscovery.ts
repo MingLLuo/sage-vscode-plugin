@@ -1,4 +1,5 @@
-import { execFile, execFileSync } from "node:child_process";
+import { readProcessProbe } from "./processProbe";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,6 +19,7 @@ export interface SourceRootDiscoveryOptions {
 }
 
 export interface AsyncSourceRootDiscoveryOptions {
+  signal?: AbortSignal;
   exists?: (candidate: string) => boolean;
   listDir?: (candidate: string) => string[];
   interpreterPath?: string;
@@ -117,6 +119,7 @@ export async function discoverSourceRootsAsync(
       exists,
       listDir: options.listDir,
       runtimeProbe: options.runtimeProbe,
+      signal: options.signal,
     },
   );
 
@@ -188,7 +191,7 @@ export function discoverInterpreterSourceRoots(
 export async function discoverInterpreterSourceRootsAsync(
   interpreterPath: string,
   interpreterArgs: readonly string[],
-  options: Pick<AsyncSourceRootDiscoveryOptions, "exists" | "listDir" | "runtimeProbe"> = {},
+  options: Pick<AsyncSourceRootDiscoveryOptions, "exists" | "listDir" | "runtimeProbe" | "signal"> = {},
 ): Promise<string[]> {
   const exists = options.exists ?? fs.existsSync;
   const listDir = options.listDir ?? defaultListDir;
@@ -198,7 +201,7 @@ export async function discoverInterpreterSourceRootsAsync(
   }
 
   const heuristicRoots = discoverHeuristicInterpreterRoots(interpreterPath, exists, listDir);
-  const runtimeProbe = options.runtimeProbe === false ? async () => [] : (options.runtimeProbe ?? probeRuntimeSourceRootsAsync);
+  const runtimeProbe = options.runtimeProbe === false ? async () => [] : (options.runtimeProbe ?? ((command, args) => probeRuntimeSourceRootsAsync(command, args, options.signal)));
   const runtimeRoots = (await runtimeProbe(interpreterPath, interpreterArgs))
     .filter((candidate) => exists(path.join(candidate, "sage")));
 
@@ -326,30 +329,15 @@ function probeRuntimeSourceRoots(interpreterPath: string, interpreterArgs: reado
   }
 }
 
-function probeRuntimeSourceRootsAsync(interpreterPath: string, interpreterArgs: readonly string[]): Promise<string[]> {
+async function probeRuntimeSourceRootsAsync(interpreterPath: string, interpreterArgs: readonly string[], signal?: AbortSignal): Promise<string[]> {
   const invocation = buildRuntimeProbeInvocation(interpreterPath, interpreterArgs);
-  if (!invocation) {
-    return Promise.resolve([]);
-  }
-
-  return new Promise((resolve) => {
-    execFile(
-      invocation.command,
-      invocation.args,
-      {
-        encoding: "utf-8",
-        timeout: 15_000,
-        maxBuffer: 256 * 1024,
-      },
-      (error, stdout) => {
-        if (error) {
-          resolve([]);
-          return;
-        }
-        resolve(parseRuntimeProbeOutput(stdout));
-      },
-    );
-  });
+  if (!invocation) return [];
+  try {
+    const result = await readProcessProbe(invocation.command, invocation.args, {
+      signal, timeoutMs: 15_000, maxBytes: 256 * 1024,
+    });
+    return result.code === 0 ? parseRuntimeProbeOutput(result.stdout) : [];
+  } catch { return []; }
 }
 
 function buildRuntimeProbeInvocation(

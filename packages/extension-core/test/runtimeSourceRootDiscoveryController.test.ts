@@ -29,6 +29,7 @@ async function flushAsyncWork(): Promise<void> {
 
 function createHarness() {
   const discoveries: Array<Deferred<readonly string[]>> = [];
+  const signals: AbortSignal[] = [];
   const events: RuntimeSourceRootDiscoveryEvent[] = [];
   const reasons: string[] = [];
   let startupRoots: readonly string[] = ["/sage/src"];
@@ -53,7 +54,8 @@ function createHarness() {
       }
       return startupRoots;
     },
-    discoverRuntimeRoots: async () => {
+    discoverRuntimeRoots: async (_snapshot, _roots, signal) => {
+      signals.push(signal);
       const discovery = deferred<readonly string[]>();
       discoveries.push(discovery);
       return discovery.promise;
@@ -65,6 +67,7 @@ function createHarness() {
   return {
     controller,
     discoveries,
+    signals,
     events,
     reasons,
     advance: (milliseconds: number) => { now += milliseconds; },
@@ -268,4 +271,21 @@ test("cached Sage roots are available before the runtime probe finishes and new 
   await operation;
   assert.deepEqual(saved, [["/cached/sage/src", "/new/sage/src"]]);
   assert.deepEqual(controller.discoveredRoots, ["/cached/sage/src", "/new/sage/src"]);
+});
+
+
+test("invalidation and deactivation abort the active discovery signal", async () => {
+  const harness = createHarness();
+  const first = harness.controller.schedule("activation");
+  assert.equal(harness.signals[0].aborted, false);
+  const replacement = harness.controller.invalidateAndSchedule("changed");
+  assert.equal(harness.signals[0].aborted, true);
+  harness.discoveries[0].resolve([]);
+  await flushAsyncWork();
+  assert.equal(harness.signals[1].aborted, false);
+  const stopping = harness.controller.beginDeactivation();
+  assert.equal(harness.signals[1].aborted, true);
+  harness.discoveries[1].resolve([]);
+  await Promise.all([first, replacement, stopping]);
+  assert.deepEqual(harness.events, []);
 });

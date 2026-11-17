@@ -41,9 +41,10 @@ export function readSettings(scope?: vscode.WorkspaceFolder | vscode.Uri): SageS
   };
 }
 
-function configurationScope(scope?: vscode.WorkspaceFolder | vscode.Uri): vscode.Uri | undefined {
+function configurationScope(scope?: vscode.WorkspaceFolder | vscode.Uri): vscode.Uri | null {
   if (scope instanceof vscode.Uri) {
     return scope;
   }
-  return scope?.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri;
+  return scope?.uri ?? vscode.workspace.workspaceFolders?.[0]?.uri
+    ?? vscode.window.activeTextEditor?.document.uri ?? null;
 }

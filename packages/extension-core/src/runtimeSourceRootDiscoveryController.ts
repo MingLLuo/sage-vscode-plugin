@@ -30,6 +30,7 @@ export interface RuntimeSourceRootDiscoveryControllerOptions {
   discoverRuntimeRoots(
     snapshot: RuntimeSourceRootDiscoverySnapshot,
     effectiveRoots: readonly string[],
+    signal: AbortSignal,
   ): Promise<readonly string[]>;
   onEvent(event: RuntimeSourceRootDiscoveryEvent): void;
   now?: () => number;
@@ -51,6 +52,7 @@ export class RuntimeSourceRootDiscoveryController {
   private activeKey: string | undefined;
   private generation = 0;
   private deactivating = false;
+  private activeAbort: AbortController | undefined;
   private readonly now: () => number;
   private readonly resolvePath: (root: string) => string;
   private readonly snapshotKey: (snapshot: RuntimeSourceRootDiscoverySnapshot) => string;
@@ -88,6 +90,7 @@ export class RuntimeSourceRootDiscoveryController {
   invalidateAndSchedule(reason: string): Promise<void> | undefined {
     this.roots = [];
     this.generation += 1;
+    this.activeAbort?.abort();
     this.completedKeys.clear();
     this.pendingDiscoveries.clear();
     if (this.deactivating) {
@@ -103,6 +106,7 @@ export class RuntimeSourceRootDiscoveryController {
   beginDeactivation(): Promise<void> | undefined {
     this.deactivating = true;
     this.generation += 1;
+    this.activeAbort?.abort();
     this.pendingDiscoveries.clear();
     return this.currentOperation;
   }
@@ -169,9 +173,11 @@ export class RuntimeSourceRootDiscoveryController {
       const startupRoots = this.options
         .discoverStartupRoots(discovery.snapshot, effectiveRoots)
         .map((root) => this.resolvePath(root));
+      this.activeAbort = new AbortController();
       const discoveredRoots = await this.options.discoverRuntimeRoots(
         discovery.snapshot,
         effectiveRoots,
+        this.activeAbort.signal,
       );
       if (this.deactivating || discoveryGeneration !== this.generation) {
         return false;

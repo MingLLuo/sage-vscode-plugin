@@ -1,22 +1,23 @@
 # Packaged Rust Language Server Binaries
 
-Local macOS release builds may place `sage-ls` binaries under this directory:
+The packager supports these native binary directories:
 
-- `darwin-arm64/sage-ls`
-- `darwin-x64/sage-ls`
+- `darwin-arm64/sage-ls`, `darwin-x64/sage-ls`
+- `linux-arm64/sage-ls`, `linux-x64/sage-ls` (musl, also used by the corresponding Alpine VSIX)
+- `win32-arm64/sage-ls.exe`, `win32-x64/sage-ls.exe`
 
-The extension still prefers `SAGE_LS_PATH`, an explicit `sage.languageServer.rustPath`, and repository-local
-`target/debug` or `target/release` builds during development. Packaged macOS binaries are used before falling back to
-`sage-ls` on `PATH`, so local VSIX users do not need Rust or Cargo when a matching binary is included.
+The launch order is explicit `sage.languageServer.rustPath`, `SAGE_LS_PATH`, matching packaged binary,
+repository `target/debug` or `target/release` only in development mode, then `sage-ls` on `PATH`.
 
-Windows and Linux packaging are not release targets for this preview. Some scripts retain defensive platform handling for
-tests, but the maintained install path is macOS.
-
-Build and stage the current host binary with:
+Build the current host target with `npm run package:vsix`, or select a target explicitly:
 
 ```bash
-npm run package:rust-binary
+npm run package:vsix -- --target darwin-arm64
 ```
 
-The staging script also writes `sage-ls.sha256` and `sage-ls.meta.json` next to the binary so release reviews can confirm
-which build was included in the VSIX.
+Cross-compilation requires the Rust target and native compiler/linker. CI uses six native runners to produce eight VSIX
+platform identifiers: macOS, Linux, Alpine, and Windows, each for x64 and arm64. Each VSIX contains only its own binary,
+SHA-256, build metadata, and generated third-party notices. Windows uses static CRT; Linux uses musl and mimalloc.
+
+macOS arm64 packaging is locally verified. Other platforms require a successful run of the new platform workflow before
+being considered supported release artifacts. See `docs/process/runtime-audit-2026-11-17.md` in the repository.

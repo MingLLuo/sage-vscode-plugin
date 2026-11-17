@@ -14,6 +14,7 @@ export function activeWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
 }
 
 export function workspaceConfigurationTarget(): vscode.ConfigurationTarget {
+  if (!vscode.workspace.workspaceFolders?.length) return vscode.ConfigurationTarget.Global;
   return (vscode.workspace.workspaceFolders?.length ?? 0) > 1
     ? vscode.ConfigurationTarget.WorkspaceFolder
     : vscode.ConfigurationTarget.Workspace;

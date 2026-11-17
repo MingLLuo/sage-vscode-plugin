@@ -92,12 +92,13 @@ test("buildLanguageServerLaunch uses an explicit Rust language server path", () 
   });
 });
 
-test("buildLanguageServerLaunch prefers the repository-local Rust binary in auto mode", () => {
+test("buildLanguageServerLaunch uses repository-local Rust binaries in development mode", () => {
   assert.deepEqual(buildLanguageServerLaunch({
     interpreterPath: "/opt/sage/bin/sage",
     interpreterArgs: [],
     languageServerRustPath: "auto",
     repositoryRoot: "/workspace/plugin",
+    developmentMode: true,
     platform: "linux",
     exists: (candidate) => candidate === "/workspace/plugin/target/debug/sage-ls",
   }), {
@@ -135,7 +136,7 @@ test("buildLanguageServerLaunch uses a packaged Rust binary before PATH fallback
   });
 });
 
-test("resolvePackagedRustLanguageServer ignores non-macOS packaged binary paths", () => {
+test("resolvePackagedRustLanguageServer resolves Windows executables", () => {
   assert.equal(resolvePackagedRustLanguageServer(
     {
       extensionPath: "/extensions/sage",
@@ -143,7 +144,7 @@ test("resolvePackagedRustLanguageServer ignores non-macOS packaged binary paths"
     },
     "win32",
     "x64",
-  ), undefined);
+  ), "/extensions/sage/resources/bin/win32-x64/sage-ls.exe");
 });
 
 test("resolveLocalRustLanguageServer finds debug before release builds", () => {
@@ -154,4 +155,24 @@ test("resolveLocalRustLanguageServer finds debug before release builds", () => {
     },
     "linux",
   ), "/workspace/plugin/target/debug/sage-ls");
+});
+
+for (const platform of ["darwin", "linux", "win32"] as const) {
+  for (const arch of ["arm64", "x64"]) {
+    test(`packaged ${platform}-${arch} binary wins over workspace build artifacts`, () => {
+      const executable = platform === "win32" ? "sage-ls.exe" : "sage-ls";
+      assert.equal(buildLanguageServerLaunch({
+        interpreterPath: "sage", interpreterArgs: [], languageServerRustPath: "auto",
+        extensionPath: "/extensions/sage", repositoryRoot: "/workspace", developmentMode: true,
+        environment: {}, platform, arch, exists: () => true,
+      }).command, `/extensions/sage/resources/bin/${platform}-${arch}/${executable}`);
+    });
+  }
+}
+
+test("production does not run a workspace target/debug executable", () => {
+  assert.equal(buildLanguageServerLaunch({
+    interpreterPath: "sage", interpreterArgs: [], languageServerRustPath: "auto",
+    repositoryRoot: "/workspace", environment: {}, platform: "linux", exists: () => true,
+  }).command, "sage-ls");
 });

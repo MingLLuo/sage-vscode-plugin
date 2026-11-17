@@ -54,11 +54,24 @@ export function rustIndexCacheDir(context: vscode.ExtensionContext, folder?: vsc
 }
 
 export interface LanguageClientLifecycle {
+  serverLaunch?: ReturnType<typeof buildLanguageServerLaunch>;
   fileSystemWatcher: vscode.FileSystemWatcher;
   shouldAutoRestartOnClose?: () => boolean;
   onClose?: (event: { managedShutdown: boolean; shouldRestart: boolean }) => void;
   runtimeDiscoveredSourceRoots?: readonly string[];
   workspaceFolder?: vscode.WorkspaceFolder;
+}
+
+export function languageServerLaunch(context: vscode.ExtensionContext, folder?: vscode.WorkspaceFolder) {
+  const settings = readSettings(folder);
+  return buildLanguageServerLaunch({
+    interpreterPath: settings.interpreterPath,
+    interpreterArgs: settings.interpreterArgs,
+    languageServerRustPath: settings.languageServerRustPath,
+    extensionPath: context.extensionPath,
+    repositoryRoot: path.resolve(context.extensionPath, "../.."),
+    developmentMode: context.extensionMode !== vscode.ExtensionMode.Production,
+  });
 }
 
 export function createLanguageClient(
@@ -88,13 +101,7 @@ export function createLanguageClient(
     sourceRoots: effectiveSourceRoots,
     extraPaths: resolvedExtraPaths,
   };
-  const launch = buildLanguageServerLaunch({
-    interpreterPath: settings.interpreterPath,
-    interpreterArgs: settings.interpreterArgs,
-    languageServerRustPath: settings.languageServerRustPath,
-    extensionPath: context.extensionPath,
-    repositoryRoot: path.resolve(context.extensionPath, "../.."),
-  });
+  const launch = lifecycle.serverLaunch ?? languageServerLaunch(context, workspaceFolder);
   logToChannel(
     outputChannel,
     settings.loggingLevel,

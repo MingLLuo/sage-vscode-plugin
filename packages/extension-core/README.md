@@ -54,7 +54,7 @@ are intentionally limited.
 ## Important Settings
 
 - `sage.interpreter.path`: Sage executable for run commands, REPL, and runtime documentation fallback.
-- `sage.languageServer.rustPath`: Rust language-server binary path; `auto` prefers packaged or local binaries.
+- `sage.languageServer.rustPath`: Rust language-server binary path; `auto` prefers packaged binaries; repository builds are considered only in development mode.
 - `sage.analysis.mode`: Workspace-symbol search breadth: `light` (50), `default` (200), or `full` (1000); navigation semantics and the dedicated analysis switches are unchanged.
 - `sage.analysis.sourceRoots`: Sage or project source roots to index.
 - `sage.analysis.extraPaths`: Extra import/search roots.
@@ -79,8 +79,8 @@ the query is a cold start or warm query. For navigation bugs, include the file t
 
 ## Preview Limitations
 
-- Packaged native binaries are maintained for local macOS use; cross-platform signing, marketplace upload automation, and
-  non-macOS release binaries are deferred.
+- macOS arm64 native packaging is locally verified. Linux/Alpine and Windows packaging is implemented but awaits native CI
+  verification. Signing and Marketplace upload remain outside this internal preview.
 - Notebook and kernel UX are not part of this preview.
 - Pyright sidecar integration and deeper `.sage.py` overlay behavior remain future work.
 

@@ -212,12 +212,13 @@ test("release scripts cover packaged Rust binaries and real Sage smoke gates", (
   assert.match(packagedRustBuilder, /path\.join\(__dirname, "package-rust-binary\.mjs"\)/);
 
   const packageVsix = rootPackage.scripts?.["package:vsix"] ?? "";
-  assert.match(packageVsix, /npm run check:package-toolchain/);
-  assert.match(packageVsix, /npm run build/);
-  assert.match(packageVsix, /npm run test:generated-assets/);
-  assert.match(packageVsix, /npm run package:rust-binary/);
-  assert.match(packageVsix, /npm run test:vsix-contents/);
-  assert.match(packageVsix, /scripts\/package-vsix\.mjs/);
+  assert.match(packageVsix, /scripts\/build-vsix\.mjs/);
+  const orchestration = fs.readFileSync(path.join(repositoryRoot, "scripts/build-vsix.mjs"), "utf8");
+  for (const stage of ["check:package-toolchain", "build", "test:generated-assets", "package:rust-binary", "test:vsix-contents"]) {
+    assert.ok(orchestration.includes(`"${stage}"`), `packaging must run ${stage}`);
+  }
+  assert.match(orchestration, /SAGE_VSIX_TARGET: target.name/);
+  assert.match(orchestration, /scripts\/package-vsix\.mjs/);
 
   const releaseGate = rootPackage.scripts?.["test:release"] ?? "";
   for (const expected of [
@@ -347,8 +348,8 @@ test("macOS CI gate is public-repository safe", () => {
   assert.match(workflow, /SAGE_PERF_PARSE_MS:\s*"3000"/);
   assert.match(workflow, /SAGE_PERF_REBUILD_INTERNAL_MS:\s*"3000"/);
   assert.match(workflow, /macos-package-compatibility:[\s\S]*?npm run package:vsix/);
-  assert.match(workflow, /dtolnay\/rust-toolchain@stable/);
-  assert.match(workflow, /toolchain:\s*"1\.92\.0"/);
+  assert.match(workflow, /run: rustup show/);
+  assert.doesNotMatch(workflow, /toolchain:\s*"[0-9]/);
   assert.match(workflow, /Swatinem\/rust-cache@v2/);
   assert.match(workflow, /cache-on-failure:\s*true/);
   assert.match(workflow, /cargo fetch --locked/);
