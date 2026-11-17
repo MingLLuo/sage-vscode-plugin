@@ -498,7 +498,8 @@ async function runMultiRootSmoke(): Promise<void> {
   const alphaSnapshot = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
   const betaStatus = await statusFor(beta);
   const betaSnapshot = await lifecycleSnapshot("sage.__test.awaitLanguageClientStable");
-  assert.notEqual(alphaStatus.cache_path, betaStatus.cache_path, "projects need separate index caches");
+  // Projects share one index database; rows stay scoped by source root (checked in statusFor).
+  assert.equal(alphaStatus.cache_path, betaStatus.cache_path, "projects with the same settings share one index database");
   assert.ok(alphaSnapshot.hasClient && betaSnapshot.hasClient);
 
   const betaPython = vscode.Uri.joinPath(beta.uri, "src", "demo.py");
@@ -809,12 +810,18 @@ async function verifyDocumentAndWorkspaceSymbols(workspaceUri: vscode.Uri): Prom
       "vscode.executeWorkspaceSymbolProvider",
       "PolynomialNotebook",
     )) ?? [];
-  assert.ok(
-    workspaceSymbols.some((entry) =>
+  if (
+    !workspaceSymbols.some((entry) =>
       entry.name === "PolynomialNotebook" && entry.location.uri.fsPath.endsWith("src/local_docs.py"),
-    ),
-    "expected Rust workspace symbols to include PolynomialNotebook from the local fixture module",
-  );
+    )
+  ) {
+    const returned = workspaceSymbols.map((entry) => `${entry.name}@${entry.location.uri.toString()}`).slice(0, 10);
+    const status = await vscode.commands.executeCommand("sage.showIndexStatus");
+    assert.fail(
+      "expected Rust workspace symbols to include PolynomialNotebook from the local fixture module; " +
+        `returned ${JSON.stringify(returned)}; index status ${JSON.stringify(status).slice(0, 1500)}`,
+    );
+  }
 }
 
 async function verifyNativeCythonDocumentSymbols(workspaceUri: vscode.Uri): Promise<void> {
