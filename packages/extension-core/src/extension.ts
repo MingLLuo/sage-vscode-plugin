@@ -86,6 +86,8 @@ import {
 } from "./workspaceConfigurator";
 import {
   activeWorkspaceFolder,
+  isLooseDocument,
+  looseDocumentDirectories,
   formatLoggedConfigurationValue,
   isUnregisteredConfigurationError,
   updateWorkspaceSettingsJson,
@@ -221,7 +223,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const selectActiveScope = (): void => {
     const key = vscode.window.activeTextEditor?.document.uri.scheme === SAGE_SOURCE_SCHEME && activeScope
       ? activeScope
-      : folderKey(activeWorkspaceFolder());
+      : isLooseDocument(vscode.window.activeTextEditor?.document.uri)
+        // A file outside every folder is served by the folder-less controller: no folder
+        // server's document selector covers it.
+        ? folderKey(undefined)
+        : folderKey(activeWorkspaceFolder());
     if (key === activeScope) {
       languageClientLifecycleController = controllers.get(key);
       return;
@@ -670,6 +676,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     languageServerStatusRefreshController?.schedule();
   };
 
+  const looseDirectoriesServed = new Map<string, readonly string[] | undefined>();
+  const rememberLooseDirectories = (scope: string): string[] | undefined => {
+    const directories = looseDocumentDirectories(isSageDocument);
+    looseDirectoriesServed.set(scope, directories);
+    return directories;
+  };
+  const restartLooseControllerForNewDirectory = (): void => {
+    const document = vscode.window.activeTextEditor?.document;
+    if (!document || !isLooseDocument(document.uri) || !isSageDocument(document)) return;
+    const controller = controllers.get(folderKey(undefined));
+    const served = looseDirectoriesServed.get(folderKey(undefined));
+    if (controller?.activeClient && !controller.operation && !served?.includes(path.dirname(document.uri.fsPath))) {
+      void controller.manualRestart();
+    }
+  };
+
   const createScopedController = (folder?: vscode.WorkspaceFolder): LanguageClientLifecycleController<LanguageClient> => {
     const scope = folderKey(folder);
     let controller: LanguageClientLifecycleController<LanguageClient>;
@@ -680,6 +702,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       fileSystemWatcher: languageServerFileWatcher,
       serverLaunch: verifiedLaunch,
       workspaceFolder: folder,
+      looseDocumentDirectories: folder ? undefined : rememberLooseDirectories(scope),
       shouldAutoRestartOnClose: hooks.shouldAutoRestartOnClose,
       runtimeDiscoveredSourceRoots: activeScope === scope ? [
         ...(runtimeSourceRootDiscoveryController?.discoveredRoots ?? []),
@@ -858,6 +881,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updateStatusBar();
       scheduleRuntimeSourceRootDiscovery("active-editor-change");
       selectActiveScope();
+      restartLooseControllerForNewDirectory();
       if (
         !languageClientLifecycleController?.activeClient
         && !languageClientLifecycleController?.operation
@@ -1075,7 +1099,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           });
           return;
         }
-        if (!vscode.workspace.workspaceFolders?.length) {
+        {
+          // The folder-less controller serves loose files even while folders are open.
           const controller = controllers.get(folderKey(undefined));
           if (controller?.snapshot().launchCount || controller?.operation || controller?.hasStoppedRecovery) void controller.manualRestart();
         }

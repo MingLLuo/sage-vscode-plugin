@@ -17,7 +17,7 @@ import {
   type DocumentationResponse,
   type DocumentationResult,
 } from "./documentationRequest";
-import { buildDocumentSelector } from "./documentSelector";
+import { buildDocumentSelector, buildLooseDocumentSelector, escapeGlobPath } from "./documentSelector";
 import { buildLanguageServerLaunch } from "./serverLaunch";
 import { buildSageSourceUri } from "./sageSourceView";
 import { shouldStopOnTransportErrors } from "./serverRestart";
@@ -60,6 +60,11 @@ export interface LanguageClientLifecycle {
   onClose?: (event: { managedShutdown: boolean; shouldRestart: boolean }) => void;
   runtimeDiscoveredSourceRoots?: readonly string[];
   workspaceFolder?: vscode.WorkspaceFolder;
+  /**
+   * Directories of open Sage files outside every workspace folder. Set only for the folder-less
+   * controller while folders are open; it then serves exactly these directories.
+   */
+  looseDocumentDirectories?: readonly string[];
 }
 
 export function languageServerLaunch(context: vscode.ExtensionContext, folder?: vscode.WorkspaceFolder) {
@@ -79,8 +84,10 @@ export function createLanguageClient(
   outputChannel: vscode.OutputChannel,
   lifecycle: LanguageClientLifecycle,
 ): LanguageClient {
-  const workspaceFolder = lifecycle.workspaceFolder ?? vscode.workspace.workspaceFolders?.[0];
-  const workspaceFolders = workspaceFolder ? [workspaceFolder.uri.fsPath] : [];
+  const looseDirectories = lifecycle.workspaceFolder ? undefined : lifecycle.looseDocumentDirectories;
+  const workspaceFolder = lifecycle.workspaceFolder
+    ?? (looseDirectories ? undefined : vscode.workspace.workspaceFolders?.[0]);
+  const workspaceFolders = workspaceFolder ? [workspaceFolder.uri.fsPath] : [...(looseDirectories ?? [])];
   const settings = readSettings(workspaceFolder);
   const effectiveSourceRoots = dedupeStrings([
     ...settings.sourceRoots,
@@ -126,8 +133,8 @@ export function createLanguageClient(
   const clientOptions: LanguageClientOptions = {
     documentSelector: lifecycle.workspaceFolder
       ? [
-        { language: "sagemath", scheme: "file", pattern: `${lifecycle.workspaceFolder.uri.fsPath.replaceAll("\\", "/")}/**/*` },
-        { language: "sagemath-cython", scheme: "file", pattern: `${lifecycle.workspaceFolder.uri.fsPath.replaceAll("\\", "/")}/**/*` },
+        { language: "sagemath", scheme: "file", pattern: `${escapeGlobPath(lifecycle.workspaceFolder.uri.fsPath)}/**/*` },
+        { language: "sagemath-cython", scheme: "file", pattern: `${escapeGlobPath(lifecycle.workspaceFolder.uri.fsPath)}/**/*` },
         ...(lifecycle.workspaceFolder.index === 0
           ? [
             { language: "sagemath", scheme: "untitled" },
@@ -135,10 +142,12 @@ export function createLanguageClient(
           ]
           : []),
         ...(settings.pythonFilesEnabled
-          ? [{ language: "python", scheme: "file", pattern: `${lifecycle.workspaceFolder.uri.fsPath.replaceAll("\\", "/")}/**/*` }]
+          ? [{ language: "python", scheme: "file", pattern: `${escapeGlobPath(lifecycle.workspaceFolder.uri.fsPath)}/**/*` }]
           : []),
       ]
-      : buildDocumentSelector(settings),
+      : looseDirectories
+        ? buildLooseDocumentSelector(settings, looseDirectories)
+        : buildDocumentSelector(settings),
     ...(lifecycle.workspaceFolder ? { workspaceFolder: lifecycle.workspaceFolder } : {}),
     outputChannel,
     initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData, {

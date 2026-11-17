@@ -399,6 +399,26 @@ test("permanent launch failures stop recovery until a manual retry", async () =>
   await harness.controller.deactivate();
 });
 
+test("a restart requested during a failing startup probe is not discarded", async () => {
+  // The user fixes the server path while the old path is still being probed.
+  let release: ((error: Error) => void) | undefined;
+  let attempts = 0;
+  const harness = createHarness({ immediateStart: true, beforeStart: () => {
+    attempts += 1;
+    if (attempts > 1) return Promise.resolve();
+    return new Promise<void>((_resolve, reject) => { release = reject; });
+  } });
+  const start = harness.controller.start();
+  await flushAsyncWork();
+  const restart = harness.controller.manualRestart();
+  release?.(new LanguageServerLaunchError("Executable not found", "/missing/sage-ls"));
+  await Promise.all([start, restart]);
+  assert.equal(harness.controller.hasStoppedRecovery, false);
+  assert.equal(harness.errors.length, 0, "the stale failure must not be reported");
+  assert.equal(harness.clients.length, 1, "the corrected configuration starts a client");
+  await harness.controller.deactivate();
+});
+
 test("deactivation aborts a pending startup probe", async () => {
   let aborted = false;
   const harness = createHarness({ beforeStart: (signal) => new Promise<void>((_resolve, reject) => {

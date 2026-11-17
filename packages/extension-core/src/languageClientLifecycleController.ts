@@ -59,6 +59,8 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
   private recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   private failureTimes: number[] = [];
   private recoveryStopped = false;
+  // Bumped by every manual restart so a failure from an older attempt cannot cancel it.
+  private restartGeneration = 0;
   private readonly scheduleTimeout: typeof setTimeout;
   private readonly cancelTimeout: typeof clearTimeout;
 
@@ -87,6 +89,7 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
     this.clearRecoveryTimer();
     this.failureTimes = [];
     this.recoveryStopped = false;
+    this.restartGeneration += 1;
     return this.start();
   }
 
@@ -176,6 +179,7 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
   private async runRestartLoop(): Promise<void> {
     while (this.restartQueued && !this.deactivating) {
       this.restartQueued = false;
+      const generation = this.restartGeneration;
       this.options.beforeRestart();
 
       if (this.client) {
@@ -265,6 +269,12 @@ export class LanguageClientLifecycleController<TClient extends StartableLanguage
             "Sage language client cleanup after failed start").catch(() => undefined);
         }
         if (this.deactivating) {
+          continue;
+        }
+        if (generation !== this.restartGeneration) {
+          // The configuration was corrected while this attempt was still running (for example
+          // during the server version handshake). Its failure is stale: run the queued restart.
+          this.restartQueued = true;
           continue;
         }
         if (isPermanentStartError(error)) { this.recoveryStopped = true; this.restartQueued = false; }
