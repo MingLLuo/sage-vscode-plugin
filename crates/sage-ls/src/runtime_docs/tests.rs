@@ -14,7 +14,8 @@ fn base_status() -> DocsStatus {
     }
 }
 async fn until(mut condition: impl FnMut() -> bool) {
-    tokio::time::timeout(Duration::from_secs(4), async {
+    // Generous: the first python3 start on a cold CI runner can take several seconds.
+    tokio::time::timeout(Duration::from_secs(30), async {
         while !condition() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

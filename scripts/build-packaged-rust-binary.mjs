@@ -88,6 +88,17 @@ function releaseBuildEnvironment(packageTarget) {
   // Cargo applies these flags to the target only (not to build scripts or
   // proc macros) because the build always passes an explicit --target, which
   // is what `+crt-static` requires.
+  // C sources compiled by build scripts (bundled SQLite, mimalloc) embed __FILE__ and debug
+  // paths; map them the same way for GCC and Clang toolchains.
+  if (!packageTarget.rustTarget.endsWith("-msvc")) {
+    const cflagsKey = `CFLAGS_${packageTarget.rustTarget.replaceAll("-", "_")}`;
+    const prefixMaps = uniqueRemapPrefixes([
+      [os.homedir(), "/build-home"],
+      [cargoHome, "/cargo-home"],
+      [repositoryRoot, "/workspace/sage-vscode-plugin"],
+    ]).map(([source, destination]) => `-ffile-prefix-map=${source}=${destination}`);
+    environment[cflagsKey] = [environment[cflagsKey], ...prefixMaps].filter(Boolean).join(" ");
+  }
   delete environment.RUSTFLAGS;
   environment.CARGO_ENCODED_RUSTFLAGS = [
     ...inheritedFlags,

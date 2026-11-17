@@ -10,6 +10,11 @@ edition = "2021"
 license = "MIT"
 version = "0.2.0"
 
+# Release binaries ship to users: no debug info or symbol tables that could carry build-machine
+# paths (C objects compiled by build scripts do not see rustc's --remap-path-prefix).
+[profile.release]
+strip = true
+
 [workspace.dependencies]
 anyhow = "1.0"
 ignore = "0.4"
