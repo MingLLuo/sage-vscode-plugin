@@ -62,7 +62,7 @@ pub(crate) enum InferenceLineRelation {
 
 impl LexicalScopeMap {
     pub(crate) fn new(source: &str) -> Self {
-        let code_map = CodeMap::new(source);
+        let code_map = CodeMap::shared(source);
         let lines = line_offsets(source);
         let continuation_lines = complete_logical_continuation_lines(&lines, &code_map);
         let mut line_scopes: Vec<Vec<LexicalScope>> = Vec::with_capacity(lines.len());

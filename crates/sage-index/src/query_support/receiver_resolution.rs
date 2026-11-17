@@ -16,7 +16,7 @@ pub(crate) fn local_receiver_member_symbol_from_symbols(
         .copied()
         .rev()
         .find(|scope| scope.kind == DefinitionScopeKind::Class)?;
-    let source_map = CodeMap::new(source);
+    let source_map = CodeMap::shared(source);
     if !local_receiver_binding_is_reliable(
         source,
         &source_map,
@@ -130,7 +130,7 @@ fn local_receiver_binding_is_reliable(
         return false;
     }
     if function_scopes.len() > 1 {
-        let lexical_scopes = LexicalScopeMap::new(source);
+        let lexical_scopes = LexicalScopeMap::shared(source);
         if function_scopes.iter().skip(1).any(|nested_function| {
             lexical_scopes.function_statically_binds_name(source, nested_function.line, owner)
         }) {
@@ -178,7 +178,7 @@ pub(super) fn expression_locally_binds_name_on_line(
     if name.is_empty() {
         return false;
     }
-    let source_map = CodeMap::new(source);
+    let source_map = CodeMap::shared(source);
     let Some((line_start, line)) = line_offsets(source).get(target_line as usize).copied() else {
         return false;
     };

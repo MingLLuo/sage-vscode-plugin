@@ -86,7 +86,7 @@ pub(super) fn source_aliased_import_at_range(
     {
         return None;
     }
-    let code_map = CodeMap::new(source);
+    let code_map = CodeMap::shared(source);
     let start = code_map.offset(range.start_line, range.start_character)?;
     let end = code_map.offset(range.end_line, range.end_character)?;
     if !code_map.is_code_offset(start)
@@ -257,7 +257,7 @@ pub(super) fn sage_load_attach_paths_before_line(
     max_line: u32,
 ) -> Vec<PathBuf> {
     let base_dir = query_path.parent().unwrap_or_else(|| Path::new("."));
-    let code_map = CodeMap::new(source);
+    let code_map = CodeMap::shared(source);
     let mut paths = Vec::new();
     let mut seen = BTreeSet::new();
     for captures in load_attach_call_re().captures_iter(source) {

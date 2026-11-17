@@ -15,7 +15,7 @@ pub(crate) fn is_code_completion_position(source: &str, position: QueryPosition)
     if source.is_empty() {
         return true;
     }
-    let code_map = CodeMap::new(source);
+    let code_map = CodeMap::shared(source);
     let Some(offset) = code_map.offset(position.line, position.character) else {
         return false;
     };
@@ -368,7 +368,7 @@ pub(crate) fn member_completion_context(
     source: &str,
     position: QueryPosition,
 ) -> Option<MemberCompletionContext> {
-    let code_map = CodeMap::new(source);
+    let code_map = CodeMap::shared(source);
     let offset = code_map.offset(position.line, position.character)?;
     if offset > 0 && !code_map.is_code_offset(offset - 1) {
         return None;

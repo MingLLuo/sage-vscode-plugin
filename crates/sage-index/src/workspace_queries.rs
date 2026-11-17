@@ -386,7 +386,8 @@ impl WorkspaceIndex {
         ranges: &[SourceRange],
         local_symbols: &[SymbolRecord],
     ) -> Vec<QueryResult> {
-        let source_map = CodeMap::new(source);
+        let _prepared = crate::prepared_source::prepare_source(source);
+        let source_map = CodeMap::shared(source);
         ranges
             .iter()
             .map(|range| {
@@ -417,7 +418,8 @@ impl WorkspaceIndex {
         queries: &[(String, SourceRange)],
         local_symbols: &[SymbolRecord],
     ) -> Vec<QueryResult> {
-        let source_map = CodeMap::new(source);
+        let _prepared = crate::prepared_source::prepare_source(source);
+        let source_map = CodeMap::shared(source);
         queries
             .iter()
             .map(|(symbol, range)| {

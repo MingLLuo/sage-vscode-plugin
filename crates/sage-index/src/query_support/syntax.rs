@@ -158,7 +158,7 @@ pub(crate) fn assignment_constructor_before_line(
     if expression_locally_binds_name_on_line(source, variable, max_line) {
         return None;
     }
-    let scope_map = LexicalScopeMap::new(source);
+    let scope_map = LexicalScopeMap::shared(source);
     let mut constructor = None;
     let target_functions = scope_map.enclosing_function_lines(max_line);
     let mut entered_functions = BTreeSet::new();

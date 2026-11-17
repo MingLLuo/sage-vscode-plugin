@@ -93,7 +93,7 @@ mod tests {
     };
 
     fn continuation_lines(source: &str) -> Vec<bool> {
-        let code_map = CodeMap::new(source);
+        let code_map = CodeMap::shared(source);
         complete_logical_continuation_lines(&line_offsets(source), &code_map)
     }
 

@@ -42,7 +42,7 @@ pub(super) fn parameter_candidates_for_target(
         return Vec::new();
     }
 
-    let code_map = CodeMap::new(source);
+    let code_map = CodeMap::shared(source);
     let mut candidates = Vec::new();
     for function_scope in function_scopes {
         let mut binding_scope = definition_scope_at_line(source, function_scope.line);
@@ -67,7 +67,55 @@ pub(super) fn parameter_candidates_for_target(
     candidates
 }
 
+/// Definition scopes in effect at every line, computed in one pass over the file.
+struct DefinitionScopeTable(Vec<Vec<DefinitionScope>>);
+
+impl DefinitionScopeTable {
+    fn new(source: &str) -> Self {
+        let mut scope: Vec<(DefinitionScope, usize)> = Vec::new();
+        let mut per_line = Vec::new();
+        for (line_index, line) in source.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.is_empty() || trimmed.starts_with('#') {
+                per_line.push(scope.iter().map(|(scope, _)| *scope).collect());
+                continue;
+            }
+            let indent = line_indent(line);
+            while scope
+                .last()
+                .is_some_and(|(_, scope_indent)| *scope_indent >= indent)
+            {
+                scope.pop();
+            }
+            per_line.push(scope.iter().map(|(scope, _)| *scope).collect());
+            if let Some(kind) = definition_scope_kind(trimmed) {
+                scope.push((
+                    DefinitionScope {
+                        line: line_index as u32,
+                        kind,
+                    },
+                    indent,
+                ));
+            }
+        }
+        // Past the last line the result is the scope left open at the end of the file.
+        per_line.push(scope.into_iter().map(|(scope, _)| scope).collect());
+        Self(per_line)
+    }
+}
+
 pub(super) fn definition_scope_at_line(source: &str, target_line: u32) -> Vec<DefinitionScope> {
+    // Reference search asks for every occurrence in a file; share one table per file.
+    if let Some(table) =
+        crate::prepared_source::shared_derived(source, || DefinitionScopeTable::new(source))
+    {
+        let index = (target_line as usize).min(table.0.len() - 1);
+        return table.0[index].clone();
+    }
+    definition_scope_at_line_scan(source, target_line)
+}
+
+fn definition_scope_at_line_scan(source: &str, target_line: u32) -> Vec<DefinitionScope> {
     let mut scope: Vec<(DefinitionScope, usize)> = Vec::new();
     for (line_index, line) in source.lines().enumerate().take(target_line as usize + 1) {
         let trimmed = line.trim_start();
@@ -150,7 +198,7 @@ pub(super) fn is_local_shadow_before_or_at_target(
 }
 
 pub(super) fn scoped_local_symbols(source: &str, position: QueryPosition) -> Vec<SymbolRecord> {
-    let code_map = CodeMap::new(source);
+    let code_map = CodeMap::shared(source);
     let scope = enclosing_function_scope(source, position);
     let mut symbols = Vec::new();
     symbols.extend(parameter_symbols_for_scope(source, &code_map, scope));
@@ -395,4 +443,22 @@ fn parameter_name(raw: &str) -> Option<&str> {
 
 pub(super) fn line_indent(line: &str) -> usize {
     line.chars().take_while(|ch| ch.is_whitespace()).count()
+}
+
+#[cfg(test)]
+mod definition_scope_table_tests {
+    use super::*;
+
+    #[test]
+    fn table_matches_the_direct_scan_on_every_line() {
+        let source = "class A:\n    def f(self, x):\n\n        # comment\n        def inner():\n            return x\n        return inner\n    value = 1\ndef g():\n    pass\n\nresult = g()\n";
+        let _scope = crate::prepared_source::prepare_source(source);
+        for line in 0..source.lines().count() as u32 + 3 {
+            assert_eq!(
+                definition_scope_at_line(source, line),
+                definition_scope_at_line_scan(source, line),
+                "line {line}"
+            );
+        }
+    }
 }

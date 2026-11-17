@@ -28,7 +28,7 @@ fn infer_owner_type_before_with_hints(
     max_line: u32,
     allow_name_hints: bool,
 ) -> Option<SageOwnerType> {
-    let scope_map = LexicalScopeMap::new(source);
+    let scope_map = LexicalScopeMap::shared(source);
     let local_function_returns =
         infer_local_function_return_types(source, allow_name_hints, max_line, &scope_map);
     let mut known_types: HashMap<String, SageOwnerType> = HashMap::new();

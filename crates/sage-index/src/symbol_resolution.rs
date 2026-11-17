@@ -348,8 +348,10 @@ impl WorkspaceIndex {
     }
 
     pub(super) fn resolve_import_record(&self, symbol: &SymbolRecord) -> Option<SymbolRecord> {
-        let mut seen = BTreeSet::new();
-        self.resolve_import_record_with_depth(symbol, 0, &mut seen)
+        crate::prepared_source::memoized_import_resolution(symbol, || {
+            let mut seen = BTreeSet::new();
+            self.resolve_import_record_with_depth(symbol, 0, &mut seen)
+        })
     }
 
     fn resolve_import_record_with_depth(

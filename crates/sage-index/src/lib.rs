@@ -19,6 +19,7 @@ pub mod identifiers;
 mod lookup_state;
 mod materialized_cache;
 mod model;
+mod prepared_source;
 mod preparser_support;
 mod query_support;
 mod sage_specs;
