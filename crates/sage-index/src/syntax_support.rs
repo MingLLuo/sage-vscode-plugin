@@ -122,20 +122,65 @@ pub(super) fn doc_after_offset(source: &str, offset: usize) -> Option<String> {
     triple_quoted_literal(after_line)
 }
 
+/// Byte offset of the `:` that ends the `def`/`class` header containing `offset`.
+///
+/// Brackets, colons and `#` inside string literals or comments are ignored, a backslash
+/// continues the logical line, and the scan stops at the end of the logical line, so a header
+/// such as `def f(sep="("):` cannot run into the body.
 pub(super) fn definition_header_end(source: &str, offset: usize) -> Option<usize> {
     let line_start = source
         .get(..offset)?
         .rfind('\n')
         .map_or(0, |index| index + 1);
+    let bytes = source.as_bytes();
     let mut depth = 0usize;
-    for (relative, ch) in source[line_start..].char_indices() {
-        let absolute = line_start + relative;
-        match ch {
-            '(' | '[' | '{' => depth += 1,
-            ')' | ']' | '}' => depth = depth.saturating_sub(1),
-            ':' if depth == 0 => return Some(absolute),
-            '\n' if depth == 0 && absolute > offset => return None,
+    let mut index = line_start;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth = depth.saturating_sub(1),
+            b':' if depth == 0 => return Some(index),
+            b'#' => {
+                // A comment runs to the end of the physical line.
+                index = source[index..]
+                    .find('\n')
+                    .map_or(bytes.len(), |end| index + end);
+                continue;
+            }
+            b'\\' if bytes.get(index + 1) == Some(&b'\n') => {
+                index += 2;
+                continue;
+            }
+            b'\n' if depth == 0 && index > offset => return None,
+            quote @ (b'\'' | b'"') => {
+                index = skip_string_literal(bytes, index, quote)?;
+                continue;
+            }
             _ => {}
+        }
+        index += 1;
+    }
+    None
+}
+
+/// Returns the offset just past the string literal that opens at `start`.
+fn skip_string_literal(bytes: &[u8], start: usize, quote: u8) -> Option<usize> {
+    let triple = bytes.get(start..start + 3) == Some(&[quote, quote, quote][..]);
+    let mut index = start + if triple { 3 } else { 1 };
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'\n' if !triple => return None,
+            byte if byte == quote => {
+                if !triple {
+                    return Some(index + 1);
+                }
+                if bytes.get(index..index + 3) == Some(&[quote, quote, quote][..]) {
+                    return Some(index + 3);
+                }
+                index += 1;
+            }
+            _ => index += 1,
         }
     }
     None

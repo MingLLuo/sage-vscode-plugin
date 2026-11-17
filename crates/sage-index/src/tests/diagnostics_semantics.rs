@@ -542,3 +542,34 @@ fn sage_library_modules_do_not_get_the_user_xor_warning() {
         1
     );
 }
+
+#[test]
+fn definition_headers_ignore_brackets_and_colons_in_strings_and_comments() {
+    for (source, header) in [
+        ("def f(sep=\"(\"):\n    return sep\n", "def f(sep=\"(\")"),
+        ("def f(sep=')'):\n    return sep\n", "def f(sep=')')"),
+        (
+            "def f(x) -> \"a:b\":\n    return x\n",
+            "def f(x) -> \"a:b\"",
+        ),
+        (
+            "def f(x,  # comment with ( and :\n      y):\n    return x\n",
+            "def f(x,  # comment with ( and :\n      y)",
+        ),
+        (
+            "def f(x, \\\n      y):\n    return x\n",
+            "def f(x, \\\n      y)",
+        ),
+        ("def f(d={'k': 1}):\n    return d\n", "def f(d={'k': 1})"),
+    ] {
+        assert_eq!(
+            crate::source_definition_header_end(source, 0),
+            Some(header.len()),
+            "{source:?}"
+        );
+    }
+    assert_eq!(
+        crate::source_definition_header_end("def f(x\nvalue = 1\n", 0),
+        None
+    );
+}
