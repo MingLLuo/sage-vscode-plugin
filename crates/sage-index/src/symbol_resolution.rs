@@ -508,6 +508,13 @@ impl WorkspaceIndex {
 
     pub(super) fn symbol_candidates(&self, name: &str) -> Vec<SymbolRecord> {
         let key = name.to_ascii_lowercase();
+        crate::prepared_source::memoized_symbol_candidates(&key, || {
+            self.symbol_candidates_uncached(name, &key)
+        })
+    }
+
+    fn symbol_candidates_uncached(&self, name: &str, key: &str) -> Vec<SymbolRecord> {
+        let key = key.to_string();
         let cached = self
             .symbol_lookup_cache
             .lock()

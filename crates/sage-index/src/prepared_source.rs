@@ -24,6 +24,7 @@ struct Prepared {
     lexical_scopes: Option<Rc<LexicalScopeMap>>,
     import_resolutions: HashMap<(String, String, String), Option<SymbolRecord>>,
     derived: HashMap<TypeId, Rc<dyn Any>>,
+    symbol_candidates: HashMap<String, Rc<Vec<SymbolRecord>>>,
 }
 
 thread_local! {
@@ -172,4 +173,33 @@ pub(crate) fn shared_derived<T: 'static>(source: &str, build: impl FnOnce() -> T
         }
     });
     Some(built)
+}
+
+/// Memoizes global symbol candidates by lowercase name while a scope is active; resolving each
+/// occurrence of `matrix` asked the index for the same candidate list and deduplicated it again.
+pub(crate) fn memoized_symbol_candidates(
+    key: &str,
+    load: impl FnOnce() -> Vec<SymbolRecord>,
+) -> Vec<SymbolRecord> {
+    let cached = PREPARED.with(|prepared| {
+        prepared
+            .borrow()
+            .as_ref()
+            .map(|prepared| prepared.symbol_candidates.get(key).cloned())
+    });
+    match cached {
+        None => load(),
+        Some(Some(symbols)) => symbols.as_ref().clone(),
+        Some(None) => {
+            let symbols = Rc::new(load());
+            PREPARED.with(|prepared| {
+                if let Some(prepared) = prepared.borrow_mut().as_mut() {
+                    prepared
+                        .symbol_candidates
+                        .insert(key.to_string(), symbols.clone());
+                }
+            });
+            symbols.as_ref().clone()
+        }
+    }
 }
