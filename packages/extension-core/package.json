@@ -541,13 +541,13 @@
       {
         "command": "sage.runSelection",
         "key": "shift+enter",
-        "when": "editorTextFocus && sage.workspaceRuntimeAvailable && (editorLangId == sagemath || editorLangId == sagemath-cython || (editorLangId == python && config.sage.analysis.enablePythonFiles)) && editorHasSelection"
+        "when": "editorTextFocus && sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles)) && editorHasSelection"
       },
       {
         "command": "sage.runCurrentCell",
         "key": "ctrl+enter",
         "mac": "cmd+enter",
-        "when": "editorTextFocus && sage.workspaceRuntimeAvailable && (editorLangId == sagemath || editorLangId == sagemath-cython || (editorLangId == python && config.sage.analysis.enablePythonFiles))"
+        "when": "editorTextFocus && sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles)) && sage.editorHasCells && !editorHasSelection"
       }
     ]
   },

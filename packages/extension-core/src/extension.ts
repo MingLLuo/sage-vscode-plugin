@@ -15,6 +15,7 @@ import {
 } from "./boundedOperation";
 import { readSettings } from "./configuration";
 import { SageCellCodeLensProvider } from "./cellCodeLens";
+import { registerCellContext } from "./cellContext";
 import { DocumentationPanel } from "./docsPanel";
 import {
   formatStatusBarText,
@@ -848,6 +849,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.onDidCloseTerminal((terminal) => {
       terminalManager.handleClosedTerminal(terminal);
     }),
+    registerCellContext(),
     vscode.window.onDidChangeActiveTextEditor(async () => {
       await setWorkspaceContexts();
       cellCodeLensProvider.refresh();

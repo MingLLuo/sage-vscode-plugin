@@ -80,3 +80,8 @@ function isSageCellBoundary(line: string): boolean {
     || /^\s*#\s*region\b/i.test(line)
     || /^\s*#\s*endregion\b/i.test(line);
 }
+
+/** True when the text has at least one `# %%` or `# region` cell marker. */
+export function hasSageCells(text: string): boolean {
+  return /^[ \t]*#[ \t]*(%%|region\b)/im.test(text);
+}

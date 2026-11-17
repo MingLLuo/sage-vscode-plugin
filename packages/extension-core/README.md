@@ -17,7 +17,7 @@ The extension identifier is `sage-vscode.sage-vscode-extension`.
   candidates when available and never enable an unsafe rename or reference result.
 - Runtime-backed documentation fallback when a configured Sage runtime is available.
 - Run current file, run selection, run cell/region, and managed Sage REPL commands. In Sage editors, `Shift+Enter`
-  sends the selection to the REPL and `Ctrl+Enter` (`Cmd+Enter` on macOS) runs the current cell.
+  sends the selection to the REPL and `Ctrl+Enter` (`Cmd+Enter` on macOS) runs the current cell in files that contain `# %%` cells.
 - Status, environment, index, docs, support bundle, and UX self-check commands for troubleshooting.
 
 ## First Run

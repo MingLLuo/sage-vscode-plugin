@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { currentSageCell, sageCellMarkers } from "../src/sageCells";
+import { currentSageCell, hasSageCells, sageCellMarkers } from "../src/sageCells";
 
 test("currentSageCell selects code between Python-style cell markers", () => {
   const source = [
@@ -75,4 +75,11 @@ test("sageCellMarkers returns runnable cell starts without endregion boundaries"
     { line: 2, kind: "region", label: "solve block" },
     { line: 5, kind: "cell", label: "Sage cell" },
   ]);
+});
+
+test("hasSageCells only reports files with cell or region markers", () => {
+  assert.equal(hasSageCells("x = 1\nprint(x)\n"), false);
+  assert.equal(hasSageCells("# a comment about %% progress\n"), false);
+  assert.equal(hasSageCells("x = 1\n# %% setup\ny = 2\n"), true);
+  assert.equal(hasSageCells("  #region plots\r\nplot(x)\r\n"), true);
 });
