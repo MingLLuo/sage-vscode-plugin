@@ -75,6 +75,24 @@ export function buildReplPathBootstrapCommand(
   ].join("; ");
 }
 
+const BRACKETED_PASTE_START = "\u001b[200~";
+const BRACKETED_PASTE_END = "\u001b[201~";
+
+/**
+ * Text to send to the Sage (IPython) REPL for a selection or cell.
+ *
+ * Typed line by line, IPython re-indents each line and a blank line inside an indented block
+ * ends it early, so multi-line code arrives as one bracketed paste. The trailing newline inside
+ * the paste closes a final indented block, so the following Enter runs it.
+ */
+export function buildReplInput(code: string): string {
+  const normalized = code.replace(/\r\n?/g, "\n").replace(/\s+$/u, "");
+  if (!normalized.includes("\n")) {
+    return normalized;
+  }
+  return `${BRACKETED_PASTE_START}${normalized}\n${BRACKETED_PASTE_END}`;
+}
+
 export function shouldRunInRepl(runTarget: RunTarget): boolean {
   return runTarget === "repl";
 }

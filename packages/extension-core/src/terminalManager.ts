@@ -6,6 +6,7 @@ import * as vscode from "vscode";
 
 import {
   buildReplLoadCommand,
+  buildReplInput,
   buildReplPathBootstrapCommand,
   buildRunFileProcessPlan,
   shouldRunInRepl,
@@ -25,7 +26,7 @@ export interface TerminalSettings {
 export class SageTerminalManager implements vscode.Disposable {
   private readonly staleScopes = new Set<string>();
   private readonly generatedCleanup = new GeneratedFileCleanup();
-  private readonly replTerminals = new Map<string, { terminal: vscode.Terminal; configurationKey: string }>();
+  private readonly replTerminals = new Map<string, { terminal: vscode.Terminal; configurationKey: string; bootstrap?: string }>();
   private readonly runTaskLifecycle: RunTaskLifecycle<vscode.TaskExecution>;
   private readonly taskEndSubscription: vscode.Disposable;
   private readonly runInvocationNonce = randomUUID();
@@ -72,7 +73,9 @@ export class SageTerminalManager implements vscode.Disposable {
   async runFile(settings: TerminalSettings, filePath: string): Promise<vscode.Terminal | undefined> {
     this.runTaskLifecycle.assertActive();
     if (shouldRunInRepl(settings.runTarget)) {
-      const terminal = this.ensureReplTerminal({ ...settings, workspaceFolderPath: settings.workspaceFolderPath ?? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath))?.uri.fsPath ?? path.dirname(filePath) });
+      // Same REPL as Run Selection and Start REPL: one session per project, or one shared
+      // session for files outside every folder.
+      const terminal = this.ensureReplTerminal({ ...settings, workspaceFolderPath: settings.workspaceFolderPath ?? vscode.workspace.getWorkspaceFolder(vscode.Uri.file(filePath))?.uri.fsPath });
       terminal.sendText(
         buildReplLoadCommand(filePath, settings.runtimePythonPaths, settings.cleanupGeneratedPython),
         true,
@@ -126,11 +129,8 @@ export class SageTerminalManager implements vscode.Disposable {
   runSelection(settings: TerminalSettings, selection: string): vscode.Terminal {
     this.runTaskLifecycle.assertActive();
     const terminal = this.ensureReplTerminal(settings);
-    const bootstrapCommand = buildReplPathBootstrapCommand(settings.runtimePythonPaths ?? []);
-    if (bootstrapCommand) {
-      terminal.sendText(bootstrapCommand, true);
-    }
-    terminal.sendText(selection, true);
+    this.sendBootstrapOnce(settings);
+    terminal.sendText(buildReplInput(selection), true);
     return terminal;
   }
 
@@ -139,9 +139,17 @@ export class SageTerminalManager implements vscode.Disposable {
     const scope = settings.workspaceFolderPath ?? "__no_workspace__";
     if (this.staleScopes.has(scope)) this.resetReplTerminal(scope);
     const terminal = this.ensureReplTerminal(settings);
-    const bootstrap = buildReplPathBootstrapCommand(settings.runtimePythonPaths ?? []);
-    if (bootstrap) terminal.sendText(bootstrap, true);
+    this.sendBootstrapOnce(settings);
     return terminal;
+  }
+
+  /** Sends the import-path setup once per REPL session instead of before every snippet. */
+  private sendBootstrapOnce(settings: { workspaceFolderPath?: string; runtimePythonPaths?: readonly string[] }): void {
+    const entry = this.replTerminals.get(settings.workspaceFolderPath ?? "__no_workspace__");
+    const bootstrap = buildReplPathBootstrapCommand(settings.runtimePythonPaths ?? []);
+    if (!entry || !bootstrap || entry.bootstrap === bootstrap) return;
+    entry.terminal.sendText(bootstrap, true);
+    entry.bootstrap = bootstrap;
   }
 
   private ensureReplTerminal(settings: {

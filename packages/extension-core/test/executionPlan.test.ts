@@ -5,6 +5,7 @@ import {
   buildReplLoadCommand,
   buildRunFileProcessPlan,
   shouldRunInRepl,
+  buildReplInput,
 } from "../src/executionPlan";
 
 test("buildRunFileProcessPlan keeps executable and arguments structured", () => {
@@ -140,4 +141,16 @@ test("buildReplLoadCommand leaves Windows loads untouched when cleanup is enable
 test("shouldRunInRepl reflects the configured run target", () => {
   assert.equal(shouldRunInRepl("repl"), true);
   assert.equal(shouldRunInRepl("terminal"), false);
+});
+
+test("buildReplInput sends one-line code unchanged", () => {
+  assert.equal(buildReplInput("x = 1\r\n"), "x = 1");
+});
+
+test("buildReplInput wraps multi-line code in one bracketed paste ending with a newline", () => {
+  const code = "def f(x):\r\n    y = x + 1\r\n\r\n    return y\r\n";
+  assert.equal(
+    buildReplInput(code),
+    "\u001b[200~def f(x):\n    y = x + 1\n\n    return y\n\u001b[201~",
+  );
 });
