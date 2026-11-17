@@ -2,7 +2,7 @@
   "name": "sage-vscode-extension",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "sage-vscode",
   "license": "MIT",
   "icon": "resources/branding/icon.png",

@@ -6,10 +6,14 @@ Use this path when you want to try the extension quickly from this repository:
 
 ```bash
 npm ci
-npm run package:vsix
+npm run package:vsix   # writes dist/sage-vscode-extension-0.2.0-<platform>.vsix for this machine
 npm run doctor:mac
-code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
+code --install-extension dist/sage-vscode-extension-0.2.0-darwin-arm64.vsix --force
 ```
+
+Use the file that matches your platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `alpine-x64`,
+`alpine-arm64`, `win32-x64`, `win32-arm64`). Prebuilt packages for every platform are attached to each tagged GitHub
+release and to every run of the **Platform packages** workflow.
 
 This packaging path supports Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer. `.node-version` selects the
 Node 22 CI/development baseline without rejecting newer supported releases; `rust-toolchain.toml` selects the matching

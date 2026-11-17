@@ -172,6 +172,14 @@ for (const localOnly of ["test:lsp-latency", "test:real-file-smoke", "test:exten
   pushCheck(`test:ci excludes local-only ${localOnly}`, !includesScript("test:ci", localOnly), scripts["test:ci"]);
 }
 
+const releaseVersions = {
+  "package.json": JSON.parse(readText("package.json")).version,
+  "packages/extension-core/package.json": JSON.parse(readText("packages/extension-core/package.json")).version,
+  "packages/syntax-pack/package.json": JSON.parse(readText("packages/syntax-pack/package.json")).version,
+  "Cargo.toml": /\[workspace\.package\][\s\S]*?version\s*=\s*"([^"]+)"/.exec(readText("Cargo.toml"))?.[1],
+};
+pushCheck("extension, packages, and language server share one version", new Set(Object.values(releaseVersions)).size === 1, releaseVersions);
+
 const workflow = readText(".github/workflows/ci.yml");
 pushCheck("GitHub workflow installs locked npm dependencies", /npm ci/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow selects a supported npm major", /npm install --global npm@11(?:\s|$)/m.test(workflow), ".github/workflows/ci.yml");

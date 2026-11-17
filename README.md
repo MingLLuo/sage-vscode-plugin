@@ -8,7 +8,7 @@ manual plus automated smoke tests.
 
 ## Quick Start
 
-Install and use the current local macOS build:
+Build and install the package for your platform:
 
 Development and release packaging support Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer. The
 `engines` ranges enforce only those minimums; `.node-version` selects the rolling Node 22 development/CI baseline
@@ -17,10 +17,14 @@ runtime compatible. CI packages on macOS with Node.js 26 and npm 12. Rust remain
 
 ```bash
 npm ci
-npm run package:vsix
+npm run package:vsix   # writes dist/sage-vscode-extension-0.2.0-<platform>.vsix for this machine
 npm run doctor:mac
-code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
+code --install-extension dist/sage-vscode-extension-0.2.0-darwin-arm64.vsix --force
 ```
+
+Use the file that matches your platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `alpine-x64`,
+`alpine-arm64`, `win32-x64`, `win32-arm64`). Prebuilt packages for every platform are attached to each tagged GitHub
+release and to every run of the **Platform packages** workflow.
 
 Open a trusted local folder containing a `.sage` file and edit it. The packaged language server and nearby Sage source
 roots are discovered automatically. Use **Run Current File** from the Sage command palette or editor title to run it.
@@ -154,7 +158,7 @@ visual polish, latency gates, debuggability, Mac packaging, future Sage-update r
 shards, search index, keyboard/hash interactions, documentation rendering, and private-path stripping.
 
 `npm run package:vsix` rebuilds and stages the current host release `sage-ls` binary, verifies generated assets and
-package contents, then writes `dist/sage-vscode-extension-0.1.0-<target>.vsix`. Use `-- --target darwin-arm64`
+package contents, then writes `dist/sage-vscode-extension-0.2.0-<target>.vsix`. Use `-- --target darwin-arm64`
 (or another supported target) to select explicitly. The platform workflow builds six native binaries and eight VSIX
 variants including Alpine aliases; only macOS arm64 has been verified locally. See the
 [continuation audit](docs/process/runtime-audit-2026-11-17.md) for verification and outstanding production milestones.

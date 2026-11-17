@@ -10,10 +10,14 @@ the repository's `rust-toolchain.toml` pins Rust.
 
 ```bash
 npm ci
-npm run package:vsix
+npm run package:vsix   # writes dist/sage-vscode-extension-0.2.0-<platform>.vsix for this machine
 npm run doctor:mac
-code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
+code --install-extension dist/sage-vscode-extension-0.2.0-darwin-arm64.vsix --force
 ```
+
+Use the file that matches your platform (`darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `alpine-x64`,
+`alpine-arm64`, `win32-x64`, `win32-arm64`). Prebuilt packages for every platform are attached to each tagged GitHub
+release and to every run of the **Platform packages** workflow.
 
 Open a trusted local folder with a `.sage` file in VS Code. The extension uses the packaged language server and
 discovers nearby Sage source roots. Hover a local name or use Go to Definition, then run **Sage: Run Current File** from
