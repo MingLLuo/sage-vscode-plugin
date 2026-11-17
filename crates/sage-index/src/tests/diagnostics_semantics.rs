@@ -464,7 +464,10 @@ fn valid_sage_syntax_is_not_reported() {
 
 #[test]
 fn spyx_sources_are_treated_as_cython() {
-    let errors = syntax_errors("demo.spyx", "cdef int value = 1\ncpdef double twice(double x):\n    return 2 * x\n");
+    let errors = syntax_errors(
+        "demo.spyx",
+        "cdef int value = 1\ncpdef double twice(double x):\n    return 2 * x\n",
+    );
     assert!(errors.is_empty(), "{errors:?}");
 }
 
@@ -493,7 +496,9 @@ fn syntax_errors_survive_many_xor_warnings() {
     source.push_str("def broken(:\n    pass\n");
     let diagnostics = diagnostics_for_source(Path::new("demo.py"), &source);
     assert!(
-        diagnostics.iter().any(|diagnostic| diagnostic.code == "syntax-error"),
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.code == "syntax-error"),
         "syntax errors must not be crowded out by XOR warnings"
     );
 }
@@ -509,7 +514,10 @@ fn errors_after_a_symbolic_function_header_keep_source_columns() {
     let stray = source.rfind(')').unwrap() as u32;
     let range = &errors[0].range;
     assert_eq!((range.start_line, range.end_line), (0, 0));
-    assert!(range.start_character <= stray && stray < range.end_character, "{errors:?}");
+    assert!(
+        range.start_character <= stray && stray < range.end_character,
+        "{errors:?}"
+    );
     assert_eq!(range.end_character, line_len, "{errors:?}");
 }
 

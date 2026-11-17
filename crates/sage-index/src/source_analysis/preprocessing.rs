@@ -44,7 +44,12 @@ pub(super) fn preprocess_with_mapping(source: &str) -> (PreprocessResult, Vec<Pr
                 let name = captures.name("name").expect("name group");
                 let header_end = captures.get(0).expect("whole match").end();
                 let args = captures.name("args").map_or("", |args| args.as_str());
-                let head = format!("{}{} = lambda {}:", &line[..name.start()], name.as_str(), args.trim());
+                let head = format!(
+                    "{}{} = lambda {}:",
+                    &line[..name.start()],
+                    name.as_str(),
+                    args.trim()
+                );
                 let edit = PreprocessEdit {
                     line: line_index as u32,
                     source_character: name.start() as u32,
@@ -328,10 +333,10 @@ fn rewrite_sage_operators_in_segment(
                 if previous != Some('.') && after_next != Some('.') {
                     // `[a..b]` becomes `[a,b]`. In the stepped form `[a, b, .., c]` the dots
                     // stand alone between commas, so an Ellipsis keeps the list parseable.
-                    let standalone = segment[..character]
-                        .trim_end()
-                        .ends_with([',', '(', '['])
-                        && segment[next_index + 1..].trim_start().starts_with([',', ')', ']']);
+                    let standalone = segment[..character].trim_end().ends_with([',', '(', '['])
+                        && segment[next_index + 1..]
+                            .trim_start()
+                            .starts_with([',', ')', ']']);
                     let replacement = if standalone { "..." } else { "," };
                     let generated_character = generated_base + generated.len();
                     generated.push_str(replacement);

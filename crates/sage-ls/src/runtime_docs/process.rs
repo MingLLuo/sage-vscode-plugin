@@ -314,5 +314,8 @@ fn looks_like_sage_command(path: &str) -> bool {
         .unwrap_or(path)
         .to_ascii_lowercase();
     // `sage-python`, `sage-ipython` and similar helpers are Python entry points already.
-    matches!(name.as_str(), "sage" | "sage.exe" | "sage.bat" | "sage.cmd" | "sage.sh")
+    matches!(
+        name.as_str(),
+        "sage" | "sage.exe" | "sage.bat" | "sage.cmd" | "sage.sh"
+    )
 }

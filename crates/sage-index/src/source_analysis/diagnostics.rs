@@ -66,7 +66,9 @@ pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<Diagnosti
             if end.0 != start.0 {
                 // An unclosed bracket can make one ERROR node span the rest of the file.
                 // Underline only where the problem starts.
-                let line_len = original_lines.get(start.0 as usize).map_or(0, |line| line.len());
+                let line_len = original_lines
+                    .get(start.0 as usize)
+                    .map_or(0, |line| line.len());
                 end = (start.0, (line_len as u32).max(start.1 + 1));
             }
             let range = SourceRange {
@@ -190,9 +192,9 @@ fn sage_trailing_caret_errors(source: &str) -> Vec<SourceRange> {
 /// library is plain Python whose authors use `^` deliberately (hashes, bit vectors, booleans),
 /// so modules inside a `sage` package that has an `all.py` are exempt.
 fn is_sage_library_module(path: &Path) -> bool {
-    path.ancestors()
-        .skip(1)
-        .any(|ancestor| ancestor.file_name().is_some_and(|name| name == "sage") && ancestor.join("all.py").is_file())
+    path.ancestors().skip(1).any(|ancestor| {
+        ancestor.file_name().is_some_and(|name| name == "sage") && ancestor.join("all.py").is_file()
+    })
 }
 
 fn source_looks_sage_heavy_python(source: &str) -> bool {
