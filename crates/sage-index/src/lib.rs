@@ -14,6 +14,7 @@ use tree_sitter::Parser;
 mod cache_metadata;
 mod cache_persistence;
 mod cache_queries;
+pub mod docstring_markdown;
 mod identifier_filter;
 pub mod identifiers;
 mod lookup_state;

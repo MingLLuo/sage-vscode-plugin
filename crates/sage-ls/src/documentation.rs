@@ -138,7 +138,9 @@ pub(super) fn hover_markdown_for_documentation(record: &DocumentationRecord) -> 
         .unwrap_or(&record.summary);
     if !body.trim().is_empty() {
         lines.push(String::new());
-        lines.push(compact_hover_docstring(body));
+        lines.push(sage_index::docstring_markdown::compact_hover_docstring(
+            body,
+        ));
     }
     lines.join("\n")
 }
@@ -163,32 +165,4 @@ fn hover_markdown_without_doc_preview(markdown: &str) -> String {
         (true, Some(module)) => module.to_string(),
         (true, None) => markdown.lines().take(3).collect::<Vec<_>>().join("\n"),
     }
-}
-
-fn compact_hover_docstring(docstring: &str) -> String {
-    const MAX_LINES: usize = 24;
-    const MAX_BYTES: usize = 2400;
-
-    let trimmed = docstring.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    let mut output = String::new();
-    let mut truncated = false;
-    for (line_count, line) in trimmed.lines().enumerate() {
-        if line_count >= MAX_LINES || output.len() + line.len() + 1 > MAX_BYTES {
-            truncated = true;
-            break;
-        }
-        if !output.is_empty() {
-            output.push('\n');
-        }
-        output.push_str(line);
-    }
-
-    if truncated {
-        output.push_str("\n\n... (open Sage documentation for the full docstring)");
-    }
-    output
 }

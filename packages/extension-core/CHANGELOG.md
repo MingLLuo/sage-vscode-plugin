@@ -4,6 +4,9 @@
 
 ### Interaction
 
+- Hover and completion documentation render Sage reStructuredText as Markdown: ``literals`` and `:class:` references
+  become code, `INPUT:`-style headings are bold, `EXAMPLES::` doctests and `.. MATH::` become code blocks, and
+  `.. NOTE::` gets a label. Shortened previews never cut a code block in half.
 - The Getting Started walkthrough now covers installing or selecting SageMath, running a first file, the editing and
   REPL shortcuts, project configuration, and troubleshooting, in English and Simplified Chinese; it no longer asks
   new users to run the developer self check.

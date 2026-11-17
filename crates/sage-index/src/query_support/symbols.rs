@@ -226,7 +226,9 @@ pub(crate) fn hover_markdown_for_symbol(
     if let Some(docstring) = docstring {
         if !docstring.is_empty() {
             lines.push(String::new());
-            lines.push(compact_hover_docstring(docstring));
+            lines.push(crate::docstring_markdown::compact_hover_docstring(
+                docstring,
+            ));
         }
     }
     lines.join("\n")
@@ -314,34 +316,6 @@ pub(crate) fn documentation_summary(docstring: &str) -> Option<String> {
         .map(str::trim)
         .find(|line| !line.is_empty())
         .map(str::to_string)
-}
-
-fn compact_hover_docstring(docstring: &str) -> String {
-    const MAX_LINES: usize = 24;
-    const MAX_BYTES: usize = 2400;
-
-    let trimmed = docstring.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    let mut output = String::new();
-    let mut truncated = false;
-    for (line_count, line) in trimmed.lines().enumerate() {
-        if line_count >= MAX_LINES || output.len() + line.len() + 1 > MAX_BYTES {
-            truncated = true;
-            break;
-        }
-        if !output.is_empty() {
-            output.push('\n');
-        }
-        output.push_str(line);
-    }
-
-    if truncated {
-        output.push_str("\n\n... (open Sage documentation for the full docstring)");
-    }
-    output
 }
 
 pub(crate) fn builtin_symbol_record(name: &str) -> Option<SymbolRecord> {
