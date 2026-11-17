@@ -4,8 +4,7 @@ impl WorkspaceIndex {
     pub fn new(mut options: IndexOptions) -> Self {
         options.roots = normalize_existing_paths(options.roots);
         options.editable_roots = normalize_existing_paths(options.editable_roots);
-        let digest =
-            cache_namespace_digest(&options.roots, &options.exclude_globs, options.enable_pyx);
+        let digest = cache_namespace_digest(&options.exclude_globs, options.enable_pyx);
         let db_path = options
             .cache_dir
             .join(format!("sage-index-{digest}.sqlite"));
@@ -668,7 +667,6 @@ impl WorkspaceIndex {
                 .map(|root| root.display().to_string())
                 .collect(),
             cache_namespace: cache_namespace_digest(
-                &self.options.roots,
                 &self.options.exclude_globs,
                 self.options.enable_pyx,
             ),
@@ -770,7 +768,7 @@ impl WorkspaceIndex {
             }
         }
         clear_doc_fts(&tx)?;
-        refresh_materialized_caches_from_symbols(&tx, &self.symbols_by_name)?;
+        refresh_materialized_caches_from_symbols(&tx, &self.options.roots, &self.symbols_by_name)?;
         update_root_metadata(&tx, &self.options.roots)?;
         tx.commit()?;
         Ok(())
@@ -807,7 +805,7 @@ impl WorkspaceIndex {
         clear_doc_fts(&tx)?;
         if materialize_from_changed {
             let symbols_by_name = symbol_map_from_files(changed);
-            refresh_materialized_caches_from_symbols(&tx, &symbols_by_name)?;
+            refresh_materialized_caches_from_symbols(&tx, &self.options.roots, &symbols_by_name)?;
         } else if refresh_materialized {
             refresh_materialized_caches(&tx, &self.options.roots)?;
         }
@@ -906,11 +904,7 @@ impl WorkspaceIndex {
         fs::create_dir_all(&fallback)
             .with_context(|| format!("create fallback cache dir {}", fallback.display()))?;
         self.options.cache_dir = fallback;
-        let digest = cache_namespace_digest(
-            &self.options.roots,
-            &self.options.exclude_globs,
-            self.options.enable_pyx,
-        );
+        let digest = cache_namespace_digest(&self.options.exclude_globs, self.options.enable_pyx);
         self.db_path = self
             .options
             .cache_dir

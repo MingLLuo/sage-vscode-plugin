@@ -1,5 +1,4 @@
 import path from "node:path";
-import { createHash } from "node:crypto";
 import * as vscode from "vscode";
 import {
   CloseAction,
@@ -48,9 +47,14 @@ export const SAGE_LANGUAGE_FILE_GLOB = "**/*.{sage,py,pyx,pxd,pxi,spyx}";
 
 export { buildDocumentSelector };
 
-export function rustIndexCacheDir(context: vscode.ExtensionContext, folder?: vscode.WorkspaceFolder): string {
-  const root = path.join(context.globalStorageUri.fsPath, "rust-index-v2");
-  return folder ? path.join(root, createHash("sha256").update(folder.uri.toString()).digest("hex").slice(0, 16)) : root;
+/**
+ * One cache directory for every project and window: the server keeps one database per cache
+ * format and stores each source root's rows once, so a Sage tree shared by many projects is
+ * indexed and stored once. (Older releases used one subdirectory per workspace folder; those
+ * are removed by the automatic cache maintenance.)
+ */
+export function rustIndexCacheDir(context: vscode.ExtensionContext): string {
+  return path.join(context.globalStorageUri.fsPath, "rust-index-v2");
 }
 
 export interface LanguageClientLifecycle {
@@ -152,7 +156,7 @@ export function createLanguageClient(
     outputChannel,
     initializationOptions: buildInitializationOptions(languageServerSettings, workspaceData, {
       resolvedRustPath: launch.command,
-      cacheDir: rustIndexCacheDir(context, lifecycle.workspaceFolder),
+      cacheDir: rustIndexCacheDir(context),
     }),
     synchronize: {
       fileEvents: lifecycle.fileSystemWatcher,

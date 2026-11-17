@@ -4,6 +4,10 @@
 
 ### Interaction
 
+- All projects share one index database, so a Sage source tree used by several projects is indexed and stored once:
+  opening a second project that uses the same Sage tree takes about 0.5 s instead of re-indexing for 4-5 s, and
+  disk use stays at about 200 MB instead of growing by 200 MB per project. Old per-folder caches are removed
+  after a day without use.
 - Index databases no project has used for 30 days are now deleted automatically before the language server starts,
   including the per-folder cache directories (previously the cleanup only reported what it would delete). The
   server marks its own database used on start and every six hours, so open windows keep theirs.

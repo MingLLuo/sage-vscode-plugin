@@ -10,6 +10,7 @@ export const DEFAULT_INDEX_CACHE_MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024;
 export const DEFAULT_INDEX_CACHE_KEEP_LATEST_DATABASES = 2;
 export const DEFAULT_INDEX_CACHE_ORPHAN_MAX_AGE_DAYS = 1;
 export const DEFAULT_INDEX_CACHE_SIZE_PRUNE_MIN_AGE_DAYS = 0;
+export const LEGACY_FOLDER_CACHE_MAX_AGE_DAYS = 1;
 
 export interface IndexCacheMaintenanceOptions {
   cacheDir: string;
@@ -111,7 +112,15 @@ export async function maintainIndexCacheTree(
   }
   const reports: IndexCacheMaintenanceReport[] = [];
   for (const cacheDir of directories) {
-    const report = await maintainIndexCache({ ...options, cacheDir });
+    // Subdirectories are per-folder caches from older releases. Nothing writes there anymore,
+    // and a running server refreshes its database every six hours, so a day of inactivity
+    // means no window uses them.
+    const subdirectory = cacheDir !== root;
+    const report = await maintainIndexCache({
+      ...options,
+      cacheDir,
+      ...(subdirectory ? { maxAgeDays: Math.min(options.maxAgeDays ?? DEFAULT_INDEX_CACHE_MAX_AGE_DAYS, LEGACY_FOLDER_CACHE_MAX_AGE_DAYS) } : {}),
+    });
     if (report.totals.databaseCount > 0 || report.totals.orphanSidecarCount > 0 || report.failures.length > 0) {
       reports.push(report);
     }

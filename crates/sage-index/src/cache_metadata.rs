@@ -3,9 +3,10 @@ use super::*;
 pub(super) fn tune_cache_connection(connection: &Connection) -> Result<()> {
     connection.execute_batch(
         r#"
-        pragma synchronous = off;
+        pragma synchronous = normal;
         pragma temp_store = memory;
         pragma cache_size = -16000;
+        pragma busy_timeout = 60000;
         "#,
     )?;
     Ok(())

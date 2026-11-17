@@ -298,7 +298,8 @@ fn cache_namespace_tracks_source_roots_for_future_sage_updates() {
 
     let mut index_a = WorkspaceIndex::new(options_a);
     let mut index_b = WorkspaceIndex::new(options_b);
-    assert_ne!(index_a.db_path(), index_b.db_path());
+    // One shared database; each project only sees rows under its own roots.
+    assert_eq!(index_a.db_path(), index_b.db_path());
 
     index_a.rebuild().unwrap();
     index_b.rebuild().unwrap();
@@ -322,10 +323,9 @@ fn cache_namespace_tracks_source_roots_for_future_sage_updates() {
 fn cache_namespace_invalidates_pre_pep695_declaration_caches() {
     let root = test_root("cache-pep695-version");
     let excludes = vec!["**/__pycache__/**".to_string()];
-    let current = cache_namespace_digest(std::slice::from_ref(&root), &excludes, true);
+    let current = cache_namespace_digest(&excludes, true);
     let previous = cache_namespace_digest_for_version(
         "sage-index-v29-owner-domain-classification",
-        std::slice::from_ref(&root),
         &excludes,
         true,
     );

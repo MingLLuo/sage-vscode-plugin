@@ -61,16 +61,26 @@ fn root_aware_cache_reuses_same_root_set_and_isolates_other_projects() {
         cache_dir,
         enable_pyx: true,
     });
-    assert_ne!(first.db_path(), other_project.db_path());
-    let cold_hydrate = other_project.hydrate_from_cache().unwrap();
-    assert_eq!(cold_hydrate.peer_seed_file_count, 0, "{cold_hydrate:?}");
-    assert_eq!(cold_hydrate.cache_miss_count, 1, "{cold_hydrate:?}");
+    // Projects share one database, so the shared root is reused instead of copied.
+    assert_eq!(first.db_path(), other_project.db_path());
+    let hydrate = other_project.hydrate_from_cache().unwrap();
+    assert_eq!(hydrate.peer_seed_file_count, 0, "{hydrate:?}");
+    assert_eq!(
+        hydrate.cache_miss_count, 0,
+        "the shared root is already cached: {hydrate:?}"
+    );
     other_project.reconcile_with_cache().unwrap();
 
     let status = other_project.status();
     assert!(status.cache_hit_count >= 1, "{status:?}");
-    assert_eq!(status.cache_miss_count, 2, "{status:?}");
-    assert!(status.peer_seed_file_count >= 1, "{status:?}");
+    assert_eq!(
+        status.cache_miss_count, 1,
+        "only the new project's own file is parsed; the shared root is not re-indexed: {status:?}"
+    );
+    assert_eq!(
+        status.peer_seed_file_count, 0,
+        "nothing is copied between databases: {status:?}"
+    );
     assert!(other_project.symbol("common_symbol").is_some());
     assert!(other_project
         .file_for_path(&project_a.join("a.sage"))

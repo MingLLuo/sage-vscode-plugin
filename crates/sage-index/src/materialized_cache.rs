@@ -1,11 +1,26 @@
 use super::*;
 
+/// The cache database is shared by every project, so only rows derived from this project's
+/// roots are replaced; other projects' rows stay (reads filter by root anyway).
+fn delete_materialized_rows_under_roots(connection: &Connection, roots: &[PathBuf]) -> Result<()> {
+    for root in roots {
+        let root_text = root.display().to_string();
+        let child_pattern = like_pattern_for_children(&root_text);
+        for table in ["sage_export_cache", "sage_method_cache"] {
+            connection.execute(
+                &format!("delete from {table} where path = ?1 or path like ?2 escape '~'"),
+                params![root_text.as_str(), child_pattern.as_str()],
+            )?;
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn refresh_materialized_caches(
     connection: &Connection,
     roots: &[PathBuf],
 ) -> Result<()> {
-    connection.execute("delete from sage_export_cache", [])?;
-    connection.execute("delete from sage_method_cache", [])?;
+    delete_materialized_rows_under_roots(connection, roots)?;
     refresh_materialized_export_cache(connection, roots)?;
     refresh_materialized_method_cache(connection, roots)?;
     Ok(())
@@ -13,10 +28,10 @@ pub(super) fn refresh_materialized_caches(
 
 pub(super) fn refresh_materialized_caches_from_symbols(
     connection: &Connection,
+    roots: &[PathBuf],
     symbols_by_name: &HashMap<String, Vec<SymbolRecord>>,
 ) -> Result<()> {
-    connection.execute("delete from sage_export_cache", [])?;
-    connection.execute("delete from sage_method_cache", [])?;
+    delete_materialized_rows_under_roots(connection, roots)?;
     refresh_materialized_export_cache_from_symbols(connection, symbols_by_name)?;
     refresh_materialized_method_cache_from_symbols(connection, symbols_by_name)?;
     Ok(())

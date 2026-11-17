@@ -168,17 +168,19 @@ test("automatic maintenance removes databases unused for 30 days in every folder
   try {
     const rootNewest = await write(root, "a".repeat(16), 40);
     const rootOld = await write(root, "b".repeat(16), 90);
-    const folderNewest = await write(folder, "c".repeat(16), 2);
+    const folderFresh = await write(folder, "c".repeat(16), 0.5);
     const folderOld = await write(folder, "d".repeat(16), 45);
-    const folderRecent = await write(folder, "e".repeat(16), 10);
+    const folderStale = await write(folder, "e".repeat(16), 2);
+    const rootRecent = await write(root, "f".repeat(16), 10);
 
     const reports = await maintainIndexCacheTree({ ...AUTOMATIC_INDEX_CACHE_MAINTENANCE, cacheDir: root, nowMs: now });
 
     assert.equal(reports.length, 2, "the root and the per-folder directory are both maintained");
     assert.equal(fsSync.existsSync(rootNewest), false, "age decides, not position: an abandoned directory is emptied");
     assert.equal(fsSync.existsSync(rootOld), false);
-    assert.equal(fsSync.existsSync(folderNewest), true);
-    assert.equal(fsSync.existsSync(folderRecent), true, "databases used within 30 days are kept");
+    assert.equal(fsSync.existsSync(rootRecent), true, "shared databases used within 30 days are kept");
+    assert.equal(fsSync.existsSync(folderFresh), true, "a legacy folder cache still in use today is kept");
+    assert.equal(fsSync.existsSync(folderStale), false, "legacy per-folder caches go after a day without use");
     assert.equal(fsSync.existsSync(folderOld), false);
   } finally {
     await fs.rm(root, { recursive: true, force: true });

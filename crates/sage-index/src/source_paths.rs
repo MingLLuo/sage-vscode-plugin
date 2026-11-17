@@ -124,27 +124,23 @@ pub(super) fn normalize_path(path: PathBuf) -> PathBuf {
     path
 }
 
-pub(super) fn cache_namespace_digest(
-    roots: &[PathBuf],
-    exclude_globs: &[String],
-    enable_pyx: bool,
-) -> String {
-    cache_namespace_digest_for_version(CACHE_FORMAT_VERSION, roots, exclude_globs, enable_pyx)
+/// Name of the cache database. Source roots are deliberately not part of it: every project
+/// shares one database, and each root's rows are stored once under their paths (reads filter by
+/// the requesting project's roots). A Sage source tree used by many projects is therefore
+/// indexed and stored once. Settings that change which files a root contributes (exclusions,
+/// Cython parsing) and the cache format still select separate databases.
+pub(super) fn cache_namespace_digest(exclude_globs: &[String], enable_pyx: bool) -> String {
+    cache_namespace_digest_for_version(CACHE_FORMAT_VERSION, exclude_globs, enable_pyx)
 }
 
 pub(super) fn cache_namespace_digest_for_version(
     format_version: &str,
-    roots: &[PathBuf],
     exclude_globs: &[String],
     enable_pyx: bool,
 ) -> String {
     let mut hasher = Sha256::new();
     hasher.update(format_version);
     hasher.update([0]);
-    for root in roots {
-        hasher.update(root.display().to_string());
-        hasher.update([0]);
-    }
     hasher.update([1]);
     for glob in exclude_globs {
         hasher.update(glob);
