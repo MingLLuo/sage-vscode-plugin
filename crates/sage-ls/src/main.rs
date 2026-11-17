@@ -14,6 +14,7 @@ mod memory;
 mod navigation;
 mod open_documents;
 mod references;
+mod request_trace;
 mod runtime_docs;
 mod semantic_tokens;
 mod signature_help;
@@ -76,6 +77,7 @@ use references::{
     reference_path_is_collectible, same_definition_identity, same_definition_owner_identity,
     ResolvedReferenceTarget,
 };
+use request_trace::RequestTrace;
 use runtime_docs::{RuntimeDocsConfig, RuntimeDocsWorker};
 use sage_index::{
     active_parameter_for_keyword, default_cache_dir, function_call_context_at_position,
@@ -627,6 +629,7 @@ impl LanguageServer for Backend {
     }
 
     async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+        let _trace = RequestTrace::file("codeAction", &params.text_document.uri);
         let actions = code_actions_for_diagnostics(
             params.text_document.uri,
             params.context.diagnostics.as_slice(),
@@ -635,6 +638,7 @@ impl LanguageServer for Backend {
     }
 
     async fn document_link(&self, params: DocumentLinkParams) -> Result<Option<Vec<DocumentLink>>> {
+        let _trace = RequestTrace::file("documentLink", &params.text_document.uri);
         let Some(document) = self.document_for_uri(&params.text_document.uri).await else {
             return Ok(Some(Vec::new()));
         };
@@ -645,6 +649,11 @@ impl LanguageServer for Backend {
     }
 
     async fn hover(&self, params: HoverParams) -> Result<Option<Hover>> {
+        let _trace = RequestTrace::at(
+            "hover",
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        );
         let uri = &params.text_document_position_params.text_document.uri;
         let Some(document) = self.document_for_uri(uri).await else {
             return Ok(None);
@@ -740,6 +749,11 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDefinitionParams,
     ) -> Result<Option<GotoDefinitionResponse>> {
+        let _trace = RequestTrace::at(
+            "definition",
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        );
         self.goto_definition_response(params).await
     }
 
@@ -747,6 +761,11 @@ impl LanguageServer for Backend {
         &self,
         params: GotoDeclarationParams,
     ) -> Result<Option<GotoDeclarationResponse>> {
+        let _trace = RequestTrace::at(
+            "declaration",
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        );
         self.goto_declaration_response(params).await
     }
 
@@ -754,6 +773,11 @@ impl LanguageServer for Backend {
         &self,
         params: GotoTypeDefinitionParams,
     ) -> Result<Option<GotoTypeDefinitionResponse>> {
+        let _trace = RequestTrace::at(
+            "typeDefinition",
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        );
         self.goto_type_definition_response(params).await
     }
 
@@ -761,10 +785,20 @@ impl LanguageServer for Backend {
         &self,
         params: GotoImplementationParams,
     ) -> Result<Option<GotoImplementationResponse>> {
+        let _trace = RequestTrace::at(
+            "implementation",
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        );
         self.goto_implementation_response(params).await
     }
 
     async fn completion(&self, params: CompletionParams) -> Result<Option<CompletionResponse>> {
+        let _trace = RequestTrace::at(
+            "completion",
+            &params.text_document_position.text_document.uri,
+            params.text_document_position.position,
+        );
         let uri = &params.text_document_position.text_document.uri;
         if let (Some(document), Some(_path)) = (self.document_for_uri(uri).await, uri_to_path(uri))
         {
@@ -803,6 +837,7 @@ impl LanguageServer for Backend {
     }
 
     async fn completion_resolve(&self, mut item: CompletionItem) -> Result<CompletionItem> {
+        let _trace = RequestTrace::start("completionItem/resolve", item.label.clone());
         if item.documentation.is_some() {
             return Ok(item);
         }
@@ -831,6 +866,11 @@ impl LanguageServer for Backend {
     }
 
     async fn references(&self, params: ReferenceParams) -> Result<Option<Vec<Location>>> {
+        let _trace = RequestTrace::at(
+            "references",
+            &params.text_document_position.text_document.uri,
+            params.text_document_position.position,
+        );
         self.references_response(params).await
     }
 
@@ -838,10 +878,20 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentHighlightParams,
     ) -> Result<Option<Vec<DocumentHighlight>>> {
+        let _trace = RequestTrace::at(
+            "documentHighlight",
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        );
         self.document_highlight_response(params).await
     }
 
     async fn rename(&self, params: RenameParams) -> Result<Option<WorkspaceEdit>> {
+        let _trace = RequestTrace::at(
+            "rename",
+            &params.text_document_position.text_document.uri,
+            params.text_document_position.position,
+        );
         self.rename_response(params).await
     }
 
@@ -849,10 +899,16 @@ impl LanguageServer for Backend {
         &self,
         params: TextDocumentPositionParams,
     ) -> Result<Option<PrepareRenameResponse>> {
+        let _trace = RequestTrace::at("prepareRename", &params.text_document.uri, params.position);
         self.prepare_rename_response(params).await
     }
 
     async fn signature_help(&self, params: SignatureHelpParams) -> Result<Option<SignatureHelp>> {
+        let _trace = RequestTrace::at(
+            "signatureHelp",
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        );
         let uri = &params.text_document_position_params.text_document.uri;
         let Some(document) = self.document_for_uri(uri).await else {
             return Ok(None);
@@ -934,6 +990,11 @@ impl LanguageServer for Backend {
         &self,
         params: CallHierarchyPrepareParams,
     ) -> Result<Option<Vec<CallHierarchyItem>>> {
+        let _trace = RequestTrace::at(
+            "prepareCallHierarchy",
+            &params.text_document_position_params.text_document.uri,
+            params.text_document_position_params.position,
+        );
         let uri = &params.text_document_position_params.text_document.uri;
         let Some(document) = self.document_for_uri(uri).await else {
             return Ok(Some(Vec::new()));
@@ -974,6 +1035,7 @@ impl LanguageServer for Backend {
         &self,
         params: CallHierarchyIncomingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
+        let _trace = RequestTrace::start("incomingCalls", params.item.name.clone());
         let mut calls = Vec::new();
         let mut contexts: HashMap<Uri, CallHierarchySourceContext> = HashMap::new();
         let Some(target) = self
@@ -1029,6 +1091,7 @@ impl LanguageServer for Backend {
         &self,
         params: CallHierarchyOutgoingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyOutgoingCall>>> {
+        let _trace = RequestTrace::start("outgoingCalls", params.item.name.clone());
         let Some(path) = uri_to_path(&params.item.uri) else {
             return Ok(Some(Vec::new()));
         };
@@ -1059,6 +1122,7 @@ impl LanguageServer for Backend {
     }
 
     async fn inlay_hint(&self, params: InlayHintParams) -> Result<Option<Vec<InlayHint>>> {
+        let _trace = RequestTrace::file("inlayHint", &params.text_document.uri);
         let Some(document) = self
             .open_documents
             .read()
@@ -1071,6 +1135,7 @@ impl LanguageServer for Backend {
     }
 
     async fn folding_range(&self, params: FoldingRangeParams) -> Result<Option<Vec<FoldingRange>>> {
+        let _trace = RequestTrace::file("foldingRange", &params.text_document.uri);
         let Some(document) = self
             .open_documents
             .read()
@@ -1086,6 +1151,7 @@ impl LanguageServer for Backend {
         &self,
         params: SelectionRangeParams,
     ) -> Result<Option<Vec<SelectionRange>>> {
+        let _trace = RequestTrace::file("selectionRange", &params.text_document.uri);
         let Some(document) = self
             .open_documents
             .read()
@@ -1104,6 +1170,7 @@ impl LanguageServer for Backend {
         &self,
         params: DocumentSymbolParams,
     ) -> Result<Option<DocumentSymbolResponse>> {
+        let _trace = RequestTrace::file("documentSymbol", &params.text_document.uri);
         let Some(document) = self
             .open_documents
             .read()
@@ -1128,6 +1195,7 @@ impl LanguageServer for Backend {
         &self,
         params: WorkspaceSymbolParams,
     ) -> Result<Option<WorkspaceSymbolResponse>> {
+        let _trace = RequestTrace::start("workspaceSymbol", params.query.clone());
         let limit = self.analysis_mode.read().await.workspace_symbol_limit();
         Ok(Some(WorkspaceSymbolResponse::Flat(
             self.workspace_symbol_information(&params.query, limit)
@@ -1139,6 +1207,7 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensParams,
     ) -> Result<Option<SemanticTokensResult>> {
+        let _trace = RequestTrace::file("semanticTokens/full", &params.text_document.uri);
         let Some(document) = self
             .open_documents
             .read()
@@ -1162,6 +1231,7 @@ impl LanguageServer for Backend {
         &self,
         params: SemanticTokensRangeParams,
     ) -> Result<Option<SemanticTokensRangeResult>> {
+        let _trace = RequestTrace::file("semanticTokens/range", &params.text_document.uri);
         let Some(document) = self
             .open_documents
             .read()
@@ -1185,6 +1255,7 @@ impl LanguageServer for Backend {
     }
 
     async fn execute_command(&self, params: ExecuteCommandParams) -> Result<Option<Value>> {
+        let _trace = RequestTrace::start("executeCommand", params.command.clone());
         match params.command.as_str() {
             COMMAND_INDEX_STATUS => Ok(Some(self.index_status_payload().await)),
             COMMAND_DOCS_STATUS => Ok(Some(self.docs_status_payload().await)),

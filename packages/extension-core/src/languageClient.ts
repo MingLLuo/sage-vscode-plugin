@@ -130,6 +130,8 @@ export function createLanguageClient(
       env: {
         ...process.env,
         SAGE_LS_EXTRA_PATHS: resolvedExtraPaths.join(path.delimiter),
+        // `debug` makes sage-ls log every request with its duration; slow requests are always logged.
+        SAGE_LS_LOG: settings.loggingLevel,
       },
     },
   };

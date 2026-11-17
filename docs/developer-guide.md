@@ -34,8 +34,10 @@ npm run build           # extension + syntax assets
 normal window; start again with `F5`. `sage.languageServer.rustPath = auto` picks up `target/debug/sage-ls` after
 `npm run build:rust`.
 
-**Logs.** The **Sage** and **Sage Language Server** output channels; set `sage.logging.level` to `debug` and restart the
-server. **Sage: Run UX Self Check** runs hover, docs, definition, completion, references, rename, signature help, and
+**Logs.** The **Sage** and **Sage Language Server** output channels. The server logs every request that takes 1 s or
+more (`[sage-ls] references demo.sage:12:5 1500 ms (slow)`); with `sage.logging.level` set to `debug` and the server
+restarted it logs every request (`SAGE_LS_LOG=debug` when running `sage-ls` by hand). Timing lives in
+`crates/sage-ls/src/request_trace.rs`. **Sage: Run UX Self Check** runs hover, docs, definition, completion, references, rename, signature help, and
 diagnostics at the cursor and writes one report.
 
 **Without VS Code.**
