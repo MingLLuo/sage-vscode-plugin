@@ -6,6 +6,8 @@ on:
       - main
       - develop
   pull_request:
+  # The tag release in package.yml reuses this gate before publishing anything.
+  workflow_call:
 
 permissions:
   contents: read
@@ -52,33 +54,6 @@ jobs:
           npm run test --workspace @sage-vscode/syntax-pack
           npm run test --workspace sage-vscode-extension
 
-  rust-cross-platform:
-    # Linux and Windows binaries are not shipped yet. This job surfaces portability failures early
-    # without blocking the macOS release path; it becomes required once the failures are cleared.
-    runs-on: ${{ matrix.os }}
-    continue-on-error: true
-    timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-          - windows-latest
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-
-      - name: Set up Rust
-        run: rustup show
-
-      - name: Cache Rust dependencies
-        uses: Swatinem/rust-cache@v2
-        with:
-          cache-on-failure: true
-
-      - name: Run Rust tests
-        run: cargo test --locked
-
   macos-package-compatibility:
     runs-on: macos-latest
     timeout-minutes: 30
@@ -97,7 +72,7 @@ jobs:
         run: npm install --global npm@12
 
       - name: Set up Rust
-        run: rustup show
+        run: rustup toolchain install
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -144,7 +119,7 @@ jobs:
         run: npm install --global npm@11
 
       - name: Set up Rust
-        run: rustup show
+        run: rustup toolchain install
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2

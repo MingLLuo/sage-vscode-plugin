@@ -17,6 +17,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 jobs:
   package:
     runs-on: ${{ matrix.runner }}
@@ -39,10 +43,19 @@ jobs:
         with:
           node-version-file: .node-version
           cache: npm
+      - name: Install rustup where the image lacks it
+        if: matrix.target == 'win32-arm64'
+        shell: bash
+        run: |
+          if ! command -v rustup >/dev/null; then
+            curl -sSf -o rustup-init.exe https://win.rustup.rs/aarch64
+            ./rustup-init.exe -y --default-toolchain none --profile minimal
+            echo "$USERPROFILE/.cargo/bin" >> "$GITHUB_PATH"
+          fi
       - name: Install pinned Rust toolchain and target
         shell: bash
         run: |
-          rustup show
+          rustup toolchain install
           rustup target add ${{ matrix.rust }}
       - uses: Swatinem/rust-cache@v2
         with:
@@ -71,6 +84,10 @@ jobs:
         run: node scripts/package-vsix.mjs --target "${SAGE_VSIX_TARGET/linux-/alpine-}"
       - name: Verify package contents
         run: npm run test:vsix-package
+      - name: Verify Alpine package contents
+        if: runner.os == 'Linux'
+        shell: bash
+        run: SAGE_VSIX_TARGET="${SAGE_VSIX_TARGET/linux-/alpine-}" npm run test:vsix-package
       - name: Prepare isolated VS Code
         run: node scripts/prepare-vscode-test.mjs
       - name: Install target package into isolated profile
@@ -84,13 +101,27 @@ jobs:
           path: dist/*.vsix
           if-no-files-found: error
 
+  gate:
+    # Releases ship only what passes the full CI gate on the tagged commit.
+    if: startsWith(github.ref, 'refs/tags/v')
+    uses: ./.github/workflows/ci.yml
+
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: package
+    needs: [package, gate]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+      - name: Require the tag to match the extension version
+        shell: bash
+        run: |
+          version=$(node -p "require('./packages/extension-core/package.json').version")
+          if [[ "${GITHUB_REF_NAME}" != "v${version}" ]]; then
+            echo "::error::tag ${GITHUB_REF_NAME} does not match extension version ${version}"
+            exit 1
+          fi
       - uses: actions/download-artifact@v7
         with:
           pattern: vsix-*
@@ -102,7 +133,15 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
+          shopt -s nullglob
+          files=(dist/*.vsix)
+          if (( ${#files[@]} != 8 )); then
+            echo "::error::expected 8 VSIX files (6 native targets + 2 Alpine aliases), found ${#files[@]}"
+            ls -la dist
+            exit 1
+          fi
           if ! gh release view "$RELEASE_TAG"; then
             gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
           fi
-          gh release upload "$RELEASE_TAG" dist/*.vsix --clobber
+          # No --clobber: re-running a release must not silently replace published files.
+          gh release upload "$RELEASE_TAG" "${files[@]}"

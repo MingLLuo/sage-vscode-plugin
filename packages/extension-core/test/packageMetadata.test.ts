@@ -348,7 +348,7 @@ test("macOS CI gate is public-repository safe", () => {
   assert.match(workflow, /SAGE_PERF_PARSE_MS:\s*"3000"/);
   assert.match(workflow, /SAGE_PERF_REBUILD_INTERNAL_MS:\s*"3000"/);
   assert.match(workflow, /macos-package-compatibility:[\s\S]*?npm run package:vsix/);
-  assert.match(workflow, /run: rustup show/);
+  assert.match(workflow, /run: rustup toolchain install/);
   assert.doesNotMatch(workflow, /toolchain:\s*"[0-9]/);
   assert.match(workflow, /Swatinem\/rust-cache@v2/);
   assert.match(workflow, /cache-on-failure:\s*true/);
