@@ -777,3 +777,16 @@ test("user docs cover every command and setting", () => {
     assert.match(userDocs, new RegExp(setting.replaceAll(".", "\\.")), `user docs missing ${setting}`);
   }
 });
+
+test("every localized runtime message has a Simplified Chinese translation", () => {
+  const sources = fs.readdirSync(path.join(packageRoot, "src"))
+    .filter((file) => file.endsWith(".ts"))
+    .map((file) => fs.readFileSync(path.join(packageRoot, "src", file), "utf-8"))
+    .join("\n");
+  const messages = new Set([...sources.matchAll(/(?:vscode\.l10n\.t|\bt)\(\s*"((?:[^"\\]|\\.)*)"/g)].map((match) => JSON.parse(`"${match[1]}"`)));
+  assert.ok(messages.size > 40, `expected localized messages, found ${messages.size}`);
+  const bundle = JSON.parse(fs.readFileSync(path.join(packageRoot, "l10n", "bundle.l10n.zh-cn.json"), "utf-8")) as Record<string, string>;
+  for (const message of messages) {
+    assert.ok(bundle[message]?.trim(), `l10n/bundle.l10n.zh-cn.json is missing ${JSON.stringify(message)}`);
+  }
+});

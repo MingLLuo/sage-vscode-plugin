@@ -4,7 +4,6 @@ import type { LanguageClient } from "vscode-languageclient/node";
 
 import {
   formatEnvironmentDetails,
-  formatIndexStatusMessage,
   type DocsStatusSummary,
   type EnvironmentPresentationInput,
   type IndexStatusSummary,
@@ -66,11 +65,12 @@ export function registerStatusCommands(
   };
   const reportRequestFailure = async (action: string, error: unknown): Promise<void> => {
     dependencies.logger.warn("status", `${action} failed`, { error: String(error) });
+    const restart = vscode.l10n.t("Restart Language Server");
     const selectedAction = await vscode.window.showErrorMessage(
-      `${action} did not complete: ${String(error)}`,
-      "Restart Language Server",
+      vscode.l10n.t("{0} did not complete: {1}", action, String(error)),
+      restart,
     );
-    if (selectedAction === "Restart Language Server") {
+    if (selectedAction === restart) {
       await vscode.commands.executeCommand("sage.restartLanguageServer");
     }
   };
@@ -92,7 +92,7 @@ export function registerStatusCommands(
         }
         await fs.writeFile(`${status.cache_path}.keep`, "Sage persistent database: protected from automatic cache cleanup.\n");
         void vscode.window.showInformationMessage(
-          `Persistent Sage database saved: ${status.indexed_file_count} files, ${status.symbol_count ?? 0} symbols. It will be reused after restart.`,
+          vscode.l10n.t("Persistent Sage database saved: {0} files, {1} symbols. It will be reused after restart.", status.indexed_file_count ?? 0, status.symbol_count ?? 0),
         );
         return status;
       } catch (error) {
@@ -196,7 +196,7 @@ export function registerStatusCommands(
       dependencies.outputChannel.appendLine(bundle);
       dependencies.outputChannel.show(true);
       void vscode.window.showInformationMessage(
-        "Sage support bundle copied. It includes paths and settings, but no source contents, selected text, or environment variables.",
+        vscode.l10n.t("Sage support bundle copied. It includes paths and settings, but no source contents, selected text, or environment variables."),
       );
     }),
     vscode.commands.registerCommand("sage.rebuildIndex", async () => {
@@ -269,7 +269,7 @@ export function registerStatusCommands(
         dependencies.setIndexStatus(rebuiltStatus);
         dependencies.updateStatusBar();
         void vscode.window.showInformationMessage(
-          `Index rebuilt: ${formatIndexStatusMessage(rebuiltStatus)}`,
+          vscode.l10n.t("Index rebuilt: {0} files, {1} symbols.", rebuiltStatus.indexed_file_count ?? 0, rebuiltStatus.symbol_count ?? 0),
         );
         return rebuiltStatus;
       } catch (error) {

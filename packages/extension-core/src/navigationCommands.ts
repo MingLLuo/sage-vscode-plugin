@@ -32,7 +32,7 @@ export function registerNavigationCommands(
 
       const editor = dependencies.activeOrVisibleSageEditor();
       if (!editor) {
-        void vscode.window.showWarningMessage("Open a Sage file to request documentation.");
+        void vscode.window.showWarningMessage(vscode.l10n.t("Open a Sage file to request documentation."));
         return;
       }
 
@@ -52,11 +52,12 @@ export function registerNavigationCommands(
           uri: editor.document.uri.toString(),
           error: String(error),
         });
+        const restart = vscode.l10n.t("Restart Language Server");
         const selectedAction = await vscode.window.showErrorMessage(
-          `Sage documentation request did not complete: ${String(error)}`,
-          "Restart Language Server",
+          vscode.l10n.t("Sage documentation request did not complete: {0}", String(error)),
+          restart,
         );
-        if (selectedAction === "Restart Language Server") {
+        if (selectedAction === restart) {
           await vscode.commands.executeCommand("sage.restartLanguageServer");
         }
         return;
@@ -86,7 +87,7 @@ export function registerNavigationCommands(
           activeLanguageId: vscode.window.activeTextEditor?.document.languageId ?? "none",
           activeUri: vscode.window.activeTextEditor?.document.uri.toString() ?? "none",
         });
-        void vscode.window.showWarningMessage("Open a Sage file before finding references.");
+        void vscode.window.showWarningMessage(vscode.l10n.t("Open a Sage file before finding references."));
         return;
       }
 
@@ -104,7 +105,7 @@ export function registerNavigationCommands(
           character: editor.selection.active.character,
           error: String(error),
         });
-        void vscode.window.showErrorMessage(`Sage references failed: ${String(error)}`);
+        void vscode.window.showErrorMessage(vscode.l10n.t("Sage references failed: {0}", String(error)));
         return [];
       }
 
@@ -117,7 +118,7 @@ export function registerNavigationCommands(
         count: locations.length,
       });
       if (locations.length === 0) {
-        void vscode.window.showInformationMessage("No Sage references found for the current symbol.");
+        void vscode.window.showInformationMessage(vscode.l10n.t("No Sage references found for the current symbol."));
         return [];
       }
 

@@ -31,25 +31,25 @@ export function registerExecutionCommands(
       }
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
-        void vscode.window.showWarningMessage("Open a Sage file before running it.");
+        void vscode.window.showWarningMessage(vscode.l10n.t("Open a Sage file before running it."));
         return;
       }
       if (editor.document.uri.scheme !== "file") {
-        void vscode.window.showWarningMessage("Sage can only run local files from disk.");
+        void vscode.window.showWarningMessage(vscode.l10n.t("Sage can only run local files from disk."));
         return;
       }
       const preparation = await prepareRunFileDocument(editor.document);
       if (!preparation.ready) {
         if (preparation.reason === "save-not-completed") {
           void vscode.window.showWarningMessage(
-            "Sage did not run the current file because saving its unsaved changes was cancelled or did not complete.",
+            vscode.l10n.t("Sage did not run the current file because saving its unsaved changes was cancelled or did not complete."),
           );
         } else {
           const detail = preparation.error instanceof Error
             ? preparation.error.message
             : String(preparation.error);
           void vscode.window.showErrorMessage(
-            `Sage could not save the current file, so it was not run: ${detail}`,
+            vscode.l10n.t("Sage could not save the current file, so it was not run: {0}", detail),
           );
         }
         return;
@@ -57,7 +57,7 @@ export function registerExecutionCommands(
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
       const settings = readSettings(workspaceFolder);
 
-      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, "Running Sage code"))) {
+      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, vscode.l10n.t("Running Sage code")))) {
 
         return;
 
@@ -74,7 +74,7 @@ export function registerExecutionCommands(
           editor.document.uri.fsPath,
         );
       } catch (error) {
-        void showTerminalLaunchError("run the current file", error);
+        void showTerminalLaunchError(vscode.l10n.t("run the current file"), error);
         return;
       }
       terminal?.show(true);
@@ -95,7 +95,7 @@ export function registerExecutionCommands(
       }
       const editor = vscode.window.activeTextEditor;
       if (!editor) {
-        void vscode.window.showWarningMessage("Open a Sage file before sending code to REPL.");
+        void vscode.window.showWarningMessage(vscode.l10n.t("Open a Sage file before sending code to REPL."));
         return;
       }
       const selection = editor.document.getText(editor.selection)
@@ -103,7 +103,7 @@ export function registerExecutionCommands(
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
       const settings = readSettings(workspaceFolder);
 
-      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, "Running Sage code"))) {
+      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, vscode.l10n.t("Running Sage code")))) {
 
         return;
 
@@ -118,7 +118,7 @@ export function registerExecutionCommands(
       try {
         terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths, workspaceFolderPath: workspaceFolder?.uri.fsPath }, selection);
       } catch (error) {
-        void showTerminalLaunchError("send the selection to the Sage REPL", error);
+        void showTerminalLaunchError(vscode.l10n.t("send the selection to the Sage REPL"), error);
         return;
       }
       terminal.show(true);
@@ -133,19 +133,19 @@ export function registerExecutionCommands(
       }
       const editor = await editorForCellExecution(target);
       if (!editor) {
-        void vscode.window.showWarningMessage("Open a Sage file before sending a cell to REPL.");
+        void vscode.window.showWarningMessage(vscode.l10n.t("Open a Sage file before sending a cell to REPL."));
         return;
       }
       const activeLine = typeof target?.line === "number" ? target.line : editor.selection.active.line;
       const cell = currentSageCell(editor.document.getText(), activeLine);
       if (!cell) {
-        void vscode.window.showWarningMessage("No Sage cell content found near the cursor.");
+        void vscode.window.showWarningMessage(vscode.l10n.t("No Sage cell content found near the cursor."));
         return;
       }
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
       const settings = readSettings(workspaceFolder);
 
-      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, "Running Sage code"))) {
+      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, vscode.l10n.t("Running Sage code")))) {
 
         return;
 
@@ -160,7 +160,7 @@ export function registerExecutionCommands(
       try {
         terminal = dependencies.terminalManager.runSelection({ ...settings, runtimePythonPaths, workspaceFolderPath: workspaceFolder?.uri.fsPath }, cell.text);
       } catch (error) {
-        void showTerminalLaunchError("send the current cell to the Sage REPL", error);
+        void showTerminalLaunchError(vscode.l10n.t("send the current cell to the Sage REPL"), error);
         return;
       }
       terminal.show(true);
@@ -180,7 +180,7 @@ export function registerExecutionCommands(
         || dependencies.activeProjectFolder();
       const settings = readSettings(workspaceFolder);
 
-      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, "Running Sage code"))) {
+      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, vscode.l10n.t("Running Sage code")))) {
 
         return;
 
@@ -191,7 +191,7 @@ export function registerExecutionCommands(
           runtimePythonPaths: resolveRuntimePythonPaths(workspaceFolder ? [workspaceFolder.uri.fsPath] : dependencies.workspaceFolderPaths(), settings.sourceRoots, settings.extraPaths),
         });
       } catch (error) {
-        void showTerminalLaunchError("start the Sage REPL", error);
+        void showTerminalLaunchError(vscode.l10n.t("start the Sage REPL"), error);
         return;
       }
       terminal.show(true);
@@ -214,15 +214,17 @@ function workspacePathsForDocument(
 // Launch failures are reported without blocking the command: an unanswered notification must not
 // keep `executeCommand` callers (keybindings, tests, other extensions) waiting indefinitely.
 async function showTerminalLaunchError(action: string, error: unknown): Promise<void> {
+  const startRepl = vscode.l10n.t("Start REPL");
+  const selectInterpreter = vscode.l10n.t("Select Sage Interpreter");
   const selectedAction = await vscode.window.showErrorMessage(
-    `Sage could not ${action}: ${String(error)}`,
-    "Start REPL",
-    "Select Interpreter",
+    vscode.l10n.t("Sage could not {0}: {1}", action, String(error)),
+    startRepl,
+    selectInterpreter,
   );
-  if (selectedAction === "Start REPL") {
+  if (selectedAction === startRepl) {
     await vscode.commands.executeCommand("sage.startRepl");
   }
-  if (selectedAction === "Select Interpreter") {
+  if (selectedAction === selectInterpreter) {
     await vscode.commands.executeCommand("sage.selectInterpreter");
   }
 }

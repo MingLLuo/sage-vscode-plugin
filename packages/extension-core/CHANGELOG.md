@@ -4,6 +4,8 @@
 
 ### Interaction
 
+- Simplified Chinese: command names, settings, the walkthrough, status bar labels, and run/REPL/navigation/startup
+  messages follow the VS Code display language (`package.nls.zh-cn.json`, `l10n/bundle.l10n.zh-cn.json`).
 - The status bar checks the configured Sage once (`sage --version`) and shows "Sage not found" instead of "ready"
   when it cannot be started; run and REPL commands then explain why and offer Install SageMath or Select Sage
   Interpreter. Editing features keep working without Sage. The tooltip shows the detected SageMath version.

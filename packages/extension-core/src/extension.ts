@@ -367,8 +367,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
     const message = formatWorkspaceRuntimeUnavailableMessage(workspaceRuntimeState, action);
     if (!workspaceRuntimeState.trusted) {
-      const selected = await vscode.window.showWarningMessage(message, "Manage Workspace Trust");
-      if (selected === "Manage Workspace Trust") {
+      const manageTrust = vscode.l10n.t("Manage Workspace Trust");
+      const selected = await vscode.window.showWarningMessage(message, manageTrust);
+      if (selected === manageTrust) {
         await vscode.commands.executeCommand("workbench.trust.manage");
       }
     } else {
@@ -384,7 +385,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   ): Promise<TestConfigureWorkspaceProfileResult | undefined> => {
     const workspaceFolder = currentProjectFolder();
     if (!workspaceFolder) {
-      void vscode.window.showWarningMessage("Open a workspace folder before configuring Sage.");
+      void vscode.window.showWarningMessage(vscode.l10n.t("Open a workspace folder before configuring Sage."));
       return undefined;
     }
 
@@ -457,17 +458,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (showCompletionMessage) {
       void vscode.window
         .showInformationMessage(
-          `Configured Sage workspace profile: ${profile.label}`,
-          "Show Sage Status",
-          "Rebuild Index",
+          vscode.l10n.t("Configured Sage workspace profile: {0}", profile.label),
+          vscode.l10n.t("Show Sage Status"),
+          vscode.l10n.t("Rebuild Index"),
         )
         .then((selection) => {
-          if (selection === "Show Sage Status") {
-            void vscode.commands.executeCommand("sage.showEnvironmentDetails");
-          }
-          if (selection === "Rebuild Index") {
-            void vscode.commands.executeCommand("sage.rebuildIndex");
-          }
+          if (selection === vscode.l10n.t("Show Sage Status")) void vscode.commands.executeCommand("sage.showEnvironmentDetails");
+          if (selection === vscode.l10n.t("Rebuild Index")) void vscode.commands.executeCommand("sage.rebuildIndex");
         });
     }
 
@@ -488,7 +485,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       languageClientLifecycleController?.operation
       && !languageClientLifecycleController.activeClient
     ));
-    statusBarItem.text = formatStatusBarText(presentationInput);
+    statusBarItem.text = formatStatusBarText(presentationInput, vscode.l10n.t);
     statusBarItem.tooltip = formatStatusBarTooltip(presentationInput);
     statusBarItem.command = STATUS_MENU_COMMAND;
     statusBarItem.show();
@@ -565,8 +562,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const activeClient = controller?.activeClient;
     if (!activeClient) {
       void vscode.window.showWarningMessage(controller?.hasStoppedRecovery
-        ? "Sage language server stopped after repeated failures. Run 'Sage: Restart Language Server' to retry."
-        : "Sage language server is not available yet.");
+        ? vscode.l10n.t("Sage language server stopped after repeated failures. Run 'Sage: Restart Language Server' to retry.")
+        : vscode.l10n.t("Sage language server is not available yet."));
       return undefined;
     }
     return activeClient;
@@ -648,9 +645,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       cacheMisses: status?.cache_miss_count,
     });
     void vscode.window
-      .showInformationMessage(notice.message, "Rebuild Index", "Later")
+      .showInformationMessage(notice.message, vscode.l10n.t("Rebuild Index"))
       .then((selection) => {
-        if (selection === "Rebuild Index") {
+        if (selection === vscode.l10n.t("Rebuild Index")) {
           void vscode.commands.executeCommand("sage.rebuildIndex");
         }
       });
@@ -764,13 +761,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const failedCommand = error instanceof LanguageServerLaunchError ? error.command : verifiedLaunch?.command ?? "";
       if (startupFailure.shownForLaunch !== failedCommand) {
         startupFailure.shownForLaunch = failedCommand;
+        const [showLogs, restart, openSettings] = [vscode.l10n.t("Show Logs"), vscode.l10n.t("Restart"), vscode.l10n.t("Open Settings")];
         void vscode.window.showErrorMessage(
-          error instanceof LanguageServerLaunchError ? error.message : "Sage language server startup failed. See the logs for details.",
-          "Show Logs", "Restart", "Open Settings",
+          error instanceof LanguageServerLaunchError ? error.message : vscode.l10n.t("Sage language server startup failed. See the logs for details."),
+          showLogs, restart, openSettings,
         ).then((action) => {
-          if (action === "Show Logs") outputChannel.show();
-          if (action === "Restart") { startupFailure.shownForLaunch = undefined; void controller.manualRestart(); }
-          if (action === "Open Settings") void vscode.commands.executeCommand("workbench.action.openSettings", "sage.languageServer.rustPath");
+          if (action === showLogs) outputChannel.show();
+          if (action === restart) { startupFailure.shownForLaunch = undefined; void controller.manualRestart(); }
+          if (action === openSettings) void vscode.commands.executeCommand("workbench.action.openSettings", "sage.languageServer.rustPath");
         });
       }
       logger.error("extension", "language server failed to start", { error: String(error),
@@ -985,7 +983,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       const workspaceFolder = currentProjectFolder();
       if (!workspaceFolder) {
-        void vscode.window.showWarningMessage("Open a workspace folder before configuring Sage.");
+        void vscode.window.showWarningMessage(vscode.l10n.t("Open a workspace folder before configuring Sage."));
         return;
       }
       const recommended = recommendedWorkspaceProfile(vscode.window.activeTextEditor?.document.languageId);

@@ -87,43 +87,50 @@ export interface DocsStatusSummary {
   runtime_cache_misses?: number;
 }
 
-export function formatStatusBarText(input: EnvironmentPresentationInput): string {
+/** Translates a status label; the extension passes `vscode.l10n.t`, tests use English. */
+export type StatusTranslator = (message: string, ...args: Array<string | number>) => string;
+
+const englishStatus: StatusTranslator = (message, ...args) =>
+  message.replace(/\{(\d+)\}/g, (_match, index: string) => String(args[Number(index)]));
+
+export function formatStatusBarText(input: EnvironmentPresentationInput, t: StatusTranslator = englishStatus): string {
   const interpreterLabel = path.basename(input.interpreterPath) || input.interpreterPath || "sage";
   const scope = input.workspaceLabel ? ` [${input.workspaceLabel}]` : "";
+  const label = (icon: string, text: string): string => `$(${icon}) Sage${scope}: ${text}`;
   if (input.workspaceRuntimeState && !isWorkspaceRuntimeAvailable(input.workspaceRuntimeState)) {
-    return `$(shield) Sage${scope}: restricted`;
+    return label("shield", t("restricted"));
   }
   if (input.languageServerFailed) {
-    return `$(error) Sage${scope}: LSP stopped`;
+    return label("error", t("LSP stopped"));
   }
   if (input.languageServerStarting) {
-    return `$(sync~spin) Sage${scope}: starting LSP`;
+    return label("sync~spin", t("starting LSP"));
   }
   if (input.languageServerAvailable === false) {
-    return `$(warning) Sage${scope}: LSP unavailable`;
+    return label("warning", t("LSP unavailable"));
   }
   if (input.indexStatus?.last_error) {
-    return `$(error) Sage${scope}: index error`;
+    return label("error", t("index error"));
   }
   if (input.indexStatus?.cache_stale) {
-    return `$(warning) Sage${scope}: cache stale`;
+    return label("warning", t("cache stale"));
   }
   const pendingJobs = input.indexStatus?.pending_jobs ?? 0;
   if (pendingJobs > 0) {
     if (input.indexStatus?.pending_task === "cache-check") {
-      return `$(sync~spin) Sage${scope}: checking index (${pendingJobs})`;
+      return label("sync~spin", t("checking index ({0})", pendingJobs));
     }
     if (input.indexStatus?.pending_task === "rebuild") {
-      return `$(sync~spin) Sage${scope}: rebuilding index (${pendingJobs})`;
+      return label("sync~spin", t("rebuilding index ({0})", pendingJobs));
     }
-    return `$(sync~spin) Sage${scope}: indexing (${pendingJobs})`;
+    return label("sync~spin", t("indexing ({0})", pendingJobs));
   }
   if (input.sageRuntime?.status === "missing") {
     // Editing features work without Sage; running code does not. Say so instead of "ready".
-    return `$(warning) Sage${scope}: Sage not found`;
+    return label("warning", t("Sage not found"));
   }
   const runtimeLabel = input.sageRuntime?.status === "found" ? input.sageRuntime.version : interpreterLabel;
-  return `$(beaker) Sage${scope}: ready (${runtimeLabel})`;
+  return label("beaker", t("ready ({0})", runtimeLabel));
 }
 
 export function formatSageRuntimeState(state: SageRuntimeState | undefined): string {
