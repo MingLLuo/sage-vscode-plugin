@@ -43,6 +43,8 @@ import {
   stopLanguageClientWithTimeout,
 } from "./languageClientOperations";
 import { verifyLanguageServerLaunch, LanguageServerLaunchError } from "./serverStartup";
+import { SageRuntimeChecker } from "./sageRuntimeCheck";
+import { ensureSageRuntimeAvailable } from "./sageRuntimePrompt";
 import { LanguageClientLifecycleController } from "./languageClientLifecycleController";
 import { RuntimeSourceRootDiscoveryController } from "./runtimeSourceRootDiscoveryController";
 import { STATUS_MENU_COMMAND, statusMenuActions } from "./statusMenu";
@@ -224,8 +226,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const key = vscode.window.activeTextEditor?.document.uri.scheme === SAGE_SOURCE_SCHEME && activeScope
       ? activeScope
       : isLooseDocument(vscode.window.activeTextEditor?.document.uri)
-        // A file outside every folder is served by the folder-less controller: no folder
-        // server's document selector covers it.
+        // No folder server's selector covers a file outside every folder.
         ? folderKey(undefined)
         : folderKey(activeWorkspaceFolder());
     if (key === activeScope) {
@@ -256,6 +257,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const sageSourceProvider = new SageSourceTextDocumentProvider();
   const languageServerFileWatcher = vscode.workspace.createFileSystemWatcher(SAGE_LANGUAGE_FILE_GLOB);
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
+  const sageRuntimeChecker = new SageRuntimeChecker(() => updateStatusBar());
   const cellCodeLensProvider = new SageCellCodeLensProvider({
     isEnabled: (document) => {
       const settings = readSettings(vscode.workspace.getWorkspaceFolder(document.uri));
@@ -298,6 +300,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       workspaceRuntimeState: currentWorkspaceRuntimeState(),
       languageServerStarting,
       languageServerAvailable: Boolean(languageClientLifecycleController?.activeClient),
+      sageRuntime: sageRuntimeChecker.state(settings.interpreterPath),
       languageServerFailed: languageClientLifecycleController?.hasStoppedRecovery,
       workspaceLabel: (vscode.workspace.workspaceFolders?.length ?? 0) > 1 ? currentProjectFolder()?.name : undefined,
     };
@@ -480,6 +483,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
     const settings = activeEditorSettings();
     logger.setLevel(settings.loggingLevel);
+    if (!sageRuntimeChecker.state(settings.interpreterPath)) void sageRuntimeChecker.ensure(settings.interpreterPath);
     const presentationInput = buildEnvironmentPresentationInput(Boolean(
       languageClientLifecycleController?.operation
       && !languageClientLifecycleController.activeClient
@@ -693,7 +697,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const startupFailure: { shownForLaunch?: string } = {};
-
   const createScopedController = (folder?: vscode.WorkspaceFolder): LanguageClientLifecycleController<LanguageClient> => {
     const scope = folderKey(folder);
     let controller: LanguageClientLifecycleController<LanguageClient>;
@@ -757,8 +760,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updateStatusBar();
     },
     onStartError: (error) => {
-      // One notification per failing executable across all folder servers: a missing binary
-      // in an N-root workspace must not raise N identical toasts.
+      // One notification per failing executable across all folder servers, not one per folder.
       const failedCommand = error instanceof LanguageServerLaunchError ? error.command : verifiedLaunch?.command ?? "";
       if (startupFailure.shownForLaunch !== failedCommand) {
         startupFailure.shownForLaunch = failedCommand;
@@ -1012,6 +1014,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       workspaceFolderPaths,
       activeProjectFolder: currentProjectFolder,
       showExecutionStatus,
+      ensureSageRuntime: (interpreterPath, action) => ensureSageRuntimeAvailable(sageRuntimeChecker, interpreterPath, action),
     }),
     ...registerNavigationCommands({
       docsPanel,
@@ -1064,6 +1067,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       if (event.affectsConfiguration("sage.interpreter.path") || event.affectsConfiguration("sage.interpreter.args")) {
+        sageRuntimeChecker.invalidate();
         for (const folder of vscode.workspace.workspaceFolders ?? []) {
           if (event.affectsConfiguration("sage.interpreter.path", folder.uri)
             || event.affectsConfiguration("sage.interpreter.args", folder.uri)) {
@@ -1103,11 +1107,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           });
           return;
         }
-        {
-          // The folder-less controller serves loose files even while folders are open.
-          const controller = controllers.get(folderKey(undefined));
-          if (controller?.snapshot().launchCount || controller?.operation || controller?.hasStoppedRecovery) void controller.manualRestart();
-        }
+        const looseController = controllers.get(folderKey(undefined)); // serves loose files even with folders open
+        if (looseController?.snapshot().launchCount || looseController?.operation || looseController?.hasStoppedRecovery) void looseController.manualRestart();
         for (const folder of vscode.workspace.workspaceFolders ?? []) {
           if (shouldRestartLanguageServer((section) => event.affectsConfiguration(section, folder.uri))) {
             const controller = controllers.get(folderKey(folder));

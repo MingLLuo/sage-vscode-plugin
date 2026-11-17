@@ -17,6 +17,8 @@ export interface ExecutionCommandDependencies {
   workspaceFolderPaths(): string[];
   activeProjectFolder(): vscode.WorkspaceFolder | undefined;
   showExecutionStatus(message: string, fields?: Record<string, unknown>): void;
+  /** Resolves false (after telling the user why) when the configured Sage cannot be started. */
+  ensureSageRuntime(interpreterPath: string, action: string): Promise<boolean>;
 }
 
 export function registerExecutionCommands(
@@ -54,6 +56,12 @@ export function registerExecutionCommands(
       }
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
       const settings = readSettings(workspaceFolder);
+
+      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, "Running Sage code"))) {
+
+        return;
+
+      }
       const runtimePythonPaths = resolveRuntimePythonPaths(
         workspacePathsForDocument(editor.document, workspaceFolder, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
@@ -94,6 +102,12 @@ export function registerExecutionCommands(
         || editor.document.lineAt(editor.selection.active.line).text;
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
       const settings = readSettings(workspaceFolder);
+
+      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, "Running Sage code"))) {
+
+        return;
+
+      }
       const runtimePythonPaths = resolveRuntimePythonPaths(
         workspacePathsForDocument(editor.document, workspaceFolder, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
@@ -130,6 +144,12 @@ export function registerExecutionCommands(
       }
       const workspaceFolder = vscode.workspace.getWorkspaceFolder(editor.document.uri) ?? dependencies.activeProjectFolder();
       const settings = readSettings(workspaceFolder);
+
+      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, "Running Sage code"))) {
+
+        return;
+
+      }
       const runtimePythonPaths = resolveRuntimePythonPaths(
         workspacePathsForDocument(editor.document, workspaceFolder, dependencies.workspaceFolderPaths()),
         settings.sourceRoots,
@@ -159,6 +179,12 @@ export function registerExecutionCommands(
       const workspaceFolder = (activeDocument && vscode.workspace.getWorkspaceFolder(activeDocument.uri))
         || dependencies.activeProjectFolder();
       const settings = readSettings(workspaceFolder);
+
+      if (!(await dependencies.ensureSageRuntime(settings.interpreterPath, "Running Sage code"))) {
+
+        return;
+
+      }
       let terminal: vscode.Terminal;
       try {
         terminal = dependencies.terminalManager.startRepl({ ...settings, workspaceFolderPath: workspaceFolder?.uri.fsPath,

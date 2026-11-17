@@ -278,3 +278,19 @@ test("buildIndexMaintenanceNotice prompts only for stale source-root cache", () 
   assert.match(stale?.message ?? "", /different source roots/);
   assert.match(stale?.key ?? "", /shared\.sqlite/);
 });
+
+test("formatStatusBarText reports a missing Sage instead of ready and shows a found version", () => {
+  assert.equal(
+    formatStatusBarText({ ...sample, sageRuntime: { status: "missing", reason: "No executable was found at \"sage\"." } }),
+    "$(warning) Sage: Sage not found",
+  );
+  assert.equal(
+    formatStatusBarText({ ...sample, sageRuntime: { status: "found", version: "SageMath 11.0" } }),
+    "$(beaker) Sage: ready (SageMath 11.0)",
+  );
+  assert.equal(
+    formatStatusBarText({ ...sample, sageRuntime: { status: "unknown", reason: "timed out" } }),
+    "$(beaker) Sage: ready (sage)",
+    "an unverified runtime must not be reported as missing",
+  );
+});

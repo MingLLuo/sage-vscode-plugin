@@ -1,5 +1,7 @@
 import path from "node:path";
 
+import type { SageRuntimeState } from "./sageRuntimeCheck";
+
 import {
   formatWorkspaceRuntimeMode,
   isWorkspaceRuntimeAvailable,
@@ -25,6 +27,7 @@ export interface EnvironmentPresentationInput {
   languageServerAvailable?: boolean;
   languageServerFailed?: boolean;
   workspaceLabel?: string;
+  sageRuntime?: SageRuntimeState;
 }
 
 export interface IndexStatusSummary {
@@ -115,7 +118,25 @@ export function formatStatusBarText(input: EnvironmentPresentationInput): string
     }
     return `$(sync~spin) Sage${scope}: indexing (${pendingJobs})`;
   }
-  return `$(beaker) Sage${scope}: ready (${interpreterLabel})`;
+  if (input.sageRuntime?.status === "missing") {
+    // Editing features work without Sage; running code does not. Say so instead of "ready".
+    return `$(warning) Sage${scope}: Sage not found`;
+  }
+  const runtimeLabel = input.sageRuntime?.status === "found" ? input.sageRuntime.version : interpreterLabel;
+  return `$(beaker) Sage${scope}: ready (${runtimeLabel})`;
+}
+
+export function formatSageRuntimeState(state: SageRuntimeState | undefined): string {
+  switch (state?.status) {
+    case "found":
+      return state.version;
+    case "missing":
+      return `not found - ${state.reason} Editing works; running code needs SageMath.`;
+    case "unknown":
+      return `not verified - ${state.reason}`;
+    default:
+      return "checking";
+  }
 }
 
 export function formatStatusBarTooltip(input: EnvironmentPresentationInput): string {
@@ -126,6 +147,7 @@ export function formatStatusBarTooltip(input: EnvironmentPresentationInput): str
       : "ready";
   const lines = [
     `Interpreter: ${input.interpreterPath}`,
+    `Sage runtime: ${formatSageRuntimeState(input.sageRuntime)}`,
     `Language server: ${input.languageServerEngine ?? "rust-v2"}${input.languageServerPath ? ` (${input.languageServerPath})` : ""}`,
     `Language server state: ${input.languageServerFailed ? "stopped after repeated failures; run Sage: Restart Language Server" : languageServerState}`,
     ...(input.workspaceLabel ? [`Workspace: ${input.workspaceLabel}`] : []),

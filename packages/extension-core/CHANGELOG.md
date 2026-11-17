@@ -4,6 +4,9 @@
 
 ### Interaction
 
+- The status bar checks the configured Sage once (`sage --version`) and shows "Sage not found" instead of "ready"
+  when it cannot be started; run and REPL commands then explain why and offer Install SageMath or Select Sage
+  Interpreter. Editing features keep working without Sage. The tooltip shows the detected SageMath version.
 - `Shift+Enter` sends the selection and `Ctrl+Enter` / `Cmd+Enter` runs the current cell in Sage editors.
 - Multi-line selections and cells reach the REPL as one bracketed paste, so blocks with blank lines run correctly; the
   import-path setup is sent once per REPL session.
