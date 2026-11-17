@@ -217,6 +217,13 @@ pub(super) fn seed_shared_roots_from_attached_peer(
     connection: &mut Connection,
     roots: &[PathBuf],
 ) -> Result<usize> {
+    let peer_format: i32 =
+        connection.query_row("pragma peer_seed.user_version", [], |row| row.get(0))?;
+    if peer_format != cache_format_tag() {
+        // Rows from another cache format (or a database written before formats were recorded)
+        // could undo the parser or schema change that the format bump introduced.
+        return Ok(0);
+    }
     if !schema_table_has_column(connection, "peer_seed.", "files", "identifier_filter")? {
         return Ok(0);
     }
@@ -240,7 +247,13 @@ pub(super) fn seed_shared_roots_from_attached_peer(
             continue;
         }
         let peer_metadata = root_metadata_for_schema(&tx, "peer_seed.", root)?;
-        if !metadata_matches_current_root(peer_metadata, &current_fingerprint) {
+        // A peer without a recorded fingerprint cannot prove its rows match the current tree.
+        let peer_has_fingerprint = peer_metadata
+            .as_ref()
+            .is_some_and(|(_, digest)| digest.as_deref().is_some_and(|digest| !digest.is_empty()));
+        if !peer_has_fingerprint
+            || !metadata_matches_current_root(peer_metadata, &current_fingerprint)
+        {
             continue;
         }
         imported = imported.saturating_add(copy_root_from_attached_peer(&tx, root)?);

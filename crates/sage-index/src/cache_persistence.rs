@@ -234,7 +234,16 @@ pub(super) fn namespace_member_matches_owner(
         && candidate.module == format!("{}.{}", owner_record.module, member)
 }
 
+/// Cache format recorded inside every database (`PRAGMA user_version`), derived from
+/// `CACHE_FORMAT_VERSION`. The file name hash already separates formats; this lets code that
+/// opens other databases (peer seeding) refuse rows written by a different format.
+pub(super) fn cache_format_tag() -> i32 {
+    let digest = Sha256::digest(CACHE_FORMAT_VERSION.as_bytes());
+    i32::from_be_bytes([digest[0] & 0x7f, digest[1], digest[2], digest[3]]).max(1)
+}
+
 pub(super) fn create_schema(connection: &Connection) -> Result<()> {
+    connection.pragma_update(None, "user_version", cache_format_tag())?;
     connection.execute_batch(
         r#"
         pragma journal_mode = wal;

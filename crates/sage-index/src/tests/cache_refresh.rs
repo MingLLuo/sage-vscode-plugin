@@ -616,3 +616,47 @@ fn prewarmed_sage_method_modules_resolve_before_full_rebuild() {
     assert_eq!(query.resolution_confidence.as_deref(), Some("high"));
     fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn peer_seeding_ignores_databases_from_another_cache_format() {
+    let root = test_root("peer-seed-format");
+    let shared = root.join("shared");
+    let project_a = root.join("project-a");
+    let project_b = root.join("project-b");
+    for directory in [&shared, &project_a, &project_b] {
+        fs::create_dir_all(directory).unwrap();
+    }
+    fs::write(
+        shared.join("common.py"),
+        "def common_symbol():\n    return 1\n",
+    )
+    .unwrap();
+    fs::write(project_a.join("a.sage"), "x = 1\n").unwrap();
+    fs::write(project_b.join("b.sage"), "y = 2\n").unwrap();
+    let cache_dir = root.join(".cache");
+    let options = |project: &PathBuf| IndexOptions {
+        roots: vec![project.clone(), shared.clone()],
+        editable_roots: vec![project.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: cache_dir.clone(),
+        enable_pyx: true,
+    };
+    let mut first = WorkspaceIndex::new(options(&project_a));
+    first.reconcile_with_cache().unwrap();
+    // Simulate a database left behind by an older extension release.
+    Connection::open(first.db_path())
+        .unwrap()
+        .pragma_update(None, "user_version", 7)
+        .unwrap();
+
+    let mut other = WorkspaceIndex::new(options(&project_b));
+    other.hydrate_from_cache().unwrap();
+    other.reconcile_with_cache().unwrap();
+    let status = other.status();
+    assert_eq!(status.peer_seed_file_count, 0, "{status:?}");
+    assert!(
+        other.symbol("common_symbol").is_some(),
+        "the shared root is indexed directly instead"
+    );
+    fs::remove_dir_all(root).ok();
+}
