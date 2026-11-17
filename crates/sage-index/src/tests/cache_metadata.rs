@@ -550,3 +550,36 @@ fn warm_up_does_not_hide_workspace_definitions_of_hot_sage_names() {
     assert!(restarted.symbol("PolynomialRing").is_some());
     fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn hydrating_marks_the_database_as_recently_used() {
+    let root = test_root("hydrate-touches-database");
+    fs::write(root.join("mod.py"), "def value():\n    return 1\n").unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: Vec::new(),
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    let mut index = WorkspaceIndex::new(options.clone());
+    index.rebuild().unwrap();
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 24 * 60 * 60);
+    fs::File::options()
+        .write(true)
+        .open(index.db_path())
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+    let mut restarted = WorkspaceIndex::new(options);
+    restarted.hydrate_from_cache().unwrap();
+    let modified = fs::metadata(restarted.db_path())
+        .unwrap()
+        .modified()
+        .unwrap();
+    assert!(
+        modified.elapsed().unwrap() < std::time::Duration::from_secs(60),
+        "an opened database must not look abandoned to the age-based cleanup"
+    );
+    fs::remove_dir_all(root).ok();
+}

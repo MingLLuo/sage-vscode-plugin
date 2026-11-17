@@ -4,6 +4,9 @@
 
 ### Interaction
 
+- Index databases no project has used for 30 days are now deleted automatically before the language server starts,
+  including the per-folder cache directories (previously the cleanup only reported what it would delete). The
+  server marks its own database used on start and every six hours, so open windows keep theirs.
 - Hover and completion documentation render Sage reStructuredText as Markdown: ``literals`` and `:class:` references
   become code, `INPUT:`-style headings are bold, `EXAMPLES::` doctests and `.. MATH::` become code blocks, and
   `.. NOTE::` gets a label. Shortened previews never cut a code block in half.

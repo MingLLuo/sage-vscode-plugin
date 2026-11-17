@@ -442,6 +442,27 @@ impl LanguageServer for Backend {
     }
 
     async fn initialized(&self, _: InitializedParams) {
+        // Automatic cache cleanup removes index databases untouched for 30 days. A window can stay
+        // open for months without writing to its database, so mark it used a few times a day.
+        let index = self.index.clone();
+        let shutting_down = self.shutting_down.clone();
+        tokio::spawn(async move {
+            let mut ticks = tokio::time::interval(std::time::Duration::from_secs(6 * 60 * 60));
+            loop {
+                ticks.tick().await;
+                if shutting_down.load(Ordering::Acquire) {
+                    return;
+                }
+                let path = index.load().db_path().to_path_buf();
+                let _ = tokio::task::spawn_blocking(move || {
+                    std::fs::File::options()
+                        .write(true)
+                        .open(path)
+                        .and_then(|file| file.set_modified(std::time::SystemTime::now()))
+                })
+                .await;
+            }
+        });
         let analysis_mode = *self.analysis_mode.read().await;
         self.client
             .log_message(

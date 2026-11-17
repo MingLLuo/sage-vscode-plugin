@@ -5,7 +5,7 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { maintainIndexCache } from "../src/indexCacheMaintenance";
+import { AUTOMATIC_INDEX_CACHE_MAINTENANCE, maintainIndexCache, maintainIndexCacheTree } from "../src/indexCacheMaintenance";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -147,6 +147,39 @@ test("explicit persistent databases survive age and size pruning", async () => {
     assert.equal(report.entries[0].protected, true);
     assert.equal(report.actions.length, 0);
     assertExists(path.join(root, name), "persistent database must be retained");
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
+
+test("automatic maintenance removes databases unused for 30 days in every folder cache", async () => {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "sage-cache-tree-"));
+  const folder = path.join(root, "0123456789abcdef");
+  await fs.mkdir(folder);
+  const day = 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const write = async (directory: string, digest: string, ageDays: number) => {
+    const file = path.join(directory, `sage-index-${digest}.sqlite`);
+    await fs.writeFile(file, "x".repeat(1024));
+    const time = new Date(now - ageDays * day);
+    await fs.utimes(file, time, time);
+    return file;
+  };
+  try {
+    const rootNewest = await write(root, "a".repeat(16), 40);
+    const rootOld = await write(root, "b".repeat(16), 90);
+    const folderNewest = await write(folder, "c".repeat(16), 2);
+    const folderOld = await write(folder, "d".repeat(16), 45);
+    const folderRecent = await write(folder, "e".repeat(16), 10);
+
+    const reports = await maintainIndexCacheTree({ ...AUTOMATIC_INDEX_CACHE_MAINTENANCE, cacheDir: root, nowMs: now });
+
+    assert.equal(reports.length, 2, "the root and the per-folder directory are both maintained");
+    assert.equal(fsSync.existsSync(rootNewest), false, "age decides, not position: an abandoned directory is emptied");
+    assert.equal(fsSync.existsSync(rootOld), false);
+    assert.equal(fsSync.existsSync(folderNewest), true);
+    assert.equal(fsSync.existsSync(folderRecent), true, "databases used within 30 days are kept");
+    assert.equal(fsSync.existsSync(folderOld), false);
   } finally {
     await fs.rm(root, { recursive: true, force: true });
   }

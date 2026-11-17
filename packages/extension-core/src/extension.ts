@@ -48,14 +48,7 @@ import { ensureSageRuntimeAvailable } from "./sageRuntimePrompt";
 import { LanguageClientLifecycleController } from "./languageClientLifecycleController";
 import { RuntimeSourceRootDiscoveryController } from "./runtimeSourceRootDiscoveryController";
 import { SHOW_LOGS_COMMAND, STATUS_MENU_COMMAND, statusMenuActions } from "./statusMenu";
-import {
-  DEFAULT_INDEX_CACHE_KEEP_LATEST_DATABASES,
-  DEFAULT_INDEX_CACHE_MAX_AGE_DAYS,
-  DEFAULT_INDEX_CACHE_MAX_TOTAL_BYTES,
-  DEFAULT_INDEX_CACHE_ORPHAN_MAX_AGE_DAYS,
-  DEFAULT_INDEX_CACHE_SIZE_PRUNE_MIN_AGE_DAYS,
-  maintainIndexCache,
-} from "./indexCacheMaintenance";
+import { AUTOMATIC_INDEX_CACHE_MAINTENANCE, maintainIndexCacheTree } from "./indexCacheMaintenance";
 import {
   SageSourceTextDocumentProvider,
   SAGE_SOURCE_SCHEME,
@@ -492,38 +485,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   };
 
   const runIndexCacheMaintenance = async (reason: string): Promise<void> => {
-    // Other projects or VS Code windows may have these databases open.
-    // Startup inspects usage; explicit offline maintenance owns deletion.
-    const report = await maintainIndexCache({
-      dryRun: true,
-      cacheDir: rustIndexCacheDir(context),
-      maxAgeDays: DEFAULT_INDEX_CACHE_MAX_AGE_DAYS,
-      maxTotalBytes: DEFAULT_INDEX_CACHE_MAX_TOTAL_BYTES,
-      keepLatestDatabases: DEFAULT_INDEX_CACHE_KEEP_LATEST_DATABASES,
-      orphanMaxAgeDays: DEFAULT_INDEX_CACHE_ORPHAN_MAX_AGE_DAYS,
-      sizePruneMinAgeDays: DEFAULT_INDEX_CACHE_SIZE_PRUNE_MIN_AGE_DAYS,
-    });
-    const fields = {
-      reason,
-      cacheDir: report.cacheDir,
-      databases: report.totals.databaseCount,
-      totalBytes: report.totals.totalBytes,
-      deletedFiles: report.totals.deletedFileCount,
-      deletedBytes: report.totals.deletedBytes,
-      failures: report.failures.length,
-    };
-    if (report.failures.length > 0) {
-      logger.warn("index", "cache maintenance completed with errors", {
-        ...fields,
-        firstError: report.failures[0],
-      });
-      return;
-    }
-    if (report.totals.deletedFileCount > 0) {
-      logger.info("index", "cache maintenance pruned stale index files", fields);
-      return;
-    }
-    logger.debug("index", "cache maintenance completed without pruning", fields);
+    const reports = await maintainIndexCacheTree({ ...AUTOMATIC_INDEX_CACHE_MAINTENANCE, cacheDir: rustIndexCacheDir(context) });
+    const sum = (pick: (report: (typeof reports)[number]) => number): number => reports.reduce((total, report) => total + pick(report), 0);
+    const fields = { reason, cacheDir: rustIndexCacheDir(context), databases: sum((report) => report.totals.databaseCount),
+      totalBytes: sum((report) => report.totals.totalBytes), deletedFiles: sum((report) => report.totals.deletedFileCount),
+      deletedBytes: sum((report) => report.totals.deletedBytes), failures: sum((report) => report.failures.length) };
+    if (fields.failures > 0) logger.warn("index", "cache maintenance completed with errors", { ...fields, firstError: reports.find((report) => report.failures.length)?.failures[0] });
+    else if (fields.deletedFiles > 0) logger.info("index", "cache maintenance removed index databases unused for 30 days", fields);
+    else logger.debug("index", "cache maintenance completed without pruning", fields);
   };
 
   const scheduleRuntimeSourceRootDiscovery = (reason: string): void => {

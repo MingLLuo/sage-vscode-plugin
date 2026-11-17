@@ -79,6 +79,46 @@ export interface IndexCacheMaintenanceReport {
   failures: string[];
 }
 
+/**
+ * Settings for the automatic cleanup that runs before the language server starts. Only age is
+ * used: a database untouched for 30 days belongs to a project that has not been opened in that
+ * time. The server marks its database used on every start and every six hours while running,
+ * so open windows keep theirs. Reopening an old project rebuilds its index (a few seconds).
+ */
+export const AUTOMATIC_INDEX_CACHE_MAINTENANCE: Omit<IndexCacheMaintenanceOptions, "cacheDir"> = {
+  dryRun: false,
+  maxAgeDays: DEFAULT_INDEX_CACHE_MAX_AGE_DAYS,
+  maxTotalBytes: Number.MAX_SAFE_INTEGER,
+  keepLatestDatabases: 0,
+  orphanMaxAgeDays: DEFAULT_INDEX_CACHE_ORPHAN_MAX_AGE_DAYS,
+};
+
+/**
+ * Runs maintenance on a cache directory and on each immediate subdirectory (one per workspace
+ * folder), returning one report per directory that contained index files.
+ */
+export async function maintainIndexCacheTree(
+  options: IndexCacheMaintenanceOptions,
+): Promise<IndexCacheMaintenanceReport[]> {
+  const root = path.resolve(options.cacheDir);
+  const directories = [root];
+  try {
+    for (const entry of await fs.readdir(root, { withFileTypes: true })) {
+      if (entry.isDirectory()) directories.push(path.join(root, entry.name));
+    }
+  } catch (error) {
+    if (!isMissingPathError(error)) throw error;
+  }
+  const reports: IndexCacheMaintenanceReport[] = [];
+  for (const cacheDir of directories) {
+    const report = await maintainIndexCache({ ...options, cacheDir });
+    if (report.totals.databaseCount > 0 || report.totals.orphanSidecarCount > 0 || report.failures.length > 0) {
+      reports.push(report);
+    }
+  }
+  return reports;
+}
+
 export async function maintainIndexCache(
   options: IndexCacheMaintenanceOptions,
 ): Promise<IndexCacheMaintenanceReport> {

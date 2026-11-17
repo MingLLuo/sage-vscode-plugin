@@ -375,6 +375,11 @@ impl WorkspaceIndex {
             self.last_hydrate_ms = self.last_index_ms;
             return Ok(self.status());
         }
+        // Automatic cache cleanup removes databases untouched for 30 days; mark this one used.
+        let _ = std::fs::File::options()
+            .write(true)
+            .open(&self.db_path)
+            .and_then(|file| file.set_modified(std::time::SystemTime::now()));
         let connection = match Connection::open(&self.db_path) {
             Ok(connection) => connection,
             Err(error) => {
