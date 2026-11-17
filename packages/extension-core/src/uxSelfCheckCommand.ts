@@ -45,7 +45,7 @@ export function registerUxSelfCheckCommand(
 
     const editor = options.activeOrVisibleSageEditor();
     if (!editor) {
-      void vscode.window.showWarningMessage("Open a Sage file before running the Sage UX self check.");
+      void vscode.window.showWarningMessage(vscode.l10n.t("Open a Sage file before running the Sage UX self check."));
       return;
     }
 

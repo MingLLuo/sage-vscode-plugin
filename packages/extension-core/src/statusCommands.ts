@@ -80,7 +80,7 @@ export function registerStatusCommands(
       try {
         await vscode.window.withProgress({
           location: vscode.ProgressLocation.Notification,
-          title: "Discovering Sage sources for the persistent database",
+          title: vscode.l10n.t("Discovering Sage sources for the persistent database"),
           cancellable: false,
         }, () => dependencies.prepareDatabaseBuild());
         const status = await vscode.commands.executeCommand<IndexStatusSummary | undefined>("sage.rebuildIndex");
@@ -226,7 +226,7 @@ export function registerStatusCommands(
         const rebuiltStatus = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: "Rebuilding Sage index",
+            title: vscode.l10n.t("Rebuilding Sage index"),
             cancellable: false,
           },
           async (progress) => waitForIndexRebuild({

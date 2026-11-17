@@ -16,6 +16,7 @@ import {
 import { readSettings } from "./configuration";
 import { SageCellCodeLensProvider } from "./cellCodeLens";
 import { registerCellContext } from "./cellContext";
+import { localizedProfileText } from "./localizedProfiles";
 import { DocumentationPanel } from "./docsPanel";
 import {
   formatStatusBarText,
@@ -452,7 +453,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     if (showCompletionMessage) {
       void vscode.window
         .showInformationMessage(
-          vscode.l10n.t("Configured Sage workspace profile: {0}", profile.label),
+          vscode.l10n.t("Configured Sage workspace profile: {0}", localizedProfileText(profile).label),
           vscode.l10n.t("Show Sage Status"),
           vscode.l10n.t("Rebuild Index"),
         )
@@ -515,7 +516,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const waitResult = await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
-            title: "Starting Sage language server",
+            title: vscode.l10n.t("Starting Sage language server"),
             cancellable: true,
           },
           async (_progress, token) => waitForOperationOrCancellation(
@@ -902,9 +903,16 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         currentPath: settings.interpreterPath,
         workspaceFolders: workspaceFolder ? [workspaceFolder.uri.fsPath] : workspaceFolderPaths(),
       });
-      const picked = await vscode.window.showQuickPick(detectedOptions, {
-        title: "Select Sage environment",
-        placeHolder: "Choose a detected Sage runtime, or enter a custom path.",
+      const localizedOptions = detectedOptions.map((option) => option.selectionTarget === "runtimeCustom"
+        ? {
+          ...option,
+          label: vscode.l10n.t("Enter custom Sage path..."),
+          detail: vscode.l10n.t("Update sage.interpreter.path manually."),
+        }
+        : option);
+      const picked = await vscode.window.showQuickPick(localizedOptions, {
+        title: vscode.l10n.t("Select Sage environment"),
+        placeHolder: vscode.l10n.t("Choose a detected Sage runtime, or enter a custom path."),
         matchOnDescription: true,
         matchOnDetail: true,
       });
@@ -915,9 +923,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const updates = await resolveInterpreterConfigurationUpdates(picked, settings, {
         runtimePath: (initialValue) => vscode.window.showInputBox({
-          title: "Sage runtime path",
+          title: vscode.l10n.t("Sage runtime path"),
           value: initialValue,
-          prompt: "Enter the Sage executable used for run commands and the managed REPL.",
+          prompt: vscode.l10n.t("Enter the Sage executable used for run commands and the managed REPL."),
         }),
       });
       if (!updates || updates.length === 0) {
@@ -960,15 +968,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       }
       const recommended = recommendedWorkspaceProfile(vscode.window.activeTextEditor?.document.languageId);
       const picked = await vscode.window.showQuickPick(
-        WORKSPACE_CONFIGURATION_PROFILES.map((profile) => ({
-          label: profile.id === recommended.id ? `${profile.label} (Recommended)` : profile.label,
-          description: profile.description,
-          detail: profile.detail,
-          profile,
-        })),
+        WORKSPACE_CONFIGURATION_PROFILES.map((profile) => {
+          const text = localizedProfileText(profile);
+          return {
+            ...text,
+            label: profile.id === recommended.id ? vscode.l10n.t("{0} (Recommended)", text.label) : text.label,
+            profile,
+          };
+        }),
         {
-          title: "Configure Sage workspace",
-          placeHolder: "Choose the closest profile for this workspace.",
+          title: vscode.l10n.t("Configure Sage workspace"),
+          placeHolder: vscode.l10n.t("Choose the closest profile for this workspace."),
           matchOnDescription: true,
           matchOnDetail: true,
         },

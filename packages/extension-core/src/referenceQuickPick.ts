@@ -33,7 +33,7 @@ export async function showReferencesQuickPick(locations: vscode.Location[]): Pro
   const picked = await vscode.window.showQuickPick(items, {
     matchOnDescription: true,
     matchOnDetail: true,
-    placeHolder: "Select a Sage reference to open",
+    placeHolder: vscode.l10n.t("Select a Sage reference to open"),
   });
   if (!picked) {
     return;
