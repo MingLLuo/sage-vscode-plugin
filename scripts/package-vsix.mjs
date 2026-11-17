@@ -57,7 +57,7 @@ const EXTENSION_PACKAGE_PATTERNS = [
   /^resources\/branding\/[^/]+\.(?:png|svg)$/,
   /^resources\/generated\/syntax\/language-configuration\.json$/,
   /^resources\/generated\/syntax\/(?:snippets|syntaxes)\/[^/]+\.json$/,
-  /^resources\/walkthrough\/[^/]+\.md$/,
+  /^resources\/walkthrough\/(?:zh-cn\/)?[^/]+\.md$/,
   /^l10n\/bundle\.l10n(?:\.[a-z-]+)?\.json$/,
 ];
 const DEPENDENCY_RUNTIME_EXTENSIONS = new Set([

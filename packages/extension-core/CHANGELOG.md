@@ -4,6 +4,9 @@
 
 ### Interaction
 
+- The Getting Started walkthrough now covers installing or selecting SageMath, running a first file, the editing and
+  REPL shortcuts, project configuration, and troubleshooting, in English and Simplified Chinese; it no longer asks
+  new users to run the developer self check.
 - Simplified Chinese: command names, settings, the walkthrough, status bar labels, and run/REPL/navigation/startup
   messages follow the VS Code display language (`package.nls.zh-cn.json`, `l10n/bundle.l10n.zh-cn.json`).
 - The status bar checks the configured Sage once (`sage --version`) and shows "Sage not found" instead of "ready"

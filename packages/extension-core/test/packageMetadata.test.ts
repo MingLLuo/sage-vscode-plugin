@@ -735,19 +735,17 @@ test("getting started walkthrough covers first-run Sage setup", () => {
   assert.match(walkthrough.title, /Sage/);
 
   const stepIds = new Set(walkthrough.steps.map((step) => step.id));
-  for (const expected of ["selectInterpreter", "configureWorkspace", "inspectIndex", "validateEditLoop"]) {
+  for (const expected of ["installSage", "runFirstFile", "editAndExplore", "configureWorkspace", "troubleshoot"]) {
     assert.ok(stepIds.has(expected), `missing walkthrough step ${expected}`);
   }
 
   const completionEvents = new Set(walkthrough.steps.flatMap((step) => step.completionEvents ?? []));
   for (const expected of [
     "onCommand:sage.selectInterpreter",
+    "onCommand:sage.runCurrentFile",
+    "onCommand:sage.runSelection",
     "onCommand:sage.configureWorkspace",
     "onCommand:sage.showEnvironmentDetails",
-    "onCommand:sage.showIndexStatus",
-    "onCommand:sage.showDocsStatus",
-    "onCommand:sage.copySupportBundle",
-    "onCommand:sage.runUxSelfCheck",
   ]) {
     assert.ok(completionEvents.has(expected), `missing walkthrough completion event ${expected}`);
   }
@@ -758,7 +756,13 @@ test("getting started walkthrough covers first-run Sage setup", () => {
       fs.existsSync(path.resolve(packageRoot, step.media.markdown)),
       `missing walkthrough media ${step.media.markdown}`,
     );
+    const chinese = path.resolve(packageRoot, path.dirname(step.media.markdown), "zh-cn", path.basename(step.media.markdown));
+    assert.ok(fs.existsSync(chinese), `missing Chinese walkthrough media for ${step.id}`);
   }
+  assert.ok(
+    !walkthrough.steps.some((step) => step.completionEvents?.includes("onCommand:sage.runUxSelfCheck")),
+    "first-run steps should not depend on the developer self check",
+  );
 });
 
 test("user docs cover every command and setting", () => {

@@ -252,14 +252,40 @@
         "description": "%walkthrough.gettingStarted.description%",
         "steps": [
           {
-            "id": "selectInterpreter",
-            "title": "%walkthrough.gettingStarted.selectInterpreter.title%",
-            "description": "%walkthrough.gettingStarted.selectInterpreter.description%",
+            "id": "installSage",
+            "title": "%walkthrough.gettingStarted.installSage.title%",
+            "description": "%walkthrough.gettingStarted.installSage.description%",
             "media": {
-              "markdown": "./resources/walkthrough/select-interpreter.md"
+              "markdown": "%walkthrough.gettingStarted.installSage.media%"
             },
             "completionEvents": [
-              "onCommand:sage.selectInterpreter"
+              "onCommand:sage.selectInterpreter",
+              "onLink:https://doc.sagemath.org/html/en/installation/index.html"
+            ]
+          },
+          {
+            "id": "runFirstFile",
+            "title": "%walkthrough.gettingStarted.runFirstFile.title%",
+            "description": "%walkthrough.gettingStarted.runFirstFile.description%",
+            "media": {
+              "markdown": "%walkthrough.gettingStarted.runFirstFile.media%"
+            },
+            "completionEvents": [
+              "onCommand:sage.runCurrentFile"
+            ]
+          },
+          {
+            "id": "editAndExplore",
+            "title": "%walkthrough.gettingStarted.editAndExplore.title%",
+            "description": "%walkthrough.gettingStarted.editAndExplore.description%",
+            "media": {
+              "markdown": "%walkthrough.gettingStarted.editAndExplore.media%"
+            },
+            "completionEvents": [
+              "onCommand:sage.runSelection",
+              "onCommand:sage.runCurrentCell",
+              "onCommand:sage.startRepl",
+              "onCommand:sage.showDocumentation"
             ]
           },
           {
@@ -267,35 +293,23 @@
             "title": "%walkthrough.gettingStarted.configureWorkspace.title%",
             "description": "%walkthrough.gettingStarted.configureWorkspace.description%",
             "media": {
-              "markdown": "./resources/walkthrough/configure-workspace.md"
+              "markdown": "%walkthrough.gettingStarted.configureWorkspace.media%"
             },
             "completionEvents": [
               "onCommand:sage.configureWorkspace"
             ]
           },
           {
-            "id": "inspectIndex",
-            "title": "%walkthrough.gettingStarted.inspectIndex.title%",
-            "description": "%walkthrough.gettingStarted.inspectIndex.description%",
+            "id": "troubleshoot",
+            "title": "%walkthrough.gettingStarted.troubleshoot.title%",
+            "description": "%walkthrough.gettingStarted.troubleshoot.description%",
             "media": {
-              "markdown": "./resources/walkthrough/inspect-status.md"
+              "markdown": "%walkthrough.gettingStarted.troubleshoot.media%"
             },
             "completionEvents": [
               "onCommand:sage.showEnvironmentDetails",
-              "onCommand:sage.showIndexStatus",
-              "onCommand:sage.showDocsStatus",
-              "onCommand:sage.copySupportBundle"
-            ]
-          },
-          {
-            "id": "validateEditLoop",
-            "title": "%walkthrough.gettingStarted.validateEditLoop.title%",
-            "description": "%walkthrough.gettingStarted.validateEditLoop.description%",
-            "media": {
-              "markdown": "./resources/walkthrough/validate-edit-loop.md"
-            },
-            "completionEvents": [
-              "onCommand:sage.runUxSelfCheck"
+              "onCommand:sage.copySupportBundle",
+              "onCommand:sage.restartLanguageServer"
             ]
           }
         ]
