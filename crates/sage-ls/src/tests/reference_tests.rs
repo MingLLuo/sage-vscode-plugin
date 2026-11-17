@@ -236,7 +236,7 @@ fn parameter_reference_candidates_do_not_cross_function_or_file_bindings() {
 #[test]
 fn import_alias_rename_target_uses_local_binding_instead_of_source_definition() {
     let path = PathBuf::from("/workspace/consumer.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let source = "from provider import target as alias\nvalue = alias()\n";
     let usage_range = Range::new(Position::new(1, 8), Position::new(1, 13));
     let target = local_import_alias_rename_target(&uri, &path, source, "alias", usage_range)
@@ -290,7 +290,7 @@ fn import_alias_rename_target_uses_local_binding_instead_of_source_definition() 
 #[test]
 fn import_alias_rename_and_references_stop_at_visible_rebindings() {
     let path = PathBuf::from("/workspace/consumer.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let source = [
         "from provider import target as alias",
         "before = alias()",
@@ -366,7 +366,7 @@ fn import_alias_rename_and_references_stop_at_visible_rebindings() {
 #[test]
 fn nested_relative_import_alias_rename_keeps_the_workspace_module_identity() {
     let path = PathBuf::from("/workspace/pkg/sub/consumer.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let source = "from .provider import target as alias\nvalue = alias()\n";
     let symbols = parse_source("pkg.sub.consumer", &path, source).symbols;
     let usage_range = Range::new(Position::new(1, 8), Position::new(1, 13));
@@ -407,7 +407,7 @@ fn nested_relative_import_alias_rename_keeps_the_workspace_module_identity() {
 #[test]
 fn import_alias_rename_candidates_stay_in_the_alias_binding_scope() {
     let path = PathBuf::from("/workspace/consumer.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let source = [
         "def first():",
         "    from provider import target as alias",
@@ -726,7 +726,7 @@ fn method_definition_identity_keeps_owner_specific_targets_separate() {
         .definition
         .expect("unified navigation should resolve the member owner");
     assert_eq!(target.detail, "Method Second.target");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let item = call_hierarchy_item_for_local_definition(&uri, &path, &source, &target)
         .expect("call hierarchy should reuse the owner-aware navigation target");
     assert_eq!(item.selection_range.start, Position::new(5, 8));
@@ -765,7 +765,7 @@ fn definition_identity_separates_same_path_nested_definitions() {
 
 #[test]
 fn scoped_reference_locations_honor_include_declaration() {
-    let uri = Url::parse("file:///workspace/demo.py").unwrap();
+    let uri = parse_uri("file:///workspace/demo.py").unwrap();
     let declaration = Location {
         uri: uri.clone(),
         range: Range::new(Position::new(0, 4), Position::new(0, 10)),
@@ -813,7 +813,7 @@ async fn incoming_calls_find_same_file_callers_before_the_index_is_ready() {
     // background index pass has not finished; the file is never opened by the client.
     let (service, _socket) = LspService::new(Backend::new);
     let backend = service.inner();
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let items = backend
         .prepare_call_hierarchy(CallHierarchyPrepareParams {
             text_document_position_params: TextDocumentPositionParams {

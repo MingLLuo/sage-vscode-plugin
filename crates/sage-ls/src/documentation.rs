@@ -7,7 +7,7 @@ use sage_index::{
     parse_source, DocumentationRecord, QueryPosition, QueryResult, SymbolRecord, WorkspaceIndex,
 };
 use std::path::Path;
-use tower_lsp::lsp_types::Url;
+use tower_lsp_server::ls_types::Uri;
 
 pub(super) fn documentation_record_for_source_position(
     index: &WorkspaceIndex,
@@ -67,8 +67,7 @@ fn documentation_record_from_symbol(symbol: SymbolRecord) -> DocumentationRecord
             .unwrap_or_else(|| symbol.detail.clone()),
         summary,
         docstring: symbol.docstring,
-        uri: Url::from_file_path(&symbol.path)
-            .ok()
+        uri: Uri::from_file_path(&symbol.path)
             .map(|uri| uri.to_string()),
         markers: Vec::new(),
         sections: Vec::new(),

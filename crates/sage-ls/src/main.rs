@@ -55,7 +55,7 @@ use navigation::{
 #[cfg(test)]
 use open_documents::source_text_fingerprint;
 use open_documents::{
-    live_document_for_path, live_document_for_uri_or_path, uri_to_path, OpenDocument,
+    live_document_for_path, live_document_for_uri_or_path, parse_uri, uri_to_path, OpenDocument,
     OpenDocumentMap,
 };
 use references::ReferenceCollectionMode;
@@ -93,13 +93,13 @@ use text_positions::{
     utf16_character_to_byte_offset, word_at_position,
 };
 use tokio::sync::{Mutex, RwLock};
-use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::request::{
+use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::ls_types::request::{
     GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
     GotoImplementationResponse, GotoTypeDefinitionParams, GotoTypeDefinitionResponse,
 };
-use tower_lsp::lsp_types::*;
-use tower_lsp::{async_trait, Client, LanguageServer, LspService, Server};
+use tower_lsp_server::ls_types::*;
+use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
@@ -204,7 +204,6 @@ impl Backend {
     }
 }
 
-#[async_trait]
 impl LanguageServer for Backend {
     async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
         let initialize_started = Instant::now();
@@ -276,6 +275,7 @@ impl LanguageServer for Backend {
         trace_initialize_phase(initialize_started, "spawn-reconcile");
 
         Ok(InitializeResult {
+            offset_encoding: None,
             server_info: Some(ServerInfo {
                 name: "sage-ls".to_string(),
                 version: Some(env!("CARGO_PKG_VERSION").to_string()),
@@ -840,7 +840,7 @@ impl LanguageServer for Backend {
         params: CallHierarchyIncomingCallsParams,
     ) -> Result<Option<Vec<CallHierarchyIncomingCall>>> {
         let mut calls = Vec::new();
-        let mut contexts: HashMap<Url, CallHierarchySourceContext> = HashMap::new();
+        let mut contexts: HashMap<Uri, CallHierarchySourceContext> = HashMap::new();
         let Some(target) = self
             .resolved_reference_target_at(&params.item.uri, params.item.selection_range.start)
             .await
@@ -992,12 +992,12 @@ impl LanguageServer for Backend {
     async fn symbol(
         &self,
         params: WorkspaceSymbolParams,
-    ) -> Result<Option<Vec<SymbolInformation>>> {
+    ) -> Result<Option<WorkspaceSymbolResponse>> {
         let limit = self.analysis_mode.read().await.workspace_symbol_limit();
-        Ok(Some(
+        Ok(Some(WorkspaceSymbolResponse::Flat(
             self.workspace_symbol_information(&params.query, limit)
                 .await,
-        ))
+        )))
     }
 
     async fn semantic_tokens_full(
@@ -1111,7 +1111,7 @@ fn query_feature_bool(payload: &Value, key: &str) -> Option<bool> {
 }
 
 impl Backend {
-    async fn publish_diagnostics_for_text(&self, uri: Url, text: String) {
+    async fn publish_diagnostics_for_text(&self, uri: Uri, text: String) {
         let Some(path) = uri_to_path(&uri) else {
             return;
         };
@@ -1138,7 +1138,7 @@ impl Backend {
             .await;
     }
 
-    async fn document_for_uri(&self, uri: &Url) -> Option<OpenDocument> {
+    async fn document_for_uri(&self, uri: &Uri) -> Option<OpenDocument> {
         let documents = self.open_documents.read().await;
         if let Some(live) = live_document_for_uri_or_path(&documents, uri) {
             return Some(live.document);
@@ -1163,7 +1163,7 @@ impl Backend {
             );
         }
         drop(documents);
-        let uri = Url::from_file_path(&definition.path).ok()?;
+        let uri = Uri::from_file_path(&definition.path)?;
         if let Ok(text) = std::fs::read_to_string(&definition.path) {
             if let Some(item) =
                 call_hierarchy_item_for_local_definition(&uri, &definition.path, &text, definition)
@@ -1179,7 +1179,7 @@ impl Backend {
         ))
     }
 
-    fn schedule_linked_document_prewarm(&self, uri: Url, text: String, version: i32) {
+    fn schedule_linked_document_prewarm(&self, uri: Uri, text: String, version: i32) {
         self.linked_document_prewarmer.schedule(
             Arc::clone(&self.index),
             Arc::clone(&self.index_work_gate),
@@ -1191,7 +1191,7 @@ impl Backend {
         );
     }
 
-    async fn text_for_uri_or_file(&self, uri: &Url) -> Option<String> {
+    async fn text_for_uri_or_file(&self, uri: &Uri) -> Option<String> {
         let documents = self.open_documents.read().await;
         if let Some(live) = live_document_for_uri_or_path(&documents, uri) {
             return Some(live.document.text);
@@ -1201,7 +1201,7 @@ impl Backend {
         std::fs::read_to_string(path).ok()
     }
 
-    async fn prefix_at_uri_position(&self, uri: &Url, position: Position) -> Option<String> {
+    async fn prefix_at_uri_position(&self, uri: &Uri, position: Position) -> Option<String> {
         let document = self.document_for_uri(uri).await?;
         current_prefix(&document.text, position)
     }
@@ -1280,7 +1280,7 @@ impl Backend {
         let uri = payload.get("textDocument")?.get("uri")?.as_str()?;
         let line = payload.get("position")?.get("line")?.as_u64()? as u32;
         let character = payload.get("position")?.get("character")?.as_u64()? as u32;
-        let uri = Url::parse(uri).ok()?;
+        let uri = parse_uri(uri)?;
         let path = uri_to_path(&uri)?;
         let text = self.text_for_uri_or_file(&uri).await?;
         let position = query_position_from_lsp(&text, Position::new(line, character))?;
@@ -1293,7 +1293,7 @@ impl Backend {
 
     async fn query_payload(&self, payload: Value) -> Option<Value> {
         let uri = payload.get("textDocument")?.get("uri")?.as_str()?;
-        let uri = Url::parse(uri).ok()?;
+        let uri = parse_uri(uri)?;
         let path = uri_to_path(&uri)?;
         let document = self.document_for_uri(&uri).await?;
         let rename_to = payload.get("renameTo").and_then(Value::as_str);
@@ -1503,7 +1503,7 @@ fn completion_documentation(value: String) -> Documentation {
     })
 }
 
-fn code_actions_for_diagnostics(uri: Url, diagnostics: &[Diagnostic]) -> CodeActionResponse {
+fn code_actions_for_diagnostics(uri: Uri, diagnostics: &[Diagnostic]) -> CodeActionResponse {
     let mut actions = Vec::new();
     for diagnostic in diagnostics {
         if is_python_sage_exponent_diagnostic(diagnostic) {
@@ -1578,7 +1578,7 @@ fn diagnostic_severity(value: &str) -> DiagnosticSeverity {
     }
 }
 
-fn workspace_edit_for_text_edits(uri: Url, edits: Vec<TextEdit>) -> WorkspaceEdit {
+fn workspace_edit_for_text_edits(uri: Uri, edits: Vec<TextEdit>) -> WorkspaceEdit {
     let mut changes = HashMap::new();
     changes.insert(uri, edits);
     WorkspaceEdit {

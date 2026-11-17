@@ -4,7 +4,6 @@ use crate::analysis_mode::ConfiguredAnalysisMode;
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::PathBuf;
-use tower_lsp::lsp_types::Url;
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -171,9 +170,10 @@ fn resolve_configured_paths(values: &[String], workspace_folders: &[PathBuf]) ->
 }
 
 fn uri_or_path(value: &str) -> Option<PathBuf> {
-    Url::parse(value)
-        .ok()
-        .and_then(|url| url.to_file_path().ok())
+    // A bare Windows path such as `C:\\work` also parses as a URI with scheme `c`, so only `file:`
+    // URIs are converted; everything else is treated as a filesystem path.
+    crate::open_documents::parse_uri(value)
+        .and_then(|uri| crate::open_documents::uri_to_path(&uri))
         .or_else(|| Some(PathBuf::from(value)))
 }
 

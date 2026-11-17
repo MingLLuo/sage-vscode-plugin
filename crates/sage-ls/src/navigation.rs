@@ -18,14 +18,14 @@ use sage_index::{
 };
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::path::Path;
-use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::request::{
+use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::ls_types::request::{
     GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
     GotoImplementationResponse, GotoTypeDefinitionParams, GotoTypeDefinitionResponse,
 };
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     ClientCapabilities, GotoDefinitionParams, GotoDefinitionResponse, Location, LocationLink,
-    Position, Range, TextDocumentPositionParams, Url,
+    Position, Range, TextDocumentPositionParams, Uri,
 };
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -149,7 +149,7 @@ impl NavigationQueryCache {
         }
     }
 
-    pub(super) fn invalidate_uri(&mut self, uri: &Url) {
+    pub(super) fn invalidate_uri(&mut self, uri: &Uri) {
         let uri = uri.to_string();
         self.entries.retain(|key, _| key.uri != uri);
         self.order.retain(|key| key.uri != uri);
@@ -162,7 +162,7 @@ impl NavigationQueryCache {
 }
 
 pub(super) fn navigation_query_cache_key(
-    uri: &Url,
+    uri: &Uri,
     document: &OpenDocument,
     position: Position,
     index_generation: u64,
@@ -353,14 +353,14 @@ impl Backend {
                 (uri, document.text)
             } else {
                 (
-                    Url::from_file_path(&source.path).ok()?,
+                    Uri::from_file_path(&source.path)?,
                     std::fs::read_to_string(&source.path).ok()?,
                 )
             };
         runtime_source_location(uri, &text, &source)
     }
 
-    pub(super) async fn open_document_for_path(&self, path: &Path) -> Option<(Url, OpenDocument)> {
+    pub(super) async fn open_document_for_path(&self, path: &Path) -> Option<(Uri, OpenDocument)> {
         let documents = self.open_documents.read().await;
         let live = live_document_for_path(&documents, path)?;
         Some((live.uri, live.document))
@@ -368,7 +368,7 @@ impl Backend {
 
     pub(super) async fn navigation_query_for_document(
         &self,
-        uri: &Url,
+        uri: &Uri,
         document: &OpenDocument,
         path: &Path,
         position: Position,
@@ -385,7 +385,7 @@ impl Backend {
 
     async fn navigation_query_for_document_kind(
         &self,
-        uri: &Url,
+        uri: &Uri,
         document: &OpenDocument,
         path: &Path,
         position: Position,
@@ -447,7 +447,7 @@ impl Backend {
 }
 
 pub(super) fn runtime_source_location(
-    uri: Url,
+    uri: Uri,
     text: &str,
     source: &super::runtime_docs::RuntimeSourceLocation,
 ) -> Option<Location> {
@@ -469,7 +469,7 @@ pub(super) fn validated_disk_definition_location(definition: &QueryDefinition) -
     if definition.detail.is_empty() {
         return None;
     }
-    let uri = Url::from_file_path(&definition.path).ok()?;
+    let uri = Uri::from_file_path(&definition.path)?;
     let text = std::fs::read_to_string(&definition.path).ok()?;
     let range = live_definition_range(definition, &text)?;
     Some(Location {
@@ -594,10 +594,14 @@ fn line_looks_like_import_continuation(line: &str) -> bool {
     item == "(" || item == ")" || item.bytes().next().is_some_and(is_identifier_start)
 }
 
-pub(super) fn location_reference_key(uri: &Url, range: &Range) -> String {
+pub(super) fn location_reference_key(uri: &Uri, range: &Range) -> String {
     format!(
         "{}:{}:{}:{}:{}",
-        uri, range.start.line, range.start.character, range.end.line, range.end.character
+        uri.as_str(),
+        range.start.line,
+        range.start.character,
+        range.end.line,
+        range.end.character
     )
 }
 

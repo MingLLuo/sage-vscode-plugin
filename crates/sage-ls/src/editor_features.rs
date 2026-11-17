@@ -4,7 +4,7 @@ use super::text_positions::{
     byte_offset_to_utf16_character, utf16_character_to_byte_offset, word_at_position,
 };
 use std::{collections::BTreeSet, sync::OnceLock};
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     FoldingRange, FoldingRangeKind, InlayHint, InlayHintKind, InlayHintLabel, InlayHintTooltip,
     Position, Range, SelectionRange,
 };

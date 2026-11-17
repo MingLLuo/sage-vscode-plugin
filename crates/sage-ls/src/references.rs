@@ -20,11 +20,11 @@ use sage_index::{
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
-use tower_lsp::jsonrpc::Result;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::jsonrpc::Result;
+use tower_lsp_server::ls_types::{
     DocumentChanges, DocumentHighlight, DocumentHighlightKind, DocumentHighlightParams, Location,
     OneOf, OptionalVersionedTextDocumentIdentifier, Position, PrepareRenameResponse, Range,
-    ReferenceParams, RenameParams, TextDocumentEdit, TextDocumentPositionParams, TextEdit, Url,
+    ReferenceParams, RenameParams, TextDocumentEdit, TextDocumentPositionParams, TextEdit, Uri,
     WorkspaceEdit,
 };
 
@@ -148,7 +148,7 @@ impl Backend {
         &self,
         params: RenameParams,
     ) -> Result<Option<WorkspaceEdit>> {
-        let versions_before: HashMap<Url, i32> = self
+        let versions_before: HashMap<Uri, i32> = self
             .open_documents
             .read()
             .await
@@ -168,7 +168,7 @@ impl Backend {
         if self.rename_would_collide(&target, &params.new_name).await {
             return Ok(None);
         }
-        let mut changes: HashMap<Url, Vec<TextEdit>> = HashMap::new();
+        let mut changes: HashMap<Uri, Vec<TextEdit>> = HashMap::new();
         for location in self
             .reference_locations(
                 &ResolvedReferenceTarget {
@@ -268,7 +268,7 @@ impl Backend {
         }))
     }
 
-    async fn rename_target(&self, uri: &Url, position: Position) -> Option<RenameTarget> {
+    async fn rename_target(&self, uri: &Uri, position: Position) -> Option<RenameTarget> {
         let document = self.document_for_uri(uri).await?;
         let path = uri_to_path(uri)?;
         let physical_path = canonical_path_for_comparison(&path);
@@ -319,7 +319,7 @@ impl Backend {
 
     pub(super) async fn resolved_reference_target_at(
         &self,
-        uri: &Url,
+        uri: &Uri,
         position: Position,
     ) -> Option<ResolvedReferenceTarget> {
         let document = self.document_for_uri(uri).await?;
@@ -427,9 +427,9 @@ impl Backend {
         if !open_paths.contains(&canonical_path_for_comparison(definition_path))
             && reference_path_is_collectible(&index, definition_path, mode)
         {
-            if let (Ok(text), Ok(uri)) = (
+            if let (Ok(text), Some(uri)) = (
                 std::fs::read_to_string(definition_path),
-                Url::from_file_path(definition_path),
+                Uri::from_file_path(definition_path),
             ) {
                 collect_source_reference_locations(
                     &index,
@@ -451,7 +451,7 @@ impl Backend {
 #[allow(clippy::too_many_arguments)]
 fn collect_source_reference_locations(
     index: &WorkspaceIndex,
-    uri: &Url,
+    uri: &Uri,
     path: &Path,
     text: &str,
     target: &ResolvedReferenceTarget,
@@ -486,7 +486,7 @@ fn collect_source_reference_locations(
 
 #[cfg(test)]
 pub(super) fn local_import_alias_rename_target(
-    uri: &Url,
+    uri: &Uri,
     physical_path: &Path,
     text: &str,
     word: &str,
@@ -497,7 +497,7 @@ pub(super) fn local_import_alias_rename_target(
 }
 
 pub(super) fn local_import_alias_rename_target_with_symbols(
-    uri: &Url,
+    uri: &Uri,
     text: &str,
     word: &str,
     range: Range,
@@ -709,7 +709,7 @@ pub(super) fn indexed_reference_locations(
             let Ok(text) = std::fs::read_to_string(&path) else {
                 return Vec::new();
             };
-            let Ok(uri) = Url::from_file_path(&path) else {
+            let Some(uri) = Uri::from_file_path(&path) else {
                 return Vec::new();
             };
             let parsed = index

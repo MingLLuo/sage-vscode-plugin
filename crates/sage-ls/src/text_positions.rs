@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
-use tower_lsp::lsp_types::{Position, Range, TextDocumentContentChangeEvent};
+use tower_lsp_server::ls_types::{Position, Range, TextDocumentContentChangeEvent};
 
 pub(super) fn lsp_range_for_text(text: &str, range: &sage_index::SourceRange) -> Range {
     Range {

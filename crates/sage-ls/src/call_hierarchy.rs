@@ -15,9 +15,9 @@ use sage_index::{
     QueryResult, SymbolRecord, WorkspaceIndex,
 };
 use std::path::Path;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     CallHierarchyIncomingCall, CallHierarchyItem, CallHierarchyOutgoingCall, FoldingRange,
-    Position, Range, SymbolKind, Url,
+    Position, Range, SymbolKind, Uri,
 };
 
 #[derive(Clone, Debug)]
@@ -28,7 +28,7 @@ pub(super) struct CallHierarchySourceContext {
 }
 
 pub(super) fn call_hierarchy_item_for_local_definition(
-    uri: &Url,
+    uri: &Uri,
     path: &Path,
     text: &str,
     definition: &QueryDefinition,
@@ -47,7 +47,7 @@ pub(super) fn call_hierarchy_item_for_local_definition(
 
 pub(super) fn call_hierarchy_item_from_definition(
     definition: &QueryDefinition,
-    uri: Url,
+    uri: Uri,
     range: Range,
 ) -> CallHierarchyItem {
     CallHierarchyItem {
@@ -64,7 +64,7 @@ pub(super) fn call_hierarchy_item_from_definition(
 
 #[cfg(test)]
 pub(super) fn call_hierarchy_item_for_live_index_symbol(
-    uri: &Url,
+    uri: &Uri,
     path: &Path,
     text: &str,
     indexed_symbol: &SymbolRecord,
@@ -88,7 +88,7 @@ pub(super) fn call_hierarchy_item_for_live_index_symbol(
 }
 
 pub(super) fn enclosing_call_hierarchy_item(
-    uri: &Url,
+    uri: &Uri,
     path: &Path,
     text: &str,
     position: Position,
@@ -103,7 +103,7 @@ pub(super) fn enclosing_call_hierarchy_item(
 }
 
 pub(super) fn call_hierarchy_item_for_local_symbol_at_position(
-    uri: &Url,
+    uri: &Uri,
     path: &Path,
     text: &str,
     position: Position,
@@ -125,7 +125,7 @@ pub(super) fn call_hierarchy_item_for_local_symbol_at_position(
 }
 
 pub(super) fn enclosing_call_hierarchy_item_from_context(
-    uri: &Url,
+    uri: &Uri,
     context: &CallHierarchySourceContext,
     position: Position,
 ) -> Option<CallHierarchyItem> {
@@ -154,7 +154,7 @@ pub(super) fn enclosing_call_hierarchy_item_from_context(
 }
 
 pub(super) fn call_hierarchy_item_for_symbol(
-    uri: &Url,
+    uri: &Uri,
     text: &str,
     symbol: &SymbolRecord,
 ) -> CallHierarchyItem {
@@ -163,7 +163,7 @@ pub(super) fn call_hierarchy_item_for_symbol(
 }
 
 pub(super) fn call_hierarchy_item_for_symbol_with_folds(
-    uri: &Url,
+    uri: &Uri,
     text: &str,
     folds: &[FoldingRange],
     symbol: &SymbolRecord,
@@ -609,7 +609,7 @@ mod tests {
             .into_iter()
             .find(|symbol| symbol.name == "target")
             .unwrap();
-        let uri = Url::from_file_path(&alias_path).unwrap();
+        let uri = Uri::from_file_path(&alias_path).unwrap();
         let live_text = "π = 3\n\ndef target(value='🚀'):\n    return value\n";
 
         let item =

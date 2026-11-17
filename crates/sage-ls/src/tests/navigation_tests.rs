@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn runtime_definition_validates_source_line_and_utf16_range() {
-    let uri = Url::parse("file:///workspace/trig.py").unwrap();
+    let uri = parse_uri("file:///workspace/trig.py").unwrap();
     let source = crate::runtime_docs::RuntimeSourceLocation {
         path: PathBuf::from("/workspace/trig.py"),
         line: 1,
@@ -28,7 +28,7 @@ fn runtime_definition_validates_source_line_and_utf16_range() {
 async fn runtime_definition_does_not_override_local_bindings_or_non_code() {
     let (service, _socket) = LspService::new(Backend::new);
     let backend = service.inner();
-    let uri = Url::parse("file:///workspace/local.sage").unwrap();
+    let uri = parse_uri("file:///workspace/local.sage").unwrap();
     for (text, position, expected) in [
         (
             "def sin(x):\n    return x\nsin(0)\n",
@@ -180,8 +180,8 @@ fn navigation_link_support_is_negotiated_per_request_kind() {
 #[test]
 fn navigation_links_fall_back_to_ordered_exact_locations() {
     let origin = Range::new(Position::new(4, 10), Position::new(4, 16));
-    let first_uri = Url::parse("file:///workspace/first.py").unwrap();
-    let second_uri = Url::parse("file:///workspace/second.py").unwrap();
+    let first_uri = parse_uri("file:///workspace/first.py").unwrap();
+    let second_uri = parse_uri("file:///workspace/second.py").unwrap();
     let first_range = Range::new(Position::new(1, 8), Position::new(1, 14));
     let second_range = Range::new(Position::new(7, 4), Position::new(7, 10));
     let links = vec![
@@ -236,7 +236,7 @@ fn navigation_links_fall_back_to_ordered_exact_locations() {
     let implementation_response: GotoImplementationResponse = navigation_response_for_links(
         vec![LocationLink {
             origin_selection_range: Some(origin),
-            target_uri: Url::parse("file:///workspace/implementation.py").unwrap(),
+            target_uri: parse_uri("file:///workspace/implementation.py").unwrap(),
             target_range: Range::new(Position::new(3, 0), Position::new(4, 0)),
             target_selection_range: Range::new(Position::new(3, 4), Position::new(3, 10)),
         }],
@@ -556,7 +556,7 @@ fn unopened_definition_relocates_a_stale_index_range() {
 
     let location =
         validated_disk_definition_location(&definition).expect("moved definition should relocate");
-    assert_eq!(location.uri, Url::from_file_path(&path).unwrap());
+    assert_eq!(location.uri, Uri::from_file_path(&path).unwrap());
     assert_eq!(
         location.range,
         Range::new(Position::new(3, 4), Position::new(3, 10))
@@ -707,7 +707,7 @@ fn unopened_definition_validation_keeps_import_variable_and_cython_targets() {
         let definition = parsed_disk_definition(path.clone(), text, name, kind);
         let location = validated_disk_definition_location(&definition)
             .expect("verified source symbol should remain navigable");
-        assert_eq!(location.uri, Url::from_file_path(&path).unwrap());
+        assert_eq!(location.uri, Uri::from_file_path(&path).unwrap());
         assert_eq!(location.range, lsp_range_for_text(text, &definition.range));
         std::fs::remove_file(path).ok();
     }

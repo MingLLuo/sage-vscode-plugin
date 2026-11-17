@@ -20,7 +20,7 @@ use std::{
     time::Duration,
 };
 use tokio::sync::{oneshot, Mutex, RwLock};
-use tower_lsp::lsp_types::Url;
+use tower_lsp_server::ls_types::Uri;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct PrewarmRevision {
@@ -43,7 +43,7 @@ impl LinkedDocumentPrewarmer {
         index_work_gate: Arc<Mutex<()>>,
         navigation_cache: Arc<RwLock<NavigationQueryCache>>,
         shutting_down: Arc<AtomicBool>,
-        uri: Url,
+        uri: Uri,
         text: String,
         document_version: i32,
     ) {
@@ -121,7 +121,7 @@ impl LinkedDocumentPrewarmer {
         });
     }
 
-    pub(super) fn cancel(&self, uri: &Url) {
+    pub(super) fn cancel(&self, uri: &Uri) {
         let Some(path) = uri_to_path(uri) else {
             return;
         };
@@ -249,7 +249,7 @@ mod tests {
         fs::write(&document_path, "# open document\n").unwrap();
         fs::write(&first_target, "def first_target():\n    return 1\n").unwrap();
         fs::write(&second_target, "def second_target():\n    return 2\n").unwrap();
-        let uri = Url::from_file_path(&document_path).unwrap();
+        let uri = Uri::from_file_path(&document_path).unwrap();
         let index = Arc::new(RwLock::new(WorkspaceIndex::new(IndexOptions {
             roots: vec![root.clone()],
             editable_roots: vec![root.clone()],

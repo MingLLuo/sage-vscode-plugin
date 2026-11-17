@@ -1,7 +1,7 @@
 //! Signature-help construction and UTF-16 parameter label offsets.
 
 use super::text_positions::byte_offset_to_utf16_character;
-use tower_lsp::lsp_types::{
+use tower_lsp_server::ls_types::{
     Documentation, ParameterInformation, ParameterLabel, SignatureInformation,
 };
 

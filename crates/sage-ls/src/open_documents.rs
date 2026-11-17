@@ -9,9 +9,9 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
-use tower_lsp::lsp_types::Url;
+use tower_lsp_server::ls_types::Uri;
 
-pub(super) type OpenDocumentMap = HashMap<Url, OpenDocument>;
+pub(super) type OpenDocumentMap = HashMap<Uri, OpenDocument>;
 
 #[derive(Clone, Debug)]
 pub(super) struct OpenDocument {
@@ -22,7 +22,7 @@ pub(super) struct OpenDocument {
 }
 
 impl OpenDocument {
-    pub(super) fn live(uri: &Url, text: String, version: i32) -> Self {
+    pub(super) fn live(uri: &Uri, text: String, version: i32) -> Self {
         Self {
             text,
             version,
@@ -31,7 +31,7 @@ impl OpenDocument {
         }
     }
 
-    pub(super) fn on_disk(uri: &Url, text: String) -> Self {
+    pub(super) fn on_disk(uri: &Uri, text: String) -> Self {
         Self {
             content_fingerprint: Some(source_text_fingerprint(&text)),
             text,
@@ -40,7 +40,7 @@ impl OpenDocument {
         }
     }
 
-    pub(super) fn physical_path(&self, uri: &Url) -> Option<PathBuf> {
+    pub(super) fn physical_path(&self, uri: &Uri) -> Option<PathBuf> {
         self.physical_path
             .clone()
             .or_else(|| uri_to_path(uri).map(|path| canonical_path_for_comparison(&path)))
@@ -49,14 +49,14 @@ impl OpenDocument {
 
 #[derive(Clone, Debug)]
 pub(super) struct LiveDocument {
-    pub(super) uri: Url,
+    pub(super) uri: Uri,
     pub(super) path: PathBuf,
     pub(super) document: OpenDocument,
 }
 
 pub(super) fn live_document_for_uri_or_path(
     documents: &OpenDocumentMap,
-    uri: &Url,
+    uri: &Uri,
 ) -> Option<LiveDocument> {
     if let Some(document) = documents.get(uri) {
         return Some(LiveDocument {
@@ -106,8 +106,17 @@ pub(super) fn unique_live_documents(documents: &OpenDocumentMap) -> Vec<LiveDocu
         .collect()
 }
 
-pub(super) fn uri_to_path(uri: &Url) -> Option<PathBuf> {
-    uri.to_file_path().ok()
+/// Converts a `file:` URI to a filesystem path. Other schemes never map to a path.
+pub(super) fn uri_to_path(uri: &Uri) -> Option<PathBuf> {
+    if !uri.scheme().as_str().eq_ignore_ascii_case("file") {
+        return None;
+    }
+    uri.to_file_path().map(|path| path.into_owned())
+}
+
+/// Parses a URI string received from the client.
+pub(super) fn parse_uri(value: &str) -> Option<Uri> {
+    value.parse().ok()
 }
 
 pub(super) fn canonical_path_for_comparison(path: &Path) -> PathBuf {
@@ -147,13 +156,13 @@ mod tests {
         symlink(&physical, &first_alias).unwrap();
         symlink(&physical, &second_alias).unwrap();
 
-        let first_uri = Url::from_file_path(&first_alias).unwrap();
-        let second_uri = Url::from_file_path(&second_alias).unwrap();
-        let physical_uri = Url::from_file_path(&physical).unwrap();
+        let first_uri = Uri::from_file_path(&first_alias).unwrap();
+        let second_uri = Uri::from_file_path(&second_alias).unwrap();
+        let physical_uri = Uri::from_file_path(&physical).unwrap();
         let mut documents = OpenDocumentMap::new();
         documents.insert(
             first_uri,
-            OpenDocument::live(&Url::from_file_path(&first_alias).unwrap(), "old".into(), 3),
+            OpenDocument::live(&Uri::from_file_path(&first_alias).unwrap(), "old".into(), 3),
         );
         documents.insert(
             second_uri.clone(),
@@ -175,7 +184,7 @@ mod tests {
         let client_path = root.join("demo.py");
         fs::write(&client_path, "value = 1\n").unwrap();
         let physical_path = fs::canonicalize(&client_path).unwrap();
-        let client_uri = Url::from_file_path(&client_path).unwrap();
+        let client_uri = Uri::from_file_path(&client_path).unwrap();
         let mut documents = OpenDocumentMap::new();
         documents.insert(
             client_uri.clone(),
@@ -207,7 +216,7 @@ mod tests {
                 .join("unsaved.sage")
         );
 
-        let client_uri = Url::from_file_path(&client_path).unwrap();
+        let client_uri = Uri::from_file_path(&client_path).unwrap();
         let mut documents = OpenDocumentMap::new();
         documents.insert(
             client_uri.clone(),

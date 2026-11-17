@@ -6,7 +6,7 @@ use super::{
     text_positions::{byte_offset_to_utf16_character, is_word_byte},
 };
 use std::path::{Path, PathBuf};
-use tower_lsp::lsp_types::{DocumentLink, Position, Range, Url};
+use tower_lsp_server::ls_types::{DocumentLink, Position, Range, Uri};
 
 pub(super) fn sage_document_links(text: &str, document_path: &Path) -> Vec<DocumentLink> {
     let base_dir = document_path.parent().unwrap_or_else(|| Path::new("."));
@@ -182,7 +182,7 @@ fn document_link_for_path_literal(
                 byte_offset_to_utf16_character(line, end).unwrap_or(end as u32),
             ),
         ),
-        target: Url::from_file_path(resolved).ok(),
+        target: Uri::from_file_path(resolved),
         tooltip: Some("Open referenced Sage/Cython file".to_string()),
         data: None,
     })

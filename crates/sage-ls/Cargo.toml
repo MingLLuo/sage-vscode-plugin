@@ -6,11 +6,10 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-notify.workspace = true
 rayon.workspace = true
 regex.workspace = true
 sage-index = { path = "../sage-index" }
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-tower-lsp.workspace = true
+tower-lsp-server.workspace = true

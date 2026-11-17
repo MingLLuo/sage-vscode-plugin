@@ -8,7 +8,7 @@ mod reference_tests;
 async fn documentation_placeholder_at_position_attempts_runtime_lookup() {
     let (service, _socket) = LspService::new(Backend::new);
     let backend = service.inner();
-    let uri = Url::parse("file:///workspace/docs.sage").unwrap();
+    let uri = parse_uri("file:///workspace/docs.sage").unwrap();
     backend.open_documents.write().await.insert(
         uri.clone(),
         OpenDocument::live(&uri, "PolynomialRing(QQ, 'x')".to_string(), 1),
@@ -32,7 +32,7 @@ async fn documentation_placeholder_at_position_attempts_runtime_lookup() {
 async fn explicit_documentation_symbol_overrides_cursor_and_keeps_local_docs() {
     let (service, _socket) = LspService::new(Backend::new);
     let backend = service.inner();
-    let uri = Url::parse("file:///workspace/docs.py").unwrap();
+    let uri = parse_uri("file:///workspace/docs.py").unwrap();
     backend.open_documents.write().await.insert(
         uri.clone(),
         OpenDocument::live(&uri, "def selected():\n    \"\"\"Selected function documentation.\"\"\"\n    pass\ndef adjacent():\n    \"\"\"Wrong documentation.\"\"\"\n    pass\n".to_string(),
@@ -160,7 +160,7 @@ fn sage_inlay_hints_respect_requested_line_range() {
 
 #[test]
 fn code_actions_offer_sage_exponent_quick_fixes() {
-    let uri = Url::parse("file:///demo.sage").unwrap();
+    let uri = parse_uri("file:///demo.sage").unwrap();
     let diagnostic = Diagnostic {
         range: Range::new(Position::new(0, 9), Position::new(0, 10)),
         severity: Some(DiagnosticSeverity::ERROR),
@@ -209,7 +209,7 @@ fn code_actions_offer_sage_exponent_quick_fixes() {
 
 #[test]
 fn code_actions_replace_python_sage_caret_exponents() {
-    let uri = Url::parse("file:///demo.py").unwrap();
+    let uri = parse_uri("file:///demo.py").unwrap();
     let diagnostic = Diagnostic {
         range: Range::new(Position::new(2, 9), Position::new(2, 10)),
         severity: Some(DiagnosticSeverity::WARNING),
@@ -797,7 +797,7 @@ fn call_hierarchy_scanner_skips_calls_in_multiline_strings() {
 #[test]
 fn call_hierarchy_enclosing_item_finds_nearest_function_block() {
     let path = PathBuf::from("/workspace/demo.sage");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let source = [
         "def helper(A):",
         "    return A",
@@ -820,7 +820,7 @@ fn call_hierarchy_enclosing_item_finds_nearest_function_block() {
 #[test]
 fn call_hierarchy_local_fast_path_only_matches_declarations() {
     let path = PathBuf::from("/workspace/demo.py");
-    let uri = Url::from_file_path(&path).unwrap();
+    let uri = Uri::from_file_path(&path).unwrap();
     let source = [
         "from sage.all import zero_matrix",
         "",
@@ -874,7 +874,7 @@ fn sage_document_links_cover_load_attach_and_cython_include() {
     let targets = links
         .iter()
         .filter_map(|link| link.target.as_ref())
-        .map(|uri| uri.to_file_path().unwrap())
+        .map(|uri| uri_to_path(uri).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(links.len(), 4);
     assert!(targets.contains(&PathBuf::from("/workspace/project/src/helpers/setup.sage")));

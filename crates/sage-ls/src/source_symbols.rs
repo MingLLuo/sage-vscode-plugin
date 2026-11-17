@@ -13,8 +13,8 @@ use std::{
     collections::{BTreeSet, HashMap},
     path::Path,
 };
-use tower_lsp::lsp_types::{
-    DocumentSymbol, FoldingRange, Location, Position, Range, SymbolInformation, SymbolKind, Url,
+use tower_lsp_server::ls_types::{
+    DocumentSymbol, FoldingRange, Location, Position, Range, SymbolInformation, SymbolKind, Uri,
 };
 
 pub(super) fn module_name_for_path(path: &Path) -> &str {
@@ -208,7 +208,7 @@ fn workspace_symbol_information_from(
         if open_paths.contains(&canonical_path_for_comparison(&symbol.path)) {
             continue;
         }
-        let Ok(uri) = Url::from_file_path(&symbol.path) else {
+        let Some(uri) = Uri::from_file_path(&symbol.path) else {
             continue;
         };
         candidates.push(SymbolInformation {
@@ -327,7 +327,7 @@ mod tests {
         symlink(&physical, &alias).unwrap();
 
         let indexed = parse_source("physical", &physical, disk_text).symbols;
-        let alias_uri = Url::from_file_path(&alias).unwrap();
+        let alias_uri = Uri::from_file_path(&alias).unwrap();
         let live_text = "π = 3\n\ndef target(value='🚀'):\n    return value\n";
         let mut documents = OpenDocumentMap::new();
         documents.insert(

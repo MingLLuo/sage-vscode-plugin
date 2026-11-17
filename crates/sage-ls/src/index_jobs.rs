@@ -8,7 +8,7 @@ use sage_index::WorkspaceIndex;
 use serde_json::{json, Value};
 use std::{path::PathBuf, sync::atomic::Ordering};
 use tokio::sync::{oneshot, RwLock};
-use tower_lsp::lsp_types::MessageType;
+use tower_lsp_server::ls_types::MessageType;
 
 async fn finish_pending_index_job(
     pending_jobs: &RwLock<usize>,
