@@ -126,9 +126,21 @@ jobs:
         run: node scripts/prepare-vscode-test.mjs
       - name: Install target package into isolated profile
         run: npm run test:vsix-install
+      - name: Check out latest Sage source for the editor regression
+        if: matrix.target == 'linux-x64'
+        uses: actions/checkout@v7
+        with:
+          repository: sagemath/sage
+          path: sage
+          fetch-depth: 1
+          sparse-checkout: |
+            src/sage
+          persist-credentials: false
       - name: Linux editor regression
         if: matrix.target == 'linux-x64'
         run: xvfb-run -a npm run test:extension-host
+        env:
+          SAGE_TEST_NATIVE_SOURCE_ROOT: ${{ github.workspace }}/sage/src
       - uses: actions/upload-artifact@v7
         with:
           name: vsix-${{ matrix.target }}

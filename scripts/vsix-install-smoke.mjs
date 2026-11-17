@@ -199,9 +199,19 @@ function spawnCode(command, args, options) {
     // Invoke Electron's CLI directly; shell quoting breaks paths with spaces on Windows.
     const appRoot = path.resolve(path.dirname(command), "..");
     const executable = path.join(appRoot, /insiders/i.test(command) ? "Code - Insiders.exe" : "Code.exe");
-    return spawnSync(executable, [path.join(appRoot, "resources", "app", "out", "cli.js"), ...args], {
-      ...options, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-    });
+    // Recent Windows builds keep resources in a per-commit folder next to Code.exe.
+    const cliScript = [appRoot, ...fs.readdirSync(appRoot, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(appRoot, entry.name))]
+      .map((root) => path.join(root, "resources", "app", "out", "cli.js"))
+      .find((candidate) => fs.existsSync(candidate));
+    if (cliScript && fs.existsSync(executable)) {
+      return spawnSync(executable, [cliScript, ...args], {
+        ...options, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      });
+    }
+    // Node refuses to spawn .cmd files without a shell; quote the script path for cmd.exe.
+    return spawnSync(`"${command}"`, args, { ...options, shell: true });
   }
   return spawnSync(command, args, options);
 }
