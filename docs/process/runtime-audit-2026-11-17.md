@@ -195,3 +195,39 @@ Artifact hashes in earlier records describe their historical checkpoints, not su
    this continuation and reports no authenticated GitHub hosts; no remote workflow was dispatched.
 5. **M5:** only after the above, align extension/root versions with Rust 0.2.0, update release-wide documentation and changelog,
    repeat acceptance tests, and perform the clean-install/remote-host walkthrough. The extension remains preview 0.1.0.
+
+## Review of the continuation (Claude, 2026-11-17)
+
+Three read-only reviews of the uncommitted continuation found new defects. The continuation was committed as area
+checkpoints (`6131de8`..`4ff23fb`) and each defect was fixed in its own commit with a regression test:
+
+- CRLF sources with non-ASCII text could panic in `LexicalScopeMap` (offsets assumed one-byte line terminators).
+- Every typing pause re-installed unchanged prewarmed files, rebuilt the symbol map, bumped the generation, and sent
+  client refreshes.
+- References failed with ContentModified whenever any other open document changed.
+- Cancelling a runtime-docs request killed the warm Sage worker; go-to-definition could wait up to 60 s for it; worker
+  globals shadowed Sage names (`line`); `sage-python` and interpreter arguments broke the worker launch.
+- Valid Sage syntax (`^^`, `[1, 3, .., 11]`, `f(x) = x^2`, `.spyx` Cython) was reported as errors, an unclosed bracket
+  underlined the rest of the file, and XOR warnings could crowd out syntax errors. Diagnostics on the Sage library went
+  from 78 to 0; every removed one was reviewed as a false positive.
+- A `.sage` file outside every workspace folder had no language server; a corrected server path could be dropped
+  during the version handshake; tag releases did not depend on the CI gate or check the version.
+- After a restart, workspace definitions of hot Sage names (for example a local `PolynomialRing`) were hidden by an
+  empty warm-up cache entry (pre-existing).
+
+Measured on the reference host (`docs/perf/baseline-2026-11-17-review.json`): references for `matrix` 1.0 s (was
+28.8 s, then 4.5 s), physical memory after cold index 175 MB and after Rebuild Index 250 MB (peaks 419 / 605 MB).
+macOS `ps` RSS overstated memory by counting pages already returned as reusable.
+
+Crash recovery: the server was killed with SIGKILL at 0.4, 1.2, 2.0, 2.6, and 3.2 s into a cold index of the full Sage
+tree (during parsing and during the SQLite persist). Every restart recovered: 3,842 files indexed, no index error,
+hover and definition for `PolynomialRing` correct, recovery 0.1-4.3 s.
+
+Also delivered in this review: bracketed-paste REPL input (verified against a real Sage REPL), Shift+Enter /
+Ctrl+Enter keybindings, Sage presence detection, recovery actions first in the status menu, Simplified Chinese for the
+manifest, walkthrough, and runtime messages, RST-to-Markdown hovers, automatic deletion of index databases unused for
+30 days, and the cache format recorded in each database.
+
+Still open: native CI on Linux/Windows/Intel macOS has never run remotely; the shared-library cache design (one Sage
+database for all projects); remaining synchronous handlers, `$/progress`, metrics, and a one-hour soak; LogOutputChannel,
+esbuild bundling, and the extension version bump to 0.2.0.
