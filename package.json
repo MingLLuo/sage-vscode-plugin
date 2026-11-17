@@ -26,7 +26,7 @@
     "build:debug-inspector": "cargo build --locked -p sage-index --bin sage-debug-inspect",
     "check:package-toolchain": "node scripts/check-package-toolchain.mjs",
     "package:rust-binary": "npm run check:package-toolchain && node scripts/build-packaged-rust-binary.mjs",
-    "package:vsix": "npm run check:package-toolchain && npm run build && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && node scripts/package-vsix.mjs",
+    "package:vsix": "node scripts/build-vsix.mjs",
     "generate:icon": "node scripts/generate-extension-icon.mjs",
     "cache:status": "node scripts/cache-maintenance.mjs",
     "cache:prune:dry-run": "node scripts/cache-maintenance.mjs --prune --max-age-days 30",
@@ -66,8 +66,10 @@
     "test:vsix-package": "node scripts/vsix-package-smoke.mjs",
     "test:vsix-install": "node scripts/vsix-install-smoke.mjs",
     "test:extension-host": "npm run build:rust && npm run test:extension-host --workspace sage-vscode-extension",
-    "test:ci": "cargo test --locked && cargo clippy --locked --all-targets --all-features -- -D warnings && npm run lint && npm run build && npm run test && npm run test:configure-workspace && npm run test:debug-web:sage && npm run test:lsp-protocol && npm run test:lsp-unicode-rename && npm run test:lsp-highlighting && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && npm run test:vsix-package && npm run test:cache-maintenance && npm run test:repo-hygiene && npm run test:product-readiness && npm run test:reference-export && npm run test:performance -- --skip-workbench && git diff --check",
-    "test:release": "cargo test --locked && cargo clippy --locked --all-targets --all-features -- -D warnings && npm run lint && npm run test && npm run test:configure-workspace && npm run test:debug-web:sage && npm run test:lsp-protocol && npm run test:lsp-unicode-rename && npm run test:lsp-highlighting && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && npm run test:vsix-package && npm run test:vsix-install && npm run test:cache-maintenance && npm run test:repo-hygiene && npm run test:product-readiness && npm run test:reference-export && npm run test:performance -- --skip-workbench && npm run test:lsp-latency && npm run test:real-file-smoke && git diff --check",
-    "test:full": "npm run test:release && npm run test:extension-host"
+    "test:ci": "cargo test --locked && cargo clippy --locked --all-targets --all-features -- -D warnings && npm run lint && npm run build && npm run test && npm run test:configure-workspace && npm run test:debug-web:sage && npm run test:lsp-protocol && npm run test:lsp-concurrency && npm run test:package-targets && npm run test:lsp-unicode-rename && npm run test:lsp-highlighting && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && npm run test:vsix-package && npm run test:cache-maintenance && npm run test:repo-hygiene && npm run test:product-readiness && npm run test:reference-export && npm run test:performance -- --skip-workbench && git diff --check",
+    "test:release": "cargo test --locked && cargo clippy --locked --all-targets --all-features -- -D warnings && npm run lint && npm run test && npm run test:configure-workspace && npm run test:debug-web:sage && npm run test:lsp-protocol && npm run test:lsp-concurrency && npm run test:package-targets && npm run test:lsp-unicode-rename && npm run test:lsp-highlighting && npm run test:generated-assets && npm run package:rust-binary && npm run test:vsix-contents && npm run test:vsix-package && npm run test:vsix-install && npm run test:cache-maintenance && npm run test:repo-hygiene && npm run test:product-readiness && npm run test:reference-export && npm run test:performance -- --skip-workbench && npm run test:lsp-latency && npm run test:real-file-smoke && git diff --check",
+    "test:full": "npm run test:release && npm run test:extension-host",
+    "test:package-targets": "node --test scripts/lib/package-targets.test.mjs",
+    "test:lsp-concurrency": "npm run build:rust && node scripts/lsp-concurrency-smoke.mjs"
   }
 }

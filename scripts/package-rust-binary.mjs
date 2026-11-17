@@ -4,82 +4,71 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  cargoReleaseBinaryPath,
+  resolvePackageTarget,
+  selectedPackageTargetName,
+  stagedPaths,
+} from "./lib/package-targets.mjs";
 
+// Stages an already built `sage-ls` for one VS Code target under
+// packages/extension-core/resources/bin/<platform>-<arch>/ together with its
+// SHA-256 and build metadata. Supported targets: darwin-arm64, darwin-x64,
+// linux-x64, linux-arm64, alpine-x64, alpine-arm64, win32-x64, win32-arm64.
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
 const args = parseArgs(process.argv.slice(2));
-const platform = args.platform ?? process.platform;
-const arch = args.arch ?? process.arch;
 const profile = args.profile ?? "release";
 const dryRun = args.dryRun === true;
 
-const target = packageTarget(platform, arch);
-const executable = "sage-ls";
+const target = packageTarget();
+const staged = stagedPaths(repositoryRoot, target);
 const source = args.source
   ? path.resolve(args.source)
-  : path.join(repositoryRoot, "target", profile, executable);
-const destinationDirectory = path.join(
-  repositoryRoot,
-  "packages",
-  "extension-core",
-  "resources",
-  "bin",
-  target.directory,
-);
-const destination = path.join(destinationDirectory, target.executable);
-const sha256Path = `${destination}.sha256`;
-const metadataPath = path.join(destinationDirectory, "sage-ls.meta.json");
+  : cargoReleaseBinaryPath(repositoryRoot, target, profile);
 
 if (!fsSync.existsSync(source)) {
-  fail(`missing source binary: ${source}. Run cargo build --${profile} -p sage-ls first.`);
+  fail(
+    `missing source binary: ${source}. `
+    + `Run npm run package:rust-binary -- --target ${target.name} to build and stage it.`,
+  );
 }
 
 const binary = await fs.readFile(source);
 const sha256 = crypto.createHash("sha256").update(binary).digest("hex");
+// The metadata describes the binary, not the VSIX: linux-* and alpine-* share
+// one musl binary, so staging either produces byte-identical files.
 const metadata = {
   name: "sage-ls",
-  platform,
-  arch,
+  platform: target.platform,
+  arch: target.arch,
+  rustTarget: target.rustTarget,
   profile,
-  source: path.relative(repositoryRoot, source),
-  destination: path.relative(repositoryRoot, destination),
+  source: slash(path.relative(repositoryRoot, source)),
+  destination: slash(path.relative(repositoryRoot, staged.binary)),
   sha256,
 };
 
 if (!dryRun) {
-  await fs.mkdir(destinationDirectory, { recursive: true });
-  await fs.copyFile(source, destination);
-  await fs.chmod(destination, 0o755);
-  await fs.writeFile(sha256Path, `${sha256}  ${target.executable}\n`, "utf8");
-  await fs.writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+  await fs.mkdir(staged.directory, { recursive: true });
+  await fs.copyFile(source, staged.binary);
+  await fs.chmod(staged.binary, 0o755);
+  await fs.writeFile(staged.sha256, `${sha256}  ${target.executable}\n`, "utf8");
+  await fs.writeFile(staged.metadata, `${JSON.stringify(metadata, null, 2)}\n`, "utf8");
 }
 
 console.log(JSON.stringify({
   status: dryRun ? "dry-run" : "packaged",
+  target: target.name,
   ...metadata,
 }, null, 2));
 
-function packageTarget(rawPlatform, rawArch) {
-  const normalizedArch = normalizeArch(rawArch);
-  const supported = new Set([
-    "darwin-arm64",
-    "darwin-x64",
-  ]);
-  const directory = `${rawPlatform}-${normalizedArch}`;
-  if (!supported.has(directory)) {
-    fail(`unsupported packaged binary target: ${directory}. This preview only stages macOS binaries.`);
+function packageTarget() {
+  try {
+    return resolvePackageTarget(args.target ?? selectedPackageTargetName([]));
+  } catch (error) {
+    return fail(error.message);
   }
-  return {
-    directory,
-    executable: "sage-ls",
-  };
-}
-
-function normalizeArch(rawArch) {
-  if (rawArch === "amd64") {
-    return "x64";
-  }
-  return rawArch;
 }
 
 function parseArgs(rawArgs) {
@@ -90,7 +79,11 @@ function parseArgs(rawArgs) {
       parsed.dryRun = true;
       continue;
     }
-    if (item === "--profile" || item === "--platform" || item === "--arch" || item === "--source") {
+    if (item.startsWith("--target=")) {
+      parsed.target = item.slice("--target=".length);
+      continue;
+    }
+    if (item === "--profile" || item === "--target" || item === "--source") {
       const value = rawArgs[index + 1];
       if (!value) {
         fail(`missing value for ${item}`);
@@ -102,6 +95,10 @@ function parseArgs(rawArgs) {
     fail(`unknown argument: ${item}`);
   }
   return parsed;
+}
+
+function slash(value) {
+  return value.split(path.sep).join("/");
 }
 
 function fail(message) {

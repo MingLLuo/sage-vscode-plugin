@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PACKAGE_TARGET_NAMES } from "./lib/package-targets.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
@@ -278,11 +279,12 @@ function checkMacPackagingReadiness() {
     && macDoctor.includes("probeSageRuntimeCandidates"), "scripts/macos-doctor.mjs");
   pushCheck("mac-packaging", "packaging supports Apple Silicon and Intel Mac", packageRust.includes("darwin-arm64")
     && packageRust.includes("darwin-x64"), "scripts/package-rust-binary.mjs");
-  pushCheck("mac-packaging", "packaging rejects non-macOS release targets", packageRust.includes("This preview only stages macOS binaries")
-    && !packageRust.includes("linux-x64")
-    && !packageRust.includes("win32-x64"), "scripts/package-rust-binary.mjs");
-  pushCheck("mac-packaging", "VSIX smokes require packaged macOS binary", readText("scripts/vsix-contents-smoke.mjs").includes("VSIX binary target is macOS")
-    && readText("scripts/vsix-package-smoke.mjs").includes("unsupported-non-macos-platform"), "scripts/vsix-contents-smoke.mjs");
+  pushCheck("mac-packaging", "packaging declares all eight native and Alpine targets",
+    ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "alpine-arm64", "alpine-x64", "win32-arm64", "win32-x64"]
+      .every(target => PACKAGE_TARGET_NAMES.includes(target)), PACKAGE_TARGET_NAMES);
+  pushCheck("mac-packaging", "VSIX smokes verify selected platform and executable format",
+    readText("scripts/vsix-contents-smoke.mjs").includes("expectedExecutableFormat(target)")
+      && readText("scripts/vsix-package-smoke.mjs").includes("TargetPlatform"), "scripts/vsix-contents-smoke.mjs");
   pushCheck("mac-packaging", "cleanup script protects source and removes generated artifacts", Boolean(scripts.clean)
     && Boolean(scripts["clean:dry-run"])
     && readText("scripts/clean-artifacts.mjs").includes("Default mode is a dry run"), "scripts/clean-artifacts.mjs");

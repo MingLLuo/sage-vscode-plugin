@@ -4,12 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { selectedPackageTarget, vsixFileName } from "./lib/package-targets.mjs";
+import { spawnNpm } from "./lib/npm.mjs";
 import { assertSupportedNodeVersion } from "./package-toolchain.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
 const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+const packageTarget = selectedPackageTarget(process.argv.slice(2));
 const extensionId = `${manifest.publisher}.${manifest.name}`;
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sage-vsix-install-smoke-"));
 const vsixOutDir = path.join(tempRoot, "vsix");
@@ -18,6 +21,7 @@ const userDataDir = path.join(tempRoot, "user-data");
 const codeCli = findCodeCli();
 
 if (!codeCli) {
+  if (process.env.SAGE_REQUIRE_CODE_CLI === "1") throw new Error("VS Code CLI is required for this install gate");
   console.log(JSON.stringify({
     status: "skipped",
     reason: "VS Code CLI not found. Set SAGE_CODE_CLI to run the install smoke.",
@@ -31,7 +35,7 @@ buildExtension();
 
 const packageResult = spawnSync(
   process.execPath,
-  [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", vsixOutDir],
+  [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", vsixOutDir, "--target", packageTarget.name],
   { cwd: repositoryRoot, encoding: "utf8" },
 );
 if (packageResult.status !== 0) {
@@ -40,7 +44,7 @@ if (packageResult.status !== 0) {
   process.exit(packageResult.status ?? 1);
 }
 
-const vsixPath = path.join(vsixOutDir, `${manifest.name}-${manifest.version}.vsix`);
+const vsixPath = path.join(vsixOutDir, vsixFileName(manifest, packageTarget.name));
 const installResult = runCode([
   "--install-extension",
   vsixPath,
@@ -128,7 +132,7 @@ function findCodeCli() {
     "/Applications/Visual Studio Code - Insiders.app/Contents/Resources/app/bin/code",
   ].filter(Boolean);
   for (const candidate of candidates) {
-    const result = spawnSync(candidate, ["--version"], { encoding: "utf8" });
+    const result = spawnCode(candidate, ["--version"], { encoding: "utf8" });
     if (result.status === 0) {
       return candidate;
     }
@@ -137,8 +141,7 @@ function findCodeCli() {
 }
 
 function buildExtension() {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(npmCommand, ["run", "build", "--workspace", "sage-vscode-extension"], {
+  const result = spawnNpm(["run", "build", "--workspace", "sage-vscode-extension"], {
     cwd: repositoryRoot,
     encoding: "utf8",
   });
@@ -150,8 +153,7 @@ function buildExtension() {
 }
 
 function stagePackagedRustBinary() {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(npmCommand, ["run", "package:rust-binary"], {
+  const result = spawnNpm(["run", "package:rust-binary", "--", "--target", packageTarget.name], {
     cwd: repositoryRoot,
     encoding: "utf8",
   });
@@ -163,7 +165,7 @@ function stagePackagedRustBinary() {
 }
 
 function runCode(args) {
-  return spawnSync(codeCli, args, {
+  return spawnCode(codeCli, args, {
     cwd: repositoryRoot,
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024,
@@ -190,4 +192,16 @@ function readJsonIfExists(filePath) {
   } catch {
     return null;
   }
+}
+
+function spawnCode(command, args, options) {
+  if (process.platform === "win32" && /\.cmd$/i.test(command) && fs.existsSync(command)) {
+    // Invoke Electron's CLI directly; shell quoting breaks paths with spaces on Windows.
+    const appRoot = path.resolve(path.dirname(command), "..");
+    const executable = path.join(appRoot, /insiders/i.test(command) ? "Code - Insiders.exe" : "Code.exe");
+    return spawnSync(executable, [path.join(appRoot, "resources", "app", "out", "cli.js"), ...args], {
+      ...options, env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    });
+  }
+  return spawnSync(command, args, options);
 }

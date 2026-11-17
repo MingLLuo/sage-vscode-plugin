@@ -146,7 +146,8 @@ pushCheck(
 );
 pushCheck(
   "VSIX packaging checks supported toolchain ranges before building",
-  scripts["package:vsix"]?.startsWith("npm run check:package-toolchain &&") === true,
+  scripts["package:vsix"] === "node scripts/build-vsix.mjs"
+    && /\["run", "check:package-toolchain"\]/.test(readText("scripts/build-vsix.mjs")),
   scripts["package:vsix"],
 );
 pushCheck(
@@ -175,7 +176,7 @@ const workflow = readText(".github/workflows/ci.yml");
 pushCheck("GitHub workflow installs locked npm dependencies", /npm ci/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow selects a supported npm major", /npm install --global npm@11(?:\s|$)/m.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow uses the Node baseline", /node-version-file:\s*["']?\.node-version["']?/.test(workflow), ".github/workflows/ci.yml");
-pushCheck("GitHub workflow uses the pinned Rust runtime", /toolchain:\s*["']?1\.92\.0["']?/.test(workflow), ".github/workflows/ci.yml");
+pushCheck("GitHub workflow uses the pinned Rust runtime", /rustup show/.test(workflow) && !/toolchain:\s*["']?\d+\.\d+/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow covers Node 22/npm 11 and Node 26/npm 12", /node-version:\s*["']22\.x["'][\s\S]*?npm-version:\s*["']11["']/.test(workflow)
   && /node-version:\s*["']26\.x["'][\s\S]*?npm-version:\s*["']12["']/.test(workflow), ".github/workflows/ci.yml");
 pushCheck("GitHub workflow uses current official action majors", /actions\/checkout@v7/.test(workflow)

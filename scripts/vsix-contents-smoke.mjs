@@ -3,14 +3,20 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  PACKAGE_TARGET_NAMES,
+  selectedPackageTargetName,
+  resolvePackageTarget,
+  stagedPaths,
+} from "./lib/package-targets.mjs";
 
+// Verifies the extension package tree and the staged `sage-ls` for one VS Code
+// target (`--target`, then SAGE_VSIX_TARGET, then the host platform).
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
 const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
-const platform = process.env.SAGE_VSIX_PLATFORM ?? process.platform;
-const arch = normalizeArch(process.env.SAGE_VSIX_ARCH ?? process.arch);
-const binaryDirectory = `${platform}-${arch}`;
-const binaryName = "sage-ls";
+const targetName = selectedPackageTargetName(process.argv.slice(2));
+const packageTarget = PACKAGE_TARGET_NAMES.includes(targetName) ? resolvePackageTarget(targetName) : null;
 
 const requiredFiles = [
   "package.json",
@@ -48,7 +54,11 @@ const forbiddenRuntimeIgnorePatterns = [
 
 const checks = [];
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-pushCheck("VSIX binary target is macOS", platform === "darwin", binaryDirectory);
+pushCheck(
+  "VSIX target is a supported VS Code platform",
+  Boolean(packageTarget),
+  { target: targetName, supported: PACKAGE_TARGET_NAMES },
+);
 for (const relativePath of requiredFiles) {
   pushCheck(
     `required file ${relativePath}`,
@@ -85,41 +95,111 @@ for (const pattern of forbiddenRuntimeIgnorePatterns) {
   pushCheck(`ignore does not exclude runtime ${pattern}`, !ignoreText.includes(pattern), pattern);
 }
 
-const binaryRelativePath = path.join("resources", "bin", binaryDirectory, binaryName);
-const binaryPath = path.join(packageRoot, binaryRelativePath);
-if (fs.existsSync(binaryPath)) {
-  const hashPath = `${binaryPath}.sha256`;
-  const metadataPath = path.join(path.dirname(binaryPath), "sage-ls.meta.json");
-  const hash = sha256(binaryPath);
-  const hashText = fs.existsSync(hashPath) ? fs.readFileSync(hashPath, "utf8") : "";
-  pushCheck(`packaged binary hash exists for ${binaryDirectory}`, fs.existsSync(hashPath), hashPath);
-  pushCheck(`packaged binary hash matches for ${binaryDirectory}`, hashText.includes(hash), hashText.trim());
-  pushCheck(`packaged binary metadata exists for ${binaryDirectory}`, fs.existsSync(metadataPath), metadataPath);
-  if (fs.existsSync(metadataPath)) {
-    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
-    pushCheck(`packaged binary metadata platform ${platform}`, metadata.platform === platform, metadata.platform);
-    pushCheck(`packaged binary metadata arch ${arch}`, metadata.arch === arch, metadata.arch);
-    pushCheck(`packaged binary metadata sha256`, metadata.sha256 === hash, metadata.sha256);
-  }
-  const mode = fs.statSync(binaryPath).mode;
-  pushCheck(`packaged binary executable for ${binaryDirectory}`, Boolean(mode & 0o111), mode.toString(8));
-} else {
-  pushCheck(
-    `packaged macOS binary exists for ${binaryDirectory}`,
-    false,
-    "run npm run package:rust-binary before packaging",
-  );
+if (packageTarget) {
+  checkStagedServer(packageTarget);
 }
 
 const failures = checks.filter((check) => !check.pass);
 console.log(JSON.stringify({
   status: failures.length ? "failed" : "passed",
   packageRoot,
-  binaryDirectory,
+  target: targetName,
+  rustTarget: packageTarget?.rustTarget ?? null,
+  binaryDirectory: packageTarget?.binaryDirectory ?? null,
   checks,
 }, null, 2));
 if (failures.length) {
   process.exitCode = 1;
+}
+
+function checkStagedServer(target) {
+  const staged = stagedPaths(repositoryRoot, target);
+  const label = target.name;
+  if (!fs.existsSync(staged.binary)) {
+    pushCheck(
+      `packaged binary exists for ${label}`,
+      false,
+      `run npm run package:rust-binary -- --target ${label} before packaging`,
+    );
+    return;
+  }
+  const hash = sha256(staged.binary);
+  const hashText = fs.existsSync(staged.sha256) ? fs.readFileSync(staged.sha256, "utf8") : "";
+  pushCheck(`packaged binary exists for ${label}`, true, relative(staged.binary));
+  pushCheck(`packaged binary hash exists for ${label}`, fs.existsSync(staged.sha256), relative(staged.sha256));
+  pushCheck(`packaged binary hash matches for ${label}`, hashText.includes(hash), hashText.trim());
+  pushCheck(
+    `packaged binary hash names ${target.executable}`,
+    hashText.trim().endsWith(`  ${target.executable}`),
+    hashText.trim(),
+  );
+  pushCheck(`packaged binary metadata exists for ${label}`, fs.existsSync(staged.metadata), relative(staged.metadata));
+  if (fs.existsSync(staged.metadata)) {
+    const metadata = JSON.parse(fs.readFileSync(staged.metadata, "utf8"));
+    pushCheck(`packaged binary metadata platform ${target.platform}`, metadata.platform === target.platform, metadata.platform);
+    pushCheck(`packaged binary metadata arch ${target.arch}`, metadata.arch === target.arch, metadata.arch);
+    pushCheck(
+      `packaged binary metadata Rust target ${target.rustTarget}`,
+      metadata.rustTarget === target.rustTarget,
+      metadata.rustTarget,
+    );
+    pushCheck("packaged binary metadata profile is release", metadata.profile === "release", metadata.profile);
+    pushCheck("packaged binary metadata sha256", metadata.sha256 === hash, metadata.sha256);
+  }
+  const format = executableFormat(staged.binary);
+  pushCheck(
+    `packaged binary is a ${expectedExecutableFormat(target)} executable`,
+    format === expectedExecutableFormat(target),
+    format,
+  );
+  // Windows has no executable bit; the mode check only applies on POSIX hosts.
+  const mode = fs.statSync(staged.binary).mode;
+  pushCheck(
+    `packaged binary executable for ${label}`,
+    process.platform === "win32" || Boolean(mode & 0o111),
+    mode.toString(8),
+  );
+  const noticesText = fs.existsSync(staged.notices) ? fs.readFileSync(staged.notices, "utf8") : "";
+  pushCheck(`third-party notices are staged for ${label}`, noticesText.length > 0, relative(staged.notices));
+  pushCheck(
+    "third-party notices describe the packaged Rust target",
+    noticesText.startsWith("THIRD-PARTY SOFTWARE NOTICES") && noticesText.includes(`Rust target: ${target.rustTarget}`),
+    noticesText.slice(0, 80),
+  );
+  pushCheck(
+    "third-party notices include crate license texts",
+    /^CRATES \([1-9]\d*\)$/m.test(noticesText) && noticesText.includes("LICENSE TEXTS") && noticesText.includes("Used by:"),
+    noticesText.match(/^CRATES \(\d+\)$/m)?.[0] ?? null,
+  );
+}
+
+function expectedExecutableFormat(target) {
+  return { darwin: "Mach-O", linux: "ELF", win32: "PE" }[target.platform];
+}
+
+function executableFormat(filePath) {
+  const header = Buffer.alloc(4);
+  const descriptor = fs.openSync(filePath, "r");
+  try {
+    fs.readSync(descriptor, header, 0, 4, 0);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  const magic = header.toString("hex");
+  if (magic === "7f454c46") {
+    return "ELF";
+  }
+  if (["cffaedfe", "cefaedfe", "feedfacf", "feedface", "cafebabe"].includes(magic)) {
+    return "Mach-O";
+  }
+  if (magic.startsWith("4d5a")) {
+    return "PE";
+  }
+  return `unknown (${magic})`;
+}
+
+function relative(filePath) {
+  return path.relative(repositoryRoot, filePath).split(path.sep).join("/");
 }
 
 function pushCheck(name, pass, actual) {
@@ -144,11 +224,4 @@ function pngDimensions(filePath) {
     width: buffer.readUInt32BE(16),
     height: buffer.readUInt32BE(20),
   };
-}
-
-function normalizeArch(rawArch) {
-  if (rawArch === "amd64") {
-    return "x64";
-  }
-  return rawArch;
 }

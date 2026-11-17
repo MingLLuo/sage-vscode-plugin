@@ -4,7 +4,21 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { deflateRawSync } from "node:zlib";
+import { createHash } from "node:crypto";
 import { assertSupportedNodeVersion } from "./package-toolchain.mjs";
+import {
+  PACKAGED_NOTICES_FILE,
+  selectedPackageTarget,
+  stagedRelativePaths,
+  vsixFileName,
+} from "./lib/package-targets.mjs";
+
+// Packages one platform-specific VSIX: the extension runtime plus the staged
+// `sage-ls` for exactly one VS Code target, recorded as `TargetPlatform` in the
+// VSIX manifest.
+//
+// Usage: node scripts/package-vsix.mjs [--target <vscode-target>] [--out-dir <dir>]
+// The target defaults to SAGE_VSIX_TARGET, then to the host platform.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
@@ -12,7 +26,9 @@ assertSupportedNodeVersion(repositoryRoot);
 const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
 const outDir = path.resolve(argumentValue("--out-dir") ?? path.join(repositoryRoot, "dist"));
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
-const vsixName = `${manifest.name}-${manifest.version}.vsix`;
+const packageTarget = selectedPackageTarget(process.argv.slice(2));
+const stagedFiles = stagedRelativePaths(packageTarget);
+const vsixName = vsixFileName(manifest, packageTarget.name);
 const vsixPath = path.join(outDir, vsixName);
 const CRC32_TABLE = buildCrc32Table();
 const ARCHIVE_TIMESTAMP = archiveTimestampDate();
@@ -25,10 +41,17 @@ const EXTENSION_PACKAGE_FILES = new Set([
   "README.md",
   "package.json",
   "resources/bin/README.md",
+  stagedFiles.binary,
+  stagedFiles.sha256,
+  stagedFiles.metadata,
+  stagedFiles.notices,
 ]);
+// Files `package:rust-binary` stages for any target. Only the selected
+// target's files above are packaged; other targets' staged files are skipped.
+const STAGED_SERVER_FILE_PATTERN =
+  /^resources\/bin\/[a-z0-9]+-[a-z0-9]+\/sage-ls(?:\.exe)?(?:\.sha256|\.meta\.json|\.THIRD_PARTY_NOTICES\.txt)?$/;
 const EXTENSION_PACKAGE_PATTERNS = [
   /^out\/src\/[^/]+\.js$/,
-  /^resources\/bin\/darwin-(?:arm64|x64)\/(?:sage-ls|sage-ls\.meta\.json|sage-ls\.sha256)$/,
   /^resources\/branding\/[^/]+\.(?:png|svg)$/,
   /^resources\/generated\/syntax\/language-configuration\.json$/,
   /^resources\/generated\/syntax\/(?:snippets|syntaxes)\/[^/]+\.json$/,
@@ -47,11 +70,12 @@ const DEPENDENCY_RUNTIME_HELPERS = new Set([
 ]);
 
 fs.mkdirSync(outDir, { recursive: true });
+assertStagedServer();
 
 const runtimeEntries = [];
 
 for (const file of collectExtensionFiles(packageRoot)) {
-  const archivePath = slash(path.join("extension", file.relativePath));
+  const archivePath = `extension/${archiveRelativePath(file.relativePath)}`;
   const data = fs.readFileSync(file.absolutePath);
   if (isPackagedSageBinary(archivePath)) {
     assertNoBuildMachinePaths(data, archivePath);
@@ -98,6 +122,9 @@ if (vsixSize > MAX_VSIX_BYTES) {
 console.log(JSON.stringify({
   status: "packaged",
   vsix: vsixPath,
+  target: packageTarget.name,
+  rustTarget: packageTarget.rustTarget,
+  serverBinary: `extension/${stagedFiles.binary}`,
   entries: entries.length,
   size: vsixSize,
   maxSize: MAX_VSIX_BYTES,
@@ -114,6 +141,40 @@ function argumentValue(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
+function assertStagedServer() {
+  const remedy = `Run npm run package:rust-binary -- --target ${packageTarget.name} first.`;
+  for (const relativePath of Object.values(stagedFiles).filter((value) => value !== stagedFiles.directory)) {
+    if (!fs.existsSync(path.join(packageRoot, relativePath))) {
+      throw new Error(`Missing staged file for ${packageTarget.name}: ${relativePath}. ${remedy}`);
+    }
+  }
+  const binaryHash = createHash("sha256")
+    .update(fs.readFileSync(path.join(packageRoot, stagedFiles.binary)))
+    .digest("hex");
+  const metadata = JSON.parse(fs.readFileSync(path.join(packageRoot, stagedFiles.metadata), "utf8"));
+  const hashText = fs.readFileSync(path.join(packageRoot, stagedFiles.sha256), "utf8");
+  const mismatches = [
+    metadata.platform === packageTarget.platform ? null : `platform ${metadata.platform}`,
+    metadata.arch === packageTarget.arch ? null : `arch ${metadata.arch}`,
+    metadata.rustTarget === packageTarget.rustTarget ? null : `rustTarget ${metadata.rustTarget}`,
+    metadata.profile === "release" ? null : `profile ${metadata.profile}`,
+    metadata.sha256 === binaryHash ? null : "metadata sha256",
+    hashText.includes(binaryHash) ? null : `${stagedFiles.sha256}`,
+  ].filter(Boolean);
+  if (mismatches.length > 0) {
+    throw new Error(
+      `Staged sage-ls does not match target ${packageTarget.name} `
+      + `(${packageTarget.rustTarget}): ${mismatches.join(", ")}. ${remedy}`,
+    );
+  }
+}
+
+// The notices are staged next to the binary they describe and shipped at the
+// extension root, where readers expect them.
+function archiveRelativePath(relativePath) {
+  return relativePath === stagedFiles.notices ? PACKAGED_NOTICES_FILE : relativePath;
+}
+
 function collectExtensionFiles(root) {
   const files = [];
   walk(root, "", (absolutePath, relativePath) => {
@@ -127,6 +188,9 @@ function collectExtensionFiles(root) {
       );
     }
     if (isIgnoredExtensionFile(relativePath)) {
+      return;
+    }
+    if (!isAllowedExtensionFile(relativePath) && STAGED_SERVER_FILE_PATTERN.test(relativePath)) {
       return;
     }
     if (!isAllowedExtensionFile(relativePath)) {
@@ -247,7 +311,7 @@ function archiveMode(entryPath) {
 }
 
 function isPackagedSageBinary(entryPath) {
-  return /^extension\/resources\/bin\/[^/]+\/sage-ls$/.test(entryPath);
+  return entryPath === `extension/${stagedFiles.binary}`;
 }
 
 function isExecutableDependencyHelper(entryPath) {
@@ -316,7 +380,7 @@ ${defaultXml}${overrideSection}
 
 function contentTypeForExtensionlessEntry(entryPath) {
   const baseName = path.posix.basename(entryPath);
-  if (baseName === "sage-ls") {
+  if (baseName === packageTarget.executable) {
     return "application/octet-stream";
   }
   return "text/plain";
@@ -340,7 +404,7 @@ function vsixManifestXml(extensionManifest) {
   return `<?xml version="1.0" encoding="utf-8"?>
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
   <Metadata>
-    <Identity Language="en-US" Id="${xmlEscape(extensionManifest.name)}" Version="${xmlEscape(extensionManifest.version)}" Publisher="${xmlEscape(extensionManifest.publisher)}"/>
+    <Identity Language="en-US" Id="${xmlEscape(extensionManifest.name)}" Version="${xmlEscape(extensionManifest.version)}" Publisher="${xmlEscape(extensionManifest.publisher)}" TargetPlatform="${xmlEscape(packageTarget.name)}"/>
     <DisplayName>${xmlEscape(extensionManifest.displayName ?? extensionManifest.name)}</DisplayName>
     <Description xml:space="preserve">${xmlEscape(extensionManifest.description ?? "")}</Description>
     <Tags>${xmlEscape(tags)}</Tags>

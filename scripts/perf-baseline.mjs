@@ -93,6 +93,7 @@ class Session {
     this.context = context;
     this.diagnosticWaiters = new Map();
     this.lastDiagnosticsAt = new Map();
+    this.lastDiagnosticVersions = new Map();
     this.peakRssMb = 0;
   }
 
@@ -141,18 +142,28 @@ class Session {
 
   handleNotification(method, params) {
     if (method !== "textDocument/publishDiagnostics") return;
-    this.lastDiagnosticsAt.set(params.uri, performance.now());
-    const waiters = this.diagnosticWaiters.get(params.uri) ?? [];
-    this.diagnosticWaiters.delete(params.uri);
-    for (const resolve of waiters) resolve(performance.now());
+    const at = performance.now();
+    this.lastDiagnosticsAt.set(params.uri, at);
+    this.lastDiagnosticVersions.set(params.uri, params.version);
+    for (const waiter of [...(this.diagnosticWaiters.get(params.uri) ?? [])]) {
+      if (waiter.version === undefined || waiter.version === params.version) waiter.finish(at);
+    }
   }
 
-  nextDiagnostics(uri, timeoutMs = 60_000) {
+  nextDiagnostics(uri, timeoutMs = 60_000, version) {
+    if (version !== undefined && this.lastDiagnosticVersions.get(uri) === version) {
+      return Promise.resolve(this.lastDiagnosticsAt.get(uri));
+    }
     return new Promise((resolve) => {
       const waiters = this.diagnosticWaiters.get(uri) ?? [];
-      waiters.push(resolve);
+      const waiter = { version, finish: (at) => {
+        clearTimeout(timer);
+        this.diagnosticWaiters.set(uri, (this.diagnosticWaiters.get(uri) ?? []).filter((item) => item !== waiter));
+        resolve(at);
+      } };
+      const timer = setTimeout(() => waiter.finish(null), timeoutMs);
+      waiters.push(waiter);
       this.diagnosticWaiters.set(uri, waiters);
-      setTimeout(() => resolve(null), timeoutMs);
     });
   }
 
@@ -384,8 +395,10 @@ async function main() {
   const inFlight = [];
   let version = 1;
   const typingStarted = performance.now();
+  let lastEditAt = typingStarted;
   for (let edit = 0; edit < 100; edit += 1) {
     version += 1;
+    lastEditAt = performance.now();
     session.server.notify("textDocument/didChange", {
       textDocument: { uri: largeUri, version },
       contentChanges: [{
@@ -399,21 +412,14 @@ async function main() {
     }
     await sleep(30);
   }
-  const lastEditAt = performance.now();
-  // Diagnostics carry no version today, so wait for the publish stream to go quiet and take the
-  // last publish, which may already have arrived before the final edit was acknowledged.
-  for (;;) {
-    const at = await session.nextDiagnostics(largeUri, 3_000);
-    if (at === null) break;
-  }
-  const lastPublishAt = session.lastDiagnosticsAt.get(largeUri) ?? null;
+  const lastPublishAt = await session.nextDiagnostics(largeUri, 5_000, version);
   await Promise.all(inFlight);
   const tokensAfterTyping = await session.timed("textDocument/semanticTokens/full", { textDocument: { uri: largeUri } });
   large.rapid_typing = {
     edits: 100,
     interval_ms: 30,
     typing_duration_ms: round(lastEditAt - typingStarted),
-    // Negative values mean the final publish landed before the 30 ms pause after the last edit ended.
+    final_diagnostics_version: session.lastDiagnosticVersions.get(largeUri),
     last_edit_to_final_diagnostics_ms: lastPublishAt === null ? null : round(lastPublishAt - lastEditAt),
     hover_while_typing: summarize(typingHover),
     completion_while_typing: summarize(typingCompletion),

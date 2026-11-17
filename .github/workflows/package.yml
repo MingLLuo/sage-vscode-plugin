@@ -1,0 +1,108 @@
+name: Platform packages
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'scripts/**'
+      - 'crates/**'
+      - 'packages/**'
+      - 'Cargo.*'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/package.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: darwin-arm64, runner: macos-15, rust: aarch64-apple-darwin }
+          - { target: darwin-x64, runner: macos-15-intel, rust: x86_64-apple-darwin }
+          - { target: linux-x64, runner: ubuntu-24.04, rust: x86_64-unknown-linux-musl }
+          - { target: linux-arm64, runner: ubuntu-24.04-arm, rust: aarch64-unknown-linux-musl }
+          - { target: win32-x64, runner: windows-2025, rust: x86_64-pc-windows-msvc }
+          - { target: win32-arm64, runner: windows-11-arm, rust: aarch64-pc-windows-msvc }
+    env:
+      SAGE_VSIX_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - name: Install pinned Rust toolchain and target
+        shell: bash
+        run: |
+          rustup show
+          rustup target add ${{ matrix.rust }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install native musl compiler
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Select supported npm
+        run: npm install --global npm@11
+      - name: Install Node dependencies
+        run: npm ci
+      - name: Verify target selection and notices
+        run: npm run test:package-targets
+      - name: Test native Rust behavior
+        run: cargo test --locked
+      - name: Build target VSIX
+        run: npm run package:vsix
+      - name: Check packaged executable handshake
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Windows ]]; then suffix=.exe; else suffix=; fi
+          packages/extension-core/resources/bin/${{ matrix.target }}/sage-ls$suffix --version
+      - name: Package Alpine alias from the same musl binary
+        if: runner.os == 'Linux'
+        shell: bash
+        run: node scripts/package-vsix.mjs --target "${SAGE_VSIX_TARGET/linux-/alpine-}"
+      - name: Verify package contents
+        run: npm run test:vsix-package
+      - name: Prepare isolated VS Code
+        run: node scripts/prepare-vscode-test.mjs
+      - name: Install target package into isolated profile
+        run: npm run test:vsix-install
+      - name: Linux editor regression
+        if: matrix.target == 'linux-x64'
+        run: xvfb-run -a npm run test:extension-host
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vsix-${{ matrix.target }}
+          path: dist/*.vsix
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: vsix-*
+          path: dist
+          merge-multiple: true
+      - name: Attach internally distributed VSIX files to the tag release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ! gh release view "$RELEASE_TAG"; then
+            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
+          fi
+          gh release upload "$RELEASE_TAG" dist/*.vsix --clobber

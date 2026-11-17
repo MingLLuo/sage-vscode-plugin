@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { hostPackageTarget, resolvePackageTarget, vsixFileName } from "./lib/package-targets.mjs";
 import { probeSageRuntimeCandidates } from "./lib/sage-runtime-probe.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -16,23 +17,24 @@ const checks = [];
 const manifestPath = path.join(packageRoot, "package.json");
 const manifest = readJsonIfExists(manifestPath);
 const extensionId = manifest ? `${manifest.publisher}.${manifest.name}` : "unknown";
+const packageTarget = resolvePackageTarget(hostPackageTarget());
 const vsixPath = manifest
-  ? path.join(repositoryRoot, "dist", `${manifest.name}-${manifest.version}.vsix`)
+  ? path.join(repositoryRoot, "dist", vsixFileName(manifest, packageTarget.name))
   : path.join(repositoryRoot, "dist", "sage-vscode-extension-unknown.vsix");
-const binaryDirectory = `darwin-${normalizeArch(process.arch)}`;
-const packagedBinaryPath = path.join(packageRoot, "resources", "bin", binaryDirectory, "sage-ls");
+const binaryDirectory = packageTarget.binaryDirectory;
+const packagedBinaryPath = path.join(packageRoot, "resources", "bin", binaryDirectory, packageTarget.executable);
 const sourceRoot = resolveSourceRoot();
 const sageRuntime = resolveSageRuntime();
 const codeCli = findCodeCli();
 
-pushCheck("required", "macOS host", process.platform === "darwin", platformSummary());
-pushCheck("required", "supported Mac architecture", ["arm64", "x64"].includes(normalizeArch(process.arch)), platformSummary());
+pushCheck("required", "supported host platform", ["darwin", "linux", "win32"].includes(process.platform), platformSummary());
+pushCheck("required", "supported host architecture", ["arm64", "x64"].includes(normalizeArch(process.arch)), platformSummary());
 pushCheck("required", "extension manifest exists", Boolean(manifest), relativeOrAbsolute(manifestPath));
 pushCheck("required", "extension identity is valid", Boolean(manifest?.name && manifest?.publisher && manifest?.version), manifest ? {
   id: extensionId,
   version: manifest.version,
 } : null);
-pushCheck("required", "packaged Rust language server exists for this Mac", fs.existsSync(packagedBinaryPath), relativeOrAbsolute(packagedBinaryPath));
+pushCheck("required", "packaged Rust language server exists for this host", fs.existsSync(packagedBinaryPath), relativeOrAbsolute(packagedBinaryPath));
 pushCheck("required", "packaged Rust language server is executable", isExecutable(packagedBinaryPath), relativeOrAbsolute(packagedBinaryPath));
 pushHashChecks(packagedBinaryPath);
 pushCheck("required", "VSIX package exists", fs.existsSync(vsixPath), relativeOrAbsolute(vsixPath));
@@ -88,7 +90,7 @@ function pushHashChecks(binaryPath) {
     expected: binaryHash,
     file: relativeOrAbsolute(hashPath),
   });
-  pushCheck("required", "packaged Rust metadata matches this Mac", metadata?.platform === "darwin"
+  pushCheck("required", "packaged Rust metadata matches this host", metadata?.platform === process.platform
     && normalizeArch(metadata?.arch) === normalizeArch(process.arch)
     && metadata?.sha256 === binaryHash, metadata);
 }
@@ -167,7 +169,7 @@ function nextCommands() {
 }
 
 function printHuman(report) {
-  console.log(`Sage VS Code macOS doctor: ${report.status}`);
+  console.log(`Sage VS Code doctor: ${report.status}`);
   console.log(`Extension: ${report.extension_id}${report.version ? ` ${report.version}` : ""}`);
   console.log(`Platform: ${report.platform.platform}-${report.platform.arch}`);
   console.log("");
@@ -233,7 +235,7 @@ function parseArgs(rawArgs) {
     if (item === "--help" || item === "-h") {
       console.log(`Usage: node scripts/macos-doctor.mjs [--json] [--strict] [--sage PATH] [--source-root PATH]
 
-Checks the local macOS VS Code extension package, staged Rust language server,
+Checks the local VS Code extension package, staged Rust language server,
 VS Code CLI, Sage runtime, and Sage source root.
 
 Default mode reports findings without failing the shell. Use --strict to fail

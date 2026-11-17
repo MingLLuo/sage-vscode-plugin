@@ -15,7 +15,9 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
 const nodeVersion = assertSupportedNodeVersion(repositoryRoot);
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-const npmResult = spawnSync(npmCommand, ["--version"], { encoding: "utf8" });
+// npm is a `.cmd` shim on Windows, which Node only spawns through a shell.
+const npmSpawnOptions = { encoding: "utf8", shell: process.platform === "win32" };
+const npmResult = spawnSync(npmCommand, ["--version"], npmSpawnOptions);
 if (npmResult.status !== 0) {
   throw new Error(
     `Could not read the npm version from ${npmCommand}: `
@@ -54,7 +56,7 @@ function readNpmRuntimeMetadata(npmCommand, expectedVersion) {
     manifests.push(...ancestorPackageManifests(process.env.npm_execpath));
   }
 
-  const globalRootResult = spawnSync(npmCommand, ["root", "--global"], { encoding: "utf8" });
+  const globalRootResult = spawnSync(npmCommand, ["root", "--global"], npmSpawnOptions);
   if (globalRootResult.status === 0 && globalRootResult.stdout.trim()) {
     manifests.push(path.join(globalRootResult.stdout.trim(), "npm", "package.json"));
   }

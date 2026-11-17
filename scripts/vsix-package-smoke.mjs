@@ -8,12 +8,29 @@ import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 import { assertSupportedNodeVersion } from "./package-toolchain.mjs";
+import { spawnNpm } from "./lib/npm.mjs";
+import {
+  PACKAGE_TARGETS,
+  PACKAGED_NOTICES_FILE,
+  selectedPackageTarget,
+  stagedPaths,
+  stagedRelativePaths,
+  vsixFileName,
+} from "./lib/package-targets.mjs";
+
+// Builds the VSIX for one VS Code target (`--target`, then SAGE_VSIX_TARGET,
+// then the host platform) and verifies the archive: target-specific layout,
+// `TargetPlatform`, allowlist, modes, and byte-for-byte reproducibility.
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
 assertSupportedNodeVersion(repositoryRoot);
 const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
 const manifest = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf8"));
+const packageTarget = selectedPackageTarget(process.argv.slice(2));
+const stagedFiles = stagedRelativePaths(packageTarget);
+const vsixName = vsixFileName(manifest, packageTarget.name);
+const packagerScript = path.join(repositoryRoot, "scripts", "package-vsix.mjs");
 const CRC32_TABLE = buildCrc32Table();
 const ZIP_METHOD_STORE = 0;
 const ZIP_METHOD_DEFLATE = 8;
@@ -23,7 +40,7 @@ stagePackagedRustBinary();
 buildExtension(0o022);
 const packageResult = spawnSync(
   process.execPath,
-  [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", tempRoot],
+  packagerArgs(tempRoot),
   {
     cwd: repositoryRoot,
     encoding: "utf8",
@@ -36,24 +53,24 @@ if (packageResult.status !== 0) {
   process.exit(packageResult.status ?? 1);
 }
 
-const vsixPath = path.join(tempRoot, `${manifest.name}-${manifest.version}.vsix`);
+const vsixPath = path.join(tempRoot, vsixName);
 const repeatTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sage-vsix-package-repeat-smoke-"));
 buildExtension(0o077);
 const restrictiveBuildMode = fs.statSync(path.join(packageRoot, "out", "src", "extension.js")).mode & 0o777;
 const repeatPackageResult = spawnSync(
   process.execPath,
-  [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", repeatTempRoot],
+  packagerArgs(repeatTempRoot),
   {
     cwd: repositoryRoot,
     encoding: "utf8",
   },
 );
-const repeatVsixPath = path.join(repeatTempRoot, `${manifest.name}-${manifest.version}.vsix`);
+const repeatVsixPath = path.join(repeatTempRoot, vsixName);
 const sourceDateEpoch = "1700000000";
 const sourceDateTempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "sage-vsix-package-source-date-smoke-"));
 const sourceDatePackageResult = spawnSync(
   process.execPath,
-  [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", sourceDateTempRoot],
+  packagerArgs(sourceDateTempRoot),
   {
     cwd: repositoryRoot,
     encoding: "utf8",
@@ -63,10 +80,11 @@ const sourceDatePackageResult = spawnSync(
     },
   },
 );
-const sourceDateVsixPath = path.join(sourceDateTempRoot, `${manifest.name}-${manifest.version}.vsix`);
+const sourceDateVsixPath = path.join(sourceDateTempRoot, vsixName);
 const sourceDatePackageOutput = parseJsonOutput(sourceDatePackageResult.stdout);
 const hiddenFileRejection = packageWithUnexpectedHiddenFile();
 const finderMetadataPackage = packageWithFinderMetadata();
+const otherTargetPackage = packageNextToAnotherStagedTarget();
 const zip = readZip(vsixPath);
 const sourceDateZip = sourceDatePackageResult.status === 0 && fs.existsSync(sourceDateVsixPath)
   ? readZip(sourceDateVsixPath)
@@ -75,6 +93,11 @@ const entries = new Set(zip.entries.map((entry) => entry.name));
 const checks = [];
 
 pushCheck("VSIX file exists", fs.existsSync(vsixPath), vsixPath);
+pushCheck(
+  "VSIX file name carries the extension version and target",
+  path.basename(vsixPath) === `${manifest.name}-${manifest.version}-${packageTarget.name}.vsix`,
+  path.basename(vsixPath),
+);
 pushCheck(
   "VSIX excludes macOS Finder metadata",
   ![...entries].some((entry) => path.basename(entry) === ".DS_Store"),
@@ -99,7 +122,7 @@ pushCheck(
 );
 pushCheck(
   "repeat package rebuild uses a restrictive umask",
-  restrictiveBuildMode === 0o600,
+  process.platform === "win32" || restrictiveBuildMode === 0o600,
   restrictiveBuildMode.toString(8),
 );
 pushCheck(
@@ -153,9 +176,44 @@ pushCheck("VSIX contains extension manifest", entries.has("extension.vsixmanifes
 pushCheck("VSIX contains package manifest", entries.has("extension/package.json"), "extension/package.json");
 pushCheck("VSIX contains compiled extension entrypoint", entries.has("extension/out/src/extension.js"), "extension/out/src/extension.js");
 pushCheck("VSIX contains generated Sage grammar", entries.has("extension/resources/generated/syntax/syntaxes/sagemath.tmLanguage.json"), "syntax");
-const binaryEntry = platformBinaryEntry();
-const binaryHashEntry = `${binaryEntry}.sha256`;
-const binaryMetadataEntry = `${path.posix.dirname(binaryEntry)}/sage-ls.meta.json`;
+const binaryEntry = `extension/${stagedFiles.binary}`;
+const binaryHashEntry = `extension/${stagedFiles.sha256}`;
+const binaryMetadataEntry = `extension/${stagedFiles.metadata}`;
+const noticesEntry = `extension/${PACKAGED_NOTICES_FILE}`;
+const expectedBinaryEntries = [
+  "extension/resources/bin/README.md",
+  binaryEntry,
+  binaryHashEntry,
+  binaryMetadataEntry,
+].sort();
+const packagedBinaryEntries = [...entries].filter((entry) => entry.startsWith("extension/resources/bin/")).sort();
+pushCheck(
+  `VSIX packages only the ${packageTarget.name} server files under resources/bin`,
+  JSON.stringify(packagedBinaryEntries) === JSON.stringify(expectedBinaryEntries),
+  packagedBinaryEntries,
+);
+pushCheck(
+  "VSIX packaging fails when the requested target is not staged",
+  otherTargetPackage.missingTarget === null
+    || (otherTargetPackage.missingTarget.status !== 0
+      && otherTargetPackage.missingTarget.output.includes("Missing staged file")),
+  otherTargetPackage.missingTarget,
+);
+pushCheck(
+  "VSIX ignores server files staged for other targets",
+  otherTargetPackage.status === 0 && otherTargetPackage.sha256 === sha256(vsixPath),
+  otherTargetPackage,
+);
+pushCheck("VSIX contains third-party notices for the bundled Rust crates", entries.has(noticesEntry), noticesEntry);
+if (entries.has(noticesEntry)) {
+  const noticesText = zip.text(noticesEntry);
+  pushCheck(
+    "VSIX third-party notices match the staged notices for the packaged Rust target",
+    noticesText === fs.readFileSync(stagedPaths(repositoryRoot, packageTarget).notices, "utf8")
+      && noticesText.includes(`Rust target: ${packageTarget.rustTarget}`),
+    noticesText.slice(0, 80),
+  );
+}
 pushCheck("VSIX contains packaged Rust binary", entries.has(binaryEntry), binaryEntry);
 pushCheck("VSIX contains packaged Rust binary hash", entries.has(binaryHashEntry), binaryHashEntry);
 pushCheck("VSIX contains packaged Rust binary metadata", entries.has(binaryMetadataEntry), binaryMetadataEntry);
@@ -178,10 +236,13 @@ if (entries.has(binaryEntry) && entries.has(binaryHashEntry)) {
 if (entries.has(binaryEntry) && entries.has(binaryMetadataEntry)) {
   const archiveBinaryHash = sha256Buffer(zip.data(binaryEntry));
   const metadata = JSON.parse(zip.text(binaryMetadataEntry));
-  const expectedPlatform = process.env.SAGE_VSIX_PLATFORM ?? process.platform;
-  const expectedArch = normalizeArch(process.env.SAGE_VSIX_ARCH ?? process.arch);
-  pushCheck("VSIX packaged Rust metadata platform matches", metadata.platform === expectedPlatform, metadata.platform);
-  pushCheck("VSIX packaged Rust metadata arch matches", metadata.arch === expectedArch, metadata.arch);
+  pushCheck("VSIX packaged Rust metadata platform matches", metadata.platform === packageTarget.platform, metadata.platform);
+  pushCheck("VSIX packaged Rust metadata arch matches", metadata.arch === packageTarget.arch, metadata.arch);
+  pushCheck(
+    "VSIX packaged Rust metadata records the Rust target",
+    metadata.rustTarget === packageTarget.rustTarget,
+    metadata.rustTarget,
+  );
   pushCheck("VSIX packaged Rust metadata profile is release", metadata.profile === "release", metadata.profile);
   pushCheck("VSIX packaged Rust metadata hash matches archive binary", metadata.sha256 === archiveBinaryHash, metadata.sha256);
 }
@@ -214,6 +275,12 @@ pushCheck("packaged manifest version matches", packagedManifest.version === mani
 const vsixManifest = zip.text("extension.vsixmanifest");
 pushCheck("VSIX identity includes extension name", vsixManifest.includes(`Id="${manifest.name}"`), manifest.name);
 pushCheck("VSIX identity includes publisher", vsixManifest.includes(`Publisher="${manifest.publisher}"`), manifest.publisher);
+const identity = vsixManifest.match(/<Identity\b[^>]*>/)?.[0] ?? "";
+pushCheck(
+  "VSIX identity declares the TargetPlatform",
+  identity.includes(`TargetPlatform="${packageTarget.name}"`),
+  identity,
+);
 pushCheck("VSIX marks preview gallery flag", vsixManifest.includes("<GalleryFlags>Preview</GalleryFlags>"), "Preview");
 pushCheck(
   "VSIX exposes README as details asset",
@@ -238,6 +305,7 @@ const failures = checks.filter((check) => !check.pass);
 console.log(JSON.stringify({
   status: failures.length ? "failed" : "passed",
   vsix: vsixPath,
+  target: packageTarget.name,
   entryCount: entries.size,
   checks,
 }, null, 2));
@@ -245,13 +313,8 @@ if (failures.length) {
   process.exitCode = 1;
 }
 
-function platformBinaryEntry() {
-  const platform = process.env.SAGE_VSIX_PLATFORM ?? process.platform;
-  const arch = normalizeArch(process.env.SAGE_VSIX_ARCH ?? process.arch);
-  if (platform !== "darwin") {
-    return `unsupported-non-macos-platform/${platform}-${arch}/sage-ls`;
-  }
-  return `extension/resources/bin/${platform}-${arch}/sage-ls`;
+function packagerArgs(outputDirectory, targetName = packageTarget.name) {
+  return [packagerScript, "--out-dir", outputDirectory, "--target", targetName];
 }
 
 function readZip(filePath) {
@@ -433,14 +496,10 @@ function buildCrc32Table() {
 }
 
 function buildExtension(creationMask) {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
   const previousMask = process.umask(creationMask);
   let result;
   try {
-    result = spawnSync(npmCommand, ["run", "build", "--workspace", "sage-vscode-extension"], {
-      cwd: repositoryRoot,
-      encoding: "utf8",
-    });
+    result = spawnNpm(["run", "build", "--workspace", "sage-vscode-extension"], { cwd: repositoryRoot });
   } finally {
     process.umask(previousMask);
   }
@@ -452,7 +511,7 @@ function buildExtension(creationMask) {
 }
 
 function expectedArchiveMode(entryName) {
-  return /^extension\/resources\/bin\/[^/]+\/sage-ls$/.test(entryName)
+  return entryName === `extension/${stagedFiles.binary}`
     || entryName === "extension/node_modules/vscode-languageclient/lib/node/terminateProcess.sh"
     ? 0o100755
     : 0o100644;
@@ -479,7 +538,7 @@ function packageWithUnexpectedHiddenFile() {
   try {
     const result = spawnSync(
       process.execPath,
-      [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", outputDirectory],
+      packagerArgs(outputDirectory),
       {
         cwd: repositoryRoot,
         encoding: "utf8",
@@ -503,10 +562,10 @@ function packageWithFinderMetadata() {
   try {
     const result = spawnSync(
       process.execPath,
-      [path.join(repositoryRoot, "scripts", "package-vsix.mjs"), "--out-dir", outputDirectory],
+      packagerArgs(outputDirectory),
       { cwd: repositoryRoot, encoding: "utf8" },
     );
-    const archivePath = path.join(outputDirectory, `${manifest.name}-${manifest.version}.vsix`);
+    const archivePath = path.join(outputDirectory, vsixName);
     return {
       status: result.status,
       entries: result.status === 0
@@ -517,6 +576,52 @@ function packageWithFinderMetadata() {
   } finally {
     if (prior) fs.writeFileSync(metadataFile, prior);
     else fs.rmSync(metadataFile, { force: true });
+    fs.rmSync(outputDirectory, { recursive: true, force: true });
+  }
+}
+
+// Stages placeholder server files for a second target, then packages the
+// selected target again: the archive must be byte-identical to the first one.
+function packageNextToAnotherStagedTarget() {
+  const other = Object.entries(PACKAGE_TARGETS)
+    .map(([name, entry]) => ({ name, ...entry }))
+    .find((entry) => entry.binaryDirectory !== packageTarget.binaryDirectory
+      && !fs.existsSync(stagedPaths(repositoryRoot, entry).directory));
+  const outputDirectory = fs.mkdtempSync(path.join(os.tmpdir(), "sage-vsix-package-other-target-smoke-"));
+  let missingTarget = null;
+  try {
+    if (other) {
+      const missing = spawnSync(process.execPath, packagerArgs(outputDirectory, other.name), {
+        cwd: repositoryRoot,
+        encoding: "utf8",
+      });
+      missingTarget = {
+        target: other.name,
+        status: missing.status,
+        output: `${missing.stdout ?? ""}\n${missing.stderr ?? ""}`.trim().split(/\r?\n/).find((line) => line.includes("Error")) ?? "",
+      };
+      const staged = stagedPaths(repositoryRoot, other);
+      fs.mkdirSync(staged.directory, { recursive: true });
+      for (const file of [staged.binary, staged.sha256, staged.metadata, staged.notices]) {
+        fs.writeFileSync(file, "placeholder for the VSIX package smoke\n", "utf8");
+      }
+    }
+    const result = spawnSync(process.execPath, packagerArgs(outputDirectory), {
+      cwd: repositoryRoot,
+      encoding: "utf8",
+    });
+    const archivePath = path.join(outputDirectory, vsixName);
+    return {
+      otherTarget: other?.name ?? "already staged",
+      missingTarget,
+      status: result.status,
+      sha256: result.status === 0 ? sha256(archivePath) : null,
+      error: result.status === 0 ? undefined : result.stderr,
+    };
+  } finally {
+    if (other) {
+      fs.rmSync(stagedPaths(repositoryRoot, other).directory, { recursive: true, force: true });
+    }
     fs.rmSync(outputDirectory, { recursive: true, force: true });
   }
 }
@@ -535,10 +640,8 @@ function findBuildMachinePaths(binary) {
 }
 
 function stagePackagedRustBinary() {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const result = spawnSync(npmCommand, ["run", "package:rust-binary"], {
+  const result = spawnNpm(["run", "package:rust-binary", "--", "--target", packageTarget.name], {
     cwd: repositoryRoot,
-    encoding: "utf8",
   });
   if (result.status !== 0) {
     process.stderr.write(result.stdout);
@@ -552,8 +655,4 @@ function dosTimestamp(value) {
   const date = ((year - 1980) << 9) | ((value.getUTCMonth() + 1) << 5) | value.getUTCDate();
   const time = (value.getUTCHours() << 11) | (value.getUTCMinutes() << 5) | Math.floor(value.getUTCSeconds() / 2);
   return { date, time };
-}
-
-function normalizeArch(rawArch) {
-  return rawArch === "amd64" ? "x64" : rawArch;
 }

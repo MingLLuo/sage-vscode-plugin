@@ -72,7 +72,6 @@ async function runSmoke() {
     await server.requestWithTimeout("shutdown", undefined, responseBudgetMs, "shutdown response");
     const shutdownResponseMs = Math.round(performance.now() - shutdownStarted);
     server.notify("exit");
-    server.closeInput();
     const exit = await withTimeout(server.exitResult, responseBudgetMs, "server process exit");
     const shutdownAndExitMs = Math.round(performance.now() - shutdownStarted);
 
