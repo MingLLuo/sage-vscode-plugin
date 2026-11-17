@@ -189,12 +189,63 @@ pub(super) fn is_cython_path(path: &Path) -> bool {
     )
 }
 
-pub(super) fn is_excluded(path: &Path, exclude_globs: &[String]) -> bool {
-    let text = path.display().to_string();
-    exclude_globs.iter().any(|glob| {
-        let needle = glob.trim_matches('*').trim_matches('/');
-        !needle.is_empty() && text.contains(needle)
-    })
+/// Whether `path` matches one of the user's exclude globs (`sage.indexing.exclude`).
+///
+/// Globs match the path relative to the innermost containing root, with `/` separators, so a
+/// `**/build/**` pattern skips `<root>/build/...` but not `/home/me/rebuild/...` or `build_matrix.py`.
+pub(super) fn is_excluded(path: &Path, roots: &[PathBuf], exclude_globs: &[String]) -> bool {
+    if exclude_globs.is_empty() {
+        return false;
+    }
+    let Some(matcher) = exclude_matcher(exclude_globs) else {
+        return false;
+    };
+    let relative = roots
+        .iter()
+        .filter_map(|root| path.strip_prefix(root).ok())
+        .min_by_key(|relative| relative.components().count())
+        .unwrap_or(path);
+    let text = relative
+        .components()
+        .filter_map(|component| match component {
+            std::path::Component::Normal(part) => part.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("/");
+    matcher.is_match(text.as_str())
+}
+
+fn exclude_matcher(exclude_globs: &[String]) -> Option<std::sync::Arc<globset::GlobSet>> {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Matchers = HashMap<Vec<String>, Option<Arc<globset::GlobSet>>>;
+    static MATCHERS: OnceLock<Mutex<Matchers>> = OnceLock::new();
+    let mut matchers = MATCHERS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    matchers
+        .entry(exclude_globs.to_vec())
+        .or_insert_with(|| {
+            let mut builder = globset::GlobSetBuilder::new();
+            for glob in exclude_globs {
+                let glob = glob.trim().trim_start_matches("./");
+                if glob.is_empty() {
+                    continue;
+                }
+                match globset::Glob::new(glob) {
+                    Ok(glob) => {
+                        builder.add(glob);
+                    }
+                    Err(error) => {
+                        eprintln!("sage-index: ignoring invalid exclude glob {glob:?}: {error}")
+                    }
+                }
+            }
+            builder.build().ok().map(Arc::new)
+        })
+        .clone()
 }
 
 pub(super) fn module_name_from_path(root: &Path, path: &Path) -> String {

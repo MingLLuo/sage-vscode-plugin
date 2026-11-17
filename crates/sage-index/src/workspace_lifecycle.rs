@@ -490,7 +490,7 @@ impl WorkspaceIndex {
             if deleted_set.contains(path)
                 || !path.exists()
                 || !is_indexable(path, self.options.enable_pyx)
-                || is_excluded(path, &self.options.exclude_globs)
+                || is_excluded(path, &self.options.roots, &self.options.exclude_globs)
             {
                 if let Some(file) = self.files.remove(path) {
                     insert_file_symbol_names(&mut dirty_lookup_names, &file);
@@ -596,7 +596,7 @@ impl WorkspaceIndex {
         for path in normalize_existing_paths(paths.to_vec()) {
             if !path_is_under_roots(&path, &self.options.roots)
                 || !is_indexable(&path, self.options.enable_pyx)
-                || is_excluded(&path, &self.options.exclude_globs)
+                || is_excluded(&path, &self.options.roots, &self.options.exclude_globs)
             {
                 continue;
             }
@@ -615,7 +615,7 @@ impl WorkspaceIndex {
         let mut dirty_lookup_names = BTreeSet::new();
         for file in files {
             if !path_is_under_roots(&file.path, &self.options.roots)
-                || is_excluded(&file.path, &self.options.exclude_globs)
+                || is_excluded(&file.path, &self.options.roots, &self.options.exclude_globs)
             {
                 continue;
             }

@@ -14,7 +14,7 @@ pub fn collect_indexable_paths(options: &IndexOptions) -> Vec<PathBuf> {
                 .build();
             for entry in walker.flatten() {
                 let path = entry.path();
-                if !path.is_file() || is_excluded(path, &options.exclude_globs) {
+                if !path.is_file() || is_excluded(path, &options.roots, &options.exclude_globs) {
                     continue;
                 }
                 if is_indexable(path, options.enable_pyx) {

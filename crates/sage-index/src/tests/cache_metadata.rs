@@ -599,3 +599,38 @@ fn windows_verbatim_prefixes_are_removed_from_canonical_paths() {
     let here = canonicalize_path(Path::new(".")).unwrap();
     assert!(!here.to_string_lossy().starts_with(r"\\?\"), "{here:?}");
 }
+
+#[test]
+fn exclude_globs_match_root_relative_components_not_substrings() {
+    let root = PathBuf::from("/home/me/rebuild-project");
+    let roots = vec![root.clone()];
+    let globs: Vec<String> = [
+        "**/.git/**",
+        "**/__pycache__/**",
+        "**/.venv/**",
+        "**/build/**",
+        "**/*_generated.py",
+    ]
+    .iter()
+    .map(|glob| glob.to_string())
+    .collect();
+    let excluded = |relative: &str| is_excluded(&root.join(relative), &roots, &globs);
+
+    assert!(excluded("build/lib/x.py"));
+    assert!(excluded("pkg/build/x.py"));
+    assert!(excluded("pkg/__pycache__/x.py"));
+    assert!(excluded("pkg/table_generated.py"));
+    assert!(
+        !excluded("src/build_matrix.py"),
+        "file names that merely contain `build`"
+    );
+    assert!(
+        !excluded("src/x.py"),
+        "a root whose own path contains `build`"
+    );
+    assert!(
+        !excluded(".github/workflows/x.py"),
+        "`.git` must not match `.github`"
+    );
+    assert!(!is_excluded(&root.join("build/x.py"), &roots, &[]));
+}
