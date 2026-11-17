@@ -1,6 +1,21 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 - 2026-11-17
+
+### Highlights
+
+- **Every platform.** Release packages for macOS (Apple silicon and Intel), Windows (x64 and Arm64), Linux (x64 and
+  Arm64, static musl binaries that run on any distribution), and Alpine, each with its own language server. They are
+  built and tested on native GitHub runners and attached to the GitHub release. Remote SSH, WSL, and Dev Containers use the
+  package for the remote machine.
+- **No waiting while indexing.** The language server answers hover, definition, and completion from the moment it
+  starts; indexing, cache loading, and diagnostics run in the background, and a slow request no longer blocks others.
+- **Faster and lighter.** Find References for a common name such as `matrix` across the Sage library takes about 1 s
+  (was 28.8 s); memory after indexing the Sage library is about 175 MB.
+- **Fewer false errors.** Valid Sage syntax (`^^`, `[1, 3, .., 11]`, `f(x) = x^2`, Cython in `.spyx`) is no longer
+  flagged, and an unclosed bracket marks only its own line. Diagnostics on the Sage library itself went from 78 to 0.
+- **Files outside a folder.** A `.sage` file opened on its own, or outside the open folders, gets the full language
+  server.
 
 ### Interaction
 
@@ -39,6 +54,14 @@
 
 ### Fixed
 
+- `Ctrl+Enter` / `Cmd+Enter` runs a cell only in files that contain `# %%` or `# region` cells; elsewhere it keeps
+  VS Code's "insert line below" instead of sending the whole file to the REPL. Cython editors keep the default keys.
+- `sage.indexing.exclude` patterns now match path components inside each source root. Before, `**/build/**` skipped
+  every file of a project stored under a folder such as `rebuild-project` and files like `build_matrix.py`, and `.git`
+  also matched `.github`.
+- Windows: definition, references, and other locations no longer point at `\\?\C:\...` paths that VS Code could not
+  open.
+- The interpreter and workspace pickers, their prompts, and progress titles are translated into Simplified Chinese.
 - Incoming call hierarchy now reports callers in the definition's own file while the background index is still being
   built, instead of returning an empty list until indexing finishes.
 - Run, REPL, and cell commands no longer wait for an unanswered error notification before returning.

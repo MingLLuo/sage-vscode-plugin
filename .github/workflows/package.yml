@@ -186,8 +186,25 @@ jobs:
             ls -la dist
             exit 1
           fi
+          version="${RELEASE_TAG#v}"
+          # Release notes: install instructions plus this version's changelog section.
+          {
+            echo "Download the \`.vsix\` for your machine and install it with **Extensions: Install from VSIX...**"
+            echo "(in Remote SSH / WSL windows, pick the remote machine's file). See"
+            echo "[Install and Configure](https://github.com/${GH_REPO}/blob/${RELEASE_TAG}/docs/install-and-configure.md#install-a-released-package)."
+            echo
+            awk -v v="$version" '
+              $0 ~ "^## " v "([^0-9.]|$)" { on = 1; next }
+              on && /^## / { exit }
+              on { print }
+            ' packages/extension-core/CHANGELOG.md
+          } > release-notes.md
+          if ! grep -q '[^[:space:]]' <(tail -n +5 release-notes.md); then
+            echo "::error::packages/extension-core/CHANGELOG.md has no section for ${version}"
+            exit 1
+          fi
           if ! gh release view "$RELEASE_TAG"; then
-            gh release create "$RELEASE_TAG" --title "$RELEASE_TAG" --generate-notes
+            gh release create "$RELEASE_TAG" --title "Sage VS Code Plugin ${version}" --notes-file release-notes.md
           fi
           # No --clobber: re-running a release must not silently replace published files.
           gh release upload "$RELEASE_TAG" "${files[@]}"

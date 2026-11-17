@@ -8,7 +8,12 @@ manual plus automated smoke tests.
 
 ## Quick Start
 
-Build and install the package for your platform:
+Download the `.vsix` for your machine from the
+[latest release](https://github.com/MingLLuo/sage-vscode-plugin/releases/latest) and install it with
+**Extensions: Install from VSIX...** (in Remote SSH or WSL windows, pick the remote machine's file). See
+[Install and Configure](./docs/install-and-configure.md#install-a-released-package) for the file list.
+
+To build and install the package for your platform from source:
 
 Development and release packaging support Node.js 22.9 or newer (including Node.js 26) and npm 11 or newer. The
 `engines` ranges enforce only those minimums; `.node-version` selects the rolling Node 22 development/CI baseline

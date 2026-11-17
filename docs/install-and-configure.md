@@ -1,8 +1,39 @@
 # Install and Configure
 
-## Fast Path
+## Install a Released Package
 
-Use this path when you want to try the extension quickly from this repository:
+Download the file for your machine from the
+[latest release](https://github.com/MingLLuo/sage-vscode-plugin/releases/latest). Each file bundles its own language
+server, so no Rust, Node.js, or build step is needed. VS Code 1.97 or newer is required.
+
+| Machine | File |
+| --- | --- |
+| macOS, Apple silicon | `sage-vscode-extension-<version>-darwin-arm64.vsix` |
+| macOS, Intel | `sage-vscode-extension-<version>-darwin-x64.vsix` |
+| Windows x64 / Arm64 | `...-win32-x64.vsix` / `...-win32-arm64.vsix` |
+| Linux x64 / Arm64 (any glibc or musl distribution) | `...-linux-x64.vsix` / `...-linux-arm64.vsix` |
+| Alpine Linux x64 / Arm64 | `...-alpine-x64.vsix` / `...-alpine-arm64.vsix` |
+
+Install it from the command palette with **Extensions: Install from VSIX...**, or from a terminal:
+
+```bash
+code --install-extension sage-vscode-extension-0.2.0-darwin-arm64.vsix
+```
+
+**Remote SSH, WSL, and Dev Containers.** The extension runs where your files are. Open the remote window first, then
+run **Extensions: Install from VSIX...** in that window and pick the file for the remote machine (usually
+`linux-x64`), not the one for your laptop.
+
+**Updating.** Install the newer file the same way; VS Code replaces the old version. The index cache format is checked
+on startup and rebuilt automatically when it changes.
+
+**Sage itself is optional for navigation.** Hover, go to definition, references, rename, and diagnostics work from Sage
+source files. Running files, the REPL, and runtime-backed documentation need a Sage installation; the extension finds
+it on `PATH` or asks you to select it with **Sage: Select Sage Interpreter**.
+
+## Build From Source
+
+Use this path when you want to build the extension from this repository:
 
 ```bash
 npm ci
