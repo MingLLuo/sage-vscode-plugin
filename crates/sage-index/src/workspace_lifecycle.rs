@@ -588,6 +588,15 @@ impl WorkspaceIndex {
             {
                 continue;
             }
+            // Prewarm runs after every typing pause; an unchanged file must not rebuild the
+            // symbol map or invalidate query caches.
+            if self
+                .files
+                .get(&file.path)
+                .is_some_and(|current| current.as_ref() == &file)
+            {
+                continue;
+            }
             if let Some(previous) = self.files.insert(file.path.clone(), Arc::new(file.clone())) {
                 insert_file_symbol_names(&mut dirty_lookup_names, &previous);
             }
@@ -690,12 +699,9 @@ impl WorkspaceIndex {
     }
 
     fn rebuild_symbol_map(&mut self) {
-        let files: Vec<_> = self
-            .files
-            .values()
-            .map(|file| file.as_ref().clone())
-            .collect();
-        self.symbols_by_name = Arc::new(symbol_map_from_files(&files));
+        self.symbols_by_name = Arc::new(symbol_map_from_files(
+            self.files.values().map(|file| file.as_ref()),
+        ));
     }
 
     fn persist_all(&self) -> Result<()> {

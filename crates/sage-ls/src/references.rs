@@ -453,8 +453,12 @@ impl Backend {
             locations
         })
         .await?;
-        for (uri, snapshot) in snapshots {
-            self.ensure_current_document(&uri, &snapshot)?;
+        // Locations come from immutable snapshots. Rename edits must match every live document;
+        // plain reference results stay useful when an unrelated document changed meanwhile.
+        if mode == ReferenceCollectionMode::Rename {
+            for (uri, snapshot) in snapshots {
+                self.ensure_current_document(&uri, &snapshot)?;
+            }
         }
         Ok(locations)
     }

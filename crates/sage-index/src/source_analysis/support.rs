@@ -33,13 +33,13 @@ pub(super) fn push_import_symbol(
 }
 
 pub(super) fn line_offsets(source: &str) -> Vec<(usize, &str)> {
-    let mut result = Vec::new();
-    let mut offset = 0usize;
-    for line in source.lines() {
-        result.push((offset, line));
-        offset += line.len() + 1;
-    }
-    result
+    // `str::lines` strips `\n` and `\r\n`, so the terminator length varies per line. Deriving each
+    // offset from the slice position keeps offsets exact for CRLF and mixed line endings.
+    let base = source.as_ptr() as usize;
+    source
+        .lines()
+        .map(|line| (line.as_ptr() as usize - base, line))
+        .collect()
 }
 
 pub(super) fn push_simple_symbol(

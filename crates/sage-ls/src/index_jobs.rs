@@ -158,7 +158,7 @@ impl IndexActor {
                 let started = std::thread::Builder::new()
                     .name(format!("sage-index-{label}"))
                     .spawn(move || {
-                        let result = (|| -> anyhow::Result<()> {
+                        let result = (|| -> anyhow::Result<bool> {
                             let previous_generation = current.generation();
                             let mut next = match job {
                                 Job::Rebuild => WorkspaceIndex::new(current.options().clone()),
@@ -170,7 +170,10 @@ impl IndexActor {
                                     .lock()
                                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                                 if !stopped.load(Ordering::Acquire) {
-                                    let mut hydrated = next.clone();
+                                    let mut hydrated = next.clone_for_background_work();
+                                    // Results cached against the empty startup index must not
+                                    // survive the hydrated snapshot.
+                                    hydrated.ensure_generation_after(previous_generation);
                                     hydrated.finalize_pending_refresh_install(
                                         &index_handle.load_full(),
                                     );
@@ -181,7 +184,7 @@ impl IndexActor {
                                 maybe_delay_background_index_for_test();
                             }
                             if stopped.load(Ordering::Acquire) {
-                                return Ok(());
+                                return Ok(false);
                             }
                             match job {
                                 Job::Reconcile => {
@@ -213,10 +216,18 @@ impl IndexActor {
                                             parse_file_for_roots(path, &next.options().roots).ok()
                                         })
                                         .collect();
-                                    next.preload_indexed_files(files);
+                                    if next.preload_indexed_files(files) == 0 {
+                                        // Nothing changed: keep the published snapshot, its
+                                        // generation, and every query cache.
+                                        return Ok(false);
+                                    }
                                 }
                             }
-                            next.ensure_generation_after(previous_generation);
+                            // The hydrated snapshot may already be published with a newer
+                            // generation than the one this job started from.
+                            next.ensure_generation_after(
+                                previous_generation.max(index_handle.load().generation()),
+                            );
                             let _guard = queue
                                 .lock()
                                 .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -224,7 +235,7 @@ impl IndexActor {
                                 next.finalize_pending_refresh_install(&index_handle.load_full());
                                 index_handle.store(Arc::new(next));
                             }
-                            Ok(())
+                            Ok(true)
                         })();
                         let _ = sender.send(result.map_err(|error| format!("{error:#}")));
                     });
@@ -246,7 +257,7 @@ impl IndexActor {
                                 format!("sage-ls {label} failed: {error}"),
                             )
                             .await;
-                    } else {
+                    } else if result == Ok(true) {
                         // Refresh requests may wait for a client response; never hold up the writer.
                         let client = client.clone();
                         tokio::spawn(async move {

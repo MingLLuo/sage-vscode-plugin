@@ -254,7 +254,9 @@ pub(crate) fn hover_markdown_for_ambiguous_member(documentation: &DocumentationR
     lines.join("\n")
 }
 
-pub(crate) fn symbol_map_from_files(files: &[IndexedFile]) -> HashMap<String, Vec<SymbolRecord>> {
+pub(crate) fn symbol_map_from_files<'a>(
+    files: impl IntoIterator<Item = &'a IndexedFile>,
+) -> HashMap<String, Vec<SymbolRecord>> {
     let mut symbols_by_name: HashMap<String, Vec<SymbolRecord>> = HashMap::new();
     for file in files {
         for symbol in &file.symbols {

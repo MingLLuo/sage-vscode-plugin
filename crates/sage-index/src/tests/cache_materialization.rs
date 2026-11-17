@@ -1195,3 +1195,30 @@ fn background_snapshots_keep_warm_records_with_independent_invalidation() {
         .contains_key("warmed_symbol"));
     fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn preloading_an_unchanged_file_reports_no_change() {
+    let root = test_root("preload-unchanged");
+    let path = root.join("mod.py");
+    fs::write(&path, "def indexed_symbol():\n    return 1\n").unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: Vec::new(),
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    let mut index = WorkspaceIndex::new(options);
+    let roots = index.options().roots.clone();
+    let parse = || parse_file_for_roots(&path, &roots).unwrap();
+
+    assert_eq!(index.preload_indexed_files(vec![parse()]), 1);
+    assert_eq!(
+        index.preload_indexed_files(vec![parse()]),
+        0,
+        "prewarm after a typing pause must not rebuild the symbol map for unchanged files"
+    );
+
+    fs::write(&path, "def renamed_symbol():\n    return 2\n").unwrap();
+    assert_eq!(index.preload_indexed_files(vec![parse()]), 1);
+}

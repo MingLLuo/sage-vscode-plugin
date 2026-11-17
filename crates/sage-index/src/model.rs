@@ -101,7 +101,7 @@ pub struct SourceRange {
     pub end_character: u32,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SymbolRecord {
     pub name: String,
     pub kind: SymbolKind,
@@ -114,7 +114,7 @@ pub struct SymbolRecord {
     pub signature: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IndexedFile {
     pub module: String,
     pub path: PathBuf,

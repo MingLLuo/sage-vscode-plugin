@@ -395,3 +395,29 @@ fn diagnostics_allow_exponents_continued_on_the_next_line() {
     let diagnostics = diagnostics_for_source(Path::new("demo.sage"), source);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
+
+#[test]
+fn crlf_sources_with_non_ascii_text_keep_exact_line_offsets() {
+    // Line offsets used to assume a one-byte terminator, so every CRLF line shifted later slices
+    // by one byte until a slice landed inside a multi-byte character and panicked.
+    let lf = "def outer(value):\n    label = 'é'\n    other = 'ü'\n    def inner():\n        return value\n    return label\n\nresult = outer(1)\n";
+    let crlf = lf.replace('\n', "\r\n");
+    let lf_spans = semantic_spans(lf);
+    let crlf_spans = semantic_spans(&crlf);
+    assert!(!lf_spans.is_empty());
+    assert_eq!(
+        crlf_spans
+            .iter()
+            .map(|span| (span.line, span.start, span.length, span.token_type.clone()))
+            .collect::<Vec<_>>(),
+        lf_spans
+            .iter()
+            .map(|span| (span.line, span.start, span.length, span.token_type.clone()))
+            .collect::<Vec<_>>(),
+        "CRLF line endings must not change semantic spans"
+    );
+    assert_eq!(
+        references_in_source(Path::new("demo.py"), &crlf, "value").len(),
+        references_in_source(Path::new("demo.py"), lf, "value").len()
+    );
+}
