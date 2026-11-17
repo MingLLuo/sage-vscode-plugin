@@ -37,7 +37,7 @@ fn main() -> Result<()> {
     let roots: Vec<PathBuf> = env::args()
         .skip(1)
         .filter(|arg| arg != "--diagnostics")
-        .map(|root| PathBuf::from(root).canonicalize())
+        .map(|root| sage_index::canonicalize_path(&PathBuf::from(root)))
         .collect::<std::io::Result<_>>()
         .context("resolve source roots")?;
     if roots.is_empty() {

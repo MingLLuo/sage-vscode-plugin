@@ -8,6 +8,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
+// Each warm query spawns a fresh inspector process that reopens the cache, so shared CI runners get
+// twice the local budget. SAGE_LATENCY_BUDGET_SCALE overrides the factor.
+const latencyBudgetScale = Number(process.env.SAGE_LATENCY_BUDGET_SCALE) || (process.env.CI ? 2 : 1);
+
 const execFileAsync = promisify(execFile);
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = path.resolve(__dirname, "..");
@@ -1010,7 +1014,8 @@ async function runSmoke(options = {}) {
   console.log(`debug workbench smoke passed (${matrix.summary.passed} scenarios${skipped})`);
 }
 
-async function assertWarmQueryBudget(fileName, symbol, budgetMs) {
+async function assertWarmQueryBudget(fileName, symbol, localBudgetMs) {
+  const budgetMs = localBudgetMs * latencyBudgetScale;
   const started = Date.now();
   await querySmokeFile(fileName, {
     symbol,
@@ -1023,7 +1028,8 @@ async function assertWarmQueryBudget(fileName, symbol, budgetMs) {
   }
 }
 
-async function assertWarmPositionBudget(fileName, line, character, budgetMs) {
+async function assertWarmPositionBudget(fileName, line, character, localBudgetMs) {
+  const budgetMs = localBudgetMs * latencyBudgetScale;
   const started = Date.now();
   await querySmokeFile(fileName, {
     line,

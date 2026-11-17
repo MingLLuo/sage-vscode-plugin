@@ -28,12 +28,12 @@ fn reference_candidates_are_scoped_to_the_resolved_definition() {
     std::fs::write(&shared_consumer_path, shared_consumer).unwrap();
     std::fs::write(&second_consumer_path, second_consumer).unwrap();
 
-    let root = root.canonicalize().unwrap();
-    let first_path = first_path.canonicalize().unwrap();
-    let second_path = second_path.canonicalize().unwrap();
-    let first_consumer_path = first_consumer_path.canonicalize().unwrap();
-    let shared_consumer_path = shared_consumer_path.canonicalize().unwrap();
-    let second_consumer_path = second_consumer_path.canonicalize().unwrap();
+    let root = sage_index::canonicalize_path(&root).unwrap();
+    let first_path = sage_index::canonicalize_path(&first_path).unwrap();
+    let second_path = sage_index::canonicalize_path(&second_path).unwrap();
+    let first_consumer_path = sage_index::canonicalize_path(&first_consumer_path).unwrap();
+    let shared_consumer_path = sage_index::canonicalize_path(&shared_consumer_path).unwrap();
+    let second_consumer_path = sage_index::canonicalize_path(&second_consumer_path).unwrap();
     let mut index = WorkspaceIndex::new(IndexOptions {
         roots: vec![root.clone()],
         editable_roots: vec![root.clone()],
@@ -160,9 +160,9 @@ fn parameter_reference_candidates_do_not_cross_function_or_file_bindings() {
     std::fs::write(&global_path, global_source).unwrap();
     std::fs::write(&consumer_path, consumer_source).unwrap();
 
-    let root = root.canonicalize().unwrap();
-    let global_path = global_path.canonicalize().unwrap();
-    let consumer_path = consumer_path.canonicalize().unwrap();
+    let root = sage_index::canonicalize_path(&root).unwrap();
+    let global_path = sage_index::canonicalize_path(&global_path).unwrap();
+    let consumer_path = sage_index::canonicalize_path(&consumer_path).unwrap();
     let mut index = WorkspaceIndex::new(IndexOptions {
         roots: vec![root.clone()],
         editable_roots: vec![root.clone()],
@@ -514,12 +514,12 @@ fn source_definition_references_and_rename_include_aliased_import_source_names_o
         std::fs::write(path, source).unwrap();
     }
 
-    let root = root.canonicalize().unwrap();
-    let provider_path = provider_path.canonicalize().unwrap();
-    let other_provider_path = other_provider_path.canonicalize().unwrap();
-    let first_consumer_path = first_consumer_path.canonicalize().unwrap();
-    let second_consumer_path = second_consumer_path.canonicalize().unwrap();
-    let unrelated_consumer_path = unrelated_consumer_path.canonicalize().unwrap();
+    let root = sage_index::canonicalize_path(&root).unwrap();
+    let provider_path = sage_index::canonicalize_path(&provider_path).unwrap();
+    let other_provider_path = sage_index::canonicalize_path(&other_provider_path).unwrap();
+    let first_consumer_path = sage_index::canonicalize_path(&first_consumer_path).unwrap();
+    let second_consumer_path = sage_index::canonicalize_path(&second_consumer_path).unwrap();
+    let unrelated_consumer_path = sage_index::canonicalize_path(&unrelated_consumer_path).unwrap();
     let mut index = WorkspaceIndex::new(IndexOptions {
         roots: vec![root.clone()],
         editable_roots: vec![root.clone()],
@@ -626,8 +626,8 @@ fn rename_reference_collection_rejects_non_editable_live_paths() {
     let external = root.join("external");
     std::fs::create_dir_all(&editable).unwrap();
     std::fs::create_dir_all(&external).unwrap();
-    let editable = editable.canonicalize().unwrap();
-    let external = external.canonicalize().unwrap();
+    let editable = sage_index::canonicalize_path(&editable).unwrap();
+    let external = sage_index::canonicalize_path(&external).unwrap();
     let index = WorkspaceIndex::new(IndexOptions {
         roots: vec![editable.clone(), external.clone()],
         editable_roots: vec![editable.clone()],
@@ -680,8 +680,8 @@ fn method_definition_identity_keeps_owner_specific_targets_separate() {
     ]
     .join("\n");
     std::fs::write(&path, &source).unwrap();
-    let root = root.canonicalize().unwrap();
-    let path = path.canonicalize().unwrap();
+    let root = sage_index::canonicalize_path(&root).unwrap();
+    let path = sage_index::canonicalize_path(&path).unwrap();
     let mut index = WorkspaceIndex::new(IndexOptions {
         roots: vec![root.clone()],
         editable_roots: vec![root.clone()],

@@ -63,13 +63,13 @@ fn main() -> Result<()> {
     }
     let roots: Vec<PathBuf> = roots
         .into_iter()
-        .map(|root| root.canonicalize())
+        .map(|root| sage_index::canonicalize_path(&root))
         .collect::<std::io::Result<_>>()?;
     let editable_roots: Vec<PathBuf> = editable_roots
         .into_iter()
-        .map(|root| root.canonicalize())
+        .map(|root| sage_index::canonicalize_path(&root))
         .collect::<std::io::Result<_>>()?;
-    let file = file.context("missing --file")?.canonicalize()?;
+    let file = sage_index::canonicalize_path(&file.context("missing --file")?)?;
     if !roots.iter().any(|root| file.starts_with(root)) {
         bail!("file must be inside indexed roots: {}", file.display());
     }

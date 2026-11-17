@@ -653,7 +653,10 @@ mod tests {
         );
 
         assert_eq!(calls.len(), 1);
-        assert_eq!(calls[0].definition.path, intended.canonicalize().unwrap());
+        assert_eq!(
+            calls[0].definition.path,
+            sage_index::canonicalize_path(&intended).unwrap()
+        );
         assert_eq!(calls[0].definition.name, "target");
         assert_eq!(calls[0].from_range.start, Position::new(3, 11));
         fs::remove_dir_all(root).ok();

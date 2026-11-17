@@ -312,8 +312,7 @@ fn python_sage_import_items_are_detected_for_duplicate_navigation_suppression() 
 
 #[test]
 fn lsp_utf16_positions_resolve_symbols_after_unicode_prefixes() {
-    let root = std::env::temp_dir()
-        .canonicalize()
+    let root = sage_index::canonicalize_path(&std::env::temp_dir())
         .unwrap_or_else(|_| std::env::temp_dir());
     let definition_path = root.join("sage-ls-utf16-defs.py");
     let consumer_path = root.join("sage-ls-utf16-consumer.py");

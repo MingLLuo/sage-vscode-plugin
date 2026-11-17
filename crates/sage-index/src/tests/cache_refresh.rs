@@ -539,7 +539,7 @@ fn preload_paths_warms_symbols_without_advancing_generation() {
 
     assert_eq!(index.status().generation, generation);
     assert!(index.symbol("PolynomialNotebook").is_some());
-    let canonical_source = source.canonicalize().unwrap();
+    let canonical_source = crate::canonicalize_path(&source).unwrap();
     assert_eq!(
         index.source_path_for_module("local_docs").as_deref(),
         Some(canonical_source.as_path())
