@@ -114,6 +114,7 @@ pub(super) struct RuntimeDocsProcess {
     stdin: ChildStdin,
     output: mpsc::Receiver<std::io::Result<String>>,
     home: Option<RuntimeHome>,
+    consecutive_timeouts: u32,
 }
 
 impl RuntimeDocsProcess {
@@ -121,9 +122,12 @@ impl RuntimeDocsProcess {
         let config = &session.config;
         let home = RuntimeHome::new()?;
         let mut command = Command::new(&config.interpreter_path);
-        command.args(&config.interpreter_args);
         if looks_like_sage_command(&config.interpreter_path) {
+            // The `sage` launcher only recognises `-python` as its first argument, and the
+            // configured interpreter arguments are meant for running files, not for Python.
             command.arg("-python");
+        } else {
+            command.args(&config.interpreter_args);
         }
         // Isolated Python removes CWD, user-site and PYTHONPATH from import resolution.
         command.args(["-I", "-u", "-c", include_str!("worker.py")]);
@@ -163,6 +167,7 @@ impl RuntimeDocsProcess {
             stdin,
             output,
             home: Some(home),
+            consecutive_timeouts: 0,
         };
         std::thread::Builder::new()
             .name("sage-docs-output".into())
@@ -202,6 +207,12 @@ impl RuntimeDocsProcess {
         Ok(process)
     }
 
+    /// Records a missed reply and returns how many were missed in a row.
+    pub(super) fn note_timeout(&mut self) -> u32 {
+        self.consecutive_timeouts += 1;
+        self.consecutive_timeouts
+    }
+
     pub(super) fn request(
         &mut self,
         session: &Session,
@@ -212,13 +223,22 @@ impl RuntimeDocsProcess {
         serde_json::to_writer(&mut self.stdin, &json!({"id":id,"symbol":symbol}))?;
         self.stdin.write_all(b"\n")?;
         self.stdin.flush()?;
-        let response: WorkerResponse =
-            serde_json::from_str(&self.read_line(session, cancelled, WORKER_TIMEOUT)?)
-                .context("invalid runtime docs response")?;
-        if response.id != id || response.name != symbol {
-            return Err(anyhow!("runtime docs response does not match its request"));
+        let deadline = Instant::now() + WORKER_TIMEOUT;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let response: WorkerResponse =
+                serde_json::from_str(&self.read_line(session, cancelled, remaining)?)
+                    .context("invalid runtime docs response")?;
+            // Replies to requests that timed out earlier arrive late and are skipped.
+            if response.id < id {
+                continue;
+            }
+            if response.id != id || response.name != symbol {
+                return Err(anyhow!("runtime docs response does not match its request"));
+            }
+            self.consecutive_timeouts = 0;
+            return Ok(response);
         }
-        Ok(response)
     }
 
     fn read_line(
@@ -293,5 +313,6 @@ fn looks_like_sage_command(path: &str) -> bool {
         .and_then(|n| n.to_str())
         .unwrap_or(path)
         .to_ascii_lowercase();
-    name == "sage" || name.starts_with("sage-") || name.starts_with("sage.")
+    // `sage-python`, `sage-ipython` and similar helpers are Python entry points already.
+    matches!(name.as_str(), "sage" | "sage.exe" | "sage.bat" | "sage.cmd" | "sage.sh")
 }

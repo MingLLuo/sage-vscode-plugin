@@ -136,35 +136,82 @@ async fn mismatched_response_is_discarded_and_worker_is_stopped() {
 }
 #[cfg(unix)]
 #[tokio::test]
-async fn stalled_response_times_out_and_discards_worker() {
+async fn slow_reply_times_out_but_keeps_the_worker_and_skips_the_late_frame() {
     let worker = RuntimeDocsWorker::default();
-    worker.configure(responder("time.sleep(30)")).await;
+    // The first reply arrives after the request timeout; the second request must not read it.
+    worker
+        .configure(responder(
+            "time.sleep(3.4 if r['symbol']=='slow' else 0); print(json.dumps({'id':r['id'],'name':r['symbol'],'ok':True,'docstring':'docs for '+r['symbol']}), flush=True)",
+        ))
+        .await;
+    assert!(worker.lookup("slow").await.is_none());
     assert!(
-        tokio::time::timeout(Duration::from_secs(5), worker.lookup("sin"))
-            .await
-            .unwrap()
-            .is_none()
+        lock(&worker.session().process).is_some(),
+        "one slow reply must not discard a worker that already imported Sage"
     );
-    assert!(lock(&worker.session().process).is_none());
     assert_eq!(worker.status(base_status()).await.runtime_timeout_count, 1);
+    // Wait out the retry backoff, then confirm the late `slow` frame is skipped by id.
+    until(|| worker.session().available()).await;
+    let record = worker.lookup("sin").await.expect("worker stays usable");
+    assert_eq!(record.docstring.as_deref(), Some("docs for sin"));
 }
 #[cfg(unix)]
 #[tokio::test]
-async fn cancellation_releases_active_request_and_does_not_enter_backoff() {
+async fn repeatedly_stalled_worker_is_discarded() {
     let worker = RuntimeDocsWorker::default();
-    worker.configure(responder("time.sleep(30)")).await;
+    worker.configure(responder("time.sleep(60)")).await;
+    let session = worker.session();
+    for attempt in 1..=MAX_CONSECUTIVE_TIMEOUTS {
+        lock(&session.state).retry_at = None;
+        assert!(worker.lookup(&format!("symbol{attempt}")).await.is_none());
+        assert_eq!(
+            lock(&session.process).is_none(),
+            attempt == MAX_CONSECUTIVE_TIMEOUTS,
+            "attempt {attempt}"
+        );
+    }
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn cancelling_a_lookup_keeps_the_worker_and_still_caches_the_result() {
+    let worker = RuntimeDocsWorker::default();
+    worker
+        .configure(responder(
+            "time.sleep(0.3); print(json.dumps({'id':r['id'],'name':r['symbol'],'ok':True,'docstring':'Sine docs'}), flush=True)",
+        ))
+        .await;
     let session = worker.session();
     let lookup = tokio::spawn({
         let session = session.clone();
         async move { session.lookup("sin").await }
     });
     until(|| lock(&session.control).is_some()).await;
+    // Editors cancel hover/definition requests constantly; that must not kill the Sage process.
     lookup.abort();
     let _ = lookup.await;
-    until(|| session.slots.available_permits() == 1).await;
-    assert!(lock(&session.process).is_none());
+    until(|| worker.cached("sin").is_some()).await;
+    assert!(lock(&session.process).is_some());
     assert_eq!(lock(&session.state).retry_at, None);
-    assert_eq!(lock(&session.state).name, "idle-static-fallback");
+    assert_eq!(lock(&session.state).name, "ready");
+}
+#[cfg(unix)]
+#[tokio::test]
+async fn source_location_does_not_wait_for_a_cold_worker() {
+    let worker = RuntimeDocsWorker::default();
+    worker
+        .configure(responder(
+            "time.sleep(1.5); print(json.dumps({'id':r['id'],'name':r['symbol'],'ok':True,'docstring':'Sine docs'}), flush=True)",
+        ))
+        .await;
+    let started = Instant::now();
+    assert!(worker.source_location("sin").await.is_none());
+    assert!(
+        started.elapsed() < Duration::from_millis(900),
+        "navigation must fall back to static results quickly: {:?}",
+        started.elapsed()
+    );
+    // The lookup keeps running in the background and fills the cache for the next attempt.
+    until(|| worker.cached("sin").is_some()).await;
 }
 #[cfg(unix)]
 #[tokio::test]

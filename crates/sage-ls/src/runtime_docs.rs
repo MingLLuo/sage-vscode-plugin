@@ -15,6 +15,11 @@ mod process;
 use process::{ProcessControl, RuntimeDocsProcess};
 
 const WORKER_TIMEOUT: Duration = Duration::from_secs(3);
+// Navigation never waits for a cold worker: it falls back to static results and the lookup
+// keeps running in the background so the next attempt is served from the cache.
+const FOREGROUND_WAIT: Duration = Duration::from_millis(300);
+// A worker that misses this many replies in a row is treated as hung and replaced.
+const MAX_CONSECUTIVE_TIMEOUTS: u32 = 3;
 // Startup runs in the background: real source builds can take over 30 seconds to import Sage.
 const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_FRAME_BYTES: u64 = 8 * 1024 * 1024;
@@ -111,10 +116,26 @@ impl RuntimeDocsWorker {
         self.session().cached(symbol).and_then(|entry| entry.record)
     }
     pub async fn source_location(&self, symbol: &str) -> Option<RuntimeSourceLocation> {
-        self.session()
-            .lookup(symbol)
-            .await
-            .and_then(|entry| entry.source)
+        let session = self.session();
+        if let Some(entry) = session.cached(symbol) {
+            return entry.source;
+        }
+        self.prefetch(symbol);
+        let symbol = symbol.trim();
+        tokio::time::timeout(FOREGROUND_WAIT, async {
+            loop {
+                tokio::time::sleep(Duration::from_millis(15)).await;
+                if let Some(entry) = session.cached(symbol) {
+                    return entry.source;
+                }
+                if !lock(&session.state).inflight.contains(symbol) {
+                    return None;
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten()
     }
     pub fn prefetch(&self, symbol: &str) {
         let session = self.session();
@@ -238,8 +259,10 @@ impl Session {
             return Some(entry);
         }
         lock(&self.state).cache_misses += 1;
+        // A started lookup always runs to completion and fills the cache. Editors cancel
+        // requests constantly (Ctrl+hover); tying that to the worker would kill a Sage process
+        // that took up to a minute to import.
         let cancelled = Arc::new(AtomicBool::new(false));
-        let _cancel = super::CancelOnDrop(cancelled.clone());
         let session = self.clone();
         let symbol = symbol.to_string();
         tokio::task::spawn_blocking(move || {
@@ -336,8 +359,19 @@ impl Session {
         let response = match response {
             Ok(response) => response,
             Err(error) => {
-                process.take();
-                lock(&self.control).take();
+                // A slow reply (lazy Sage imports) is not a dead worker: keep it and let the
+                // next request discard the late frame by id. Only repeated timeouts or protocol
+                // errors replace the process.
+                let timed_out = error.downcast_ref::<std::sync::mpsc::RecvTimeoutError>()
+                    == Some(&std::sync::mpsc::RecvTimeoutError::Timeout);
+                let keep = timed_out
+                    && process
+                        .as_mut()
+                        .is_some_and(|worker| worker.note_timeout() < MAX_CONSECUTIVE_TIMEOUTS);
+                if !keep {
+                    process.take();
+                    lock(&self.control).take();
+                }
                 return Err(error);
             }
         };

@@ -13,8 +13,11 @@ def send(payload):
     protocol.write(json.dumps(payload) + "\n")
     protocol.flush()
 
+# Sage names live in their own namespace: resolving through this module's globals would let
+# worker variables such as `line` or `name` shadow the Sage objects with the same names.
+SAGE_NAMESPACE = {}
 try:
-    from sage.all import *  # noqa: F401,F403
+    exec("from sage.all import *", SAGE_NAMESPACE)
     from sage.misc.sageinspect import sage_getdef, sage_getdoc, sage_getfile, sage_getsourcelines
     # Workspace paths must never precede Sage or the standard library.
     sys.path.extend(json.loads(os.environ.get("SAGE_LS_SOURCE_ROOTS", "[]")))
@@ -25,12 +28,11 @@ except Exception as exc:
 
 def resolve_symbol(name):
     obj = None
-    namespace = globals()
     for part in name.split("."):
         if not part:
             raise KeyError(name)
         if obj is None:
-            obj = namespace[part]
+            obj = SAGE_NAMESPACE[part]
         else:
             obj = getattr(obj, part)
     return obj
@@ -43,60 +45,66 @@ def one_line(value):
             return line
     return ""
 
-for line in sys.stdin:
-    request = {}
-    name = ""
-    try:
-        request = json.loads(line)
-        name = request.get("symbol", "")
+def serve():
+    # Requests are UTF-8 regardless of the platform locale (isolated mode ignores PYTHONUTF8).
+    import io
+    requests = io.TextIOWrapper(sys.stdin.buffer, encoding="utf-8", newline="\n")
+    for line in requests:
+        request = {}
+        name = ""
         try:
-            obj = resolve_symbol(name)
-        except (KeyError, AttributeError):
-            send({"id": request.get("id"), "name": name, "ok": False, "missing": True})
-            continue
-        try:
-            # Embedded formatting preserves docs without probing optional packages
-            # (e.g. starting Maxima merely to format sin's doctest tags).
-            doc = sage_getdoc(obj, obj_name=name, embedded=True) or ""
-        except TypeError:
-            doc = sage_getdoc(obj) or ""
-        if not doc:
-            doc = inspect.getdoc(obj) or ""
-        try:
-            detail = sage_getdef(obj, name) or ""
-        except Exception:
-            detail = ""
-        try:
-            path = sage_getfile(obj) or ""
-        except Exception:
-            path = ""
-        source_line = None
-        source_text = None
-        try:
-            source_lines, source_line = sage_getsourcelines(obj)
-            source_text = source_lines[0].rstrip() if source_lines else None
-        except Exception:
-            pass
-        module = getattr(obj, "__module__", "") or "sage.runtime"
-        kind = type(obj).__name__
-        send({
-            "id": request.get("id"),
-            "ok": True,
-            "name": name,
-            "module_name": module,
-            "kind": kind,
-            "detail": detail,
-            "summary": one_line(doc) or detail or name,
-            "docstring": doc,
-            "uri": path,
-            "source_line": source_line,
-            "source_text": source_text,
-        })
-    except Exception as exc:
-        send({
-            "id": request.get("id"),
-            "ok": False,
-            "name": name,
-            "error": str(exc),
-            "traceback": traceback.format_exc(limit=2),
-        })
+            request = json.loads(line)
+            name = request.get("symbol", "")
+            try:
+                obj = resolve_symbol(name)
+            except (KeyError, AttributeError):
+                send({"id": request.get("id"), "name": name, "ok": False, "missing": True})
+                continue
+            try:
+                # Embedded formatting preserves docs without probing optional packages
+                # (e.g. starting Maxima merely to format sin's doctest tags).
+                doc = sage_getdoc(obj, obj_name=name, embedded=True) or ""
+            except TypeError:
+                doc = sage_getdoc(obj) or ""
+            if not doc:
+                doc = inspect.getdoc(obj) or ""
+            try:
+                detail = sage_getdef(obj, name) or ""
+            except Exception:
+                detail = ""
+            try:
+                path = sage_getfile(obj) or ""
+            except Exception:
+                path = ""
+            source_line = None
+            source_text = None
+            try:
+                source_lines, source_line = sage_getsourcelines(obj)
+                source_text = source_lines[0].rstrip() if source_lines else None
+            except Exception:
+                pass
+            module = getattr(obj, "__module__", "") or "sage.runtime"
+            kind = type(obj).__name__
+            send({
+                "id": request.get("id"),
+                "ok": True,
+                "name": name,
+                "module_name": module,
+                "kind": kind,
+                "detail": detail,
+                "summary": one_line(doc) or detail or name,
+                "docstring": doc,
+                "uri": path,
+                "source_line": source_line,
+                "source_text": source_text,
+            })
+        except Exception as exc:
+            send({
+                "id": request.get("id"),
+                "ok": False,
+                "name": name,
+                "error": str(exc),
+                "traceback": traceback.format_exc(limit=2),
+            })
+
+serve()
