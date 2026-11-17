@@ -47,7 +47,7 @@ import { SageRuntimeChecker } from "./sageRuntimeCheck";
 import { ensureSageRuntimeAvailable } from "./sageRuntimePrompt";
 import { LanguageClientLifecycleController } from "./languageClientLifecycleController";
 import { RuntimeSourceRootDiscoveryController } from "./runtimeSourceRootDiscoveryController";
-import { STATUS_MENU_COMMAND, statusMenuActions } from "./statusMenu";
+import { SHOW_LOGS_COMMAND, STATUS_MENU_COMMAND, statusMenuActions } from "./statusMenu";
 import {
   DEFAULT_INDEX_CACHE_KEEP_LATEST_DATABASES,
   DEFAULT_INDEX_CACHE_MAX_AGE_DAYS,
@@ -909,10 +909,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         false,
       );
     }),
+    vscode.commands.registerCommand(SHOW_LOGS_COMMAND, () => outputChannel.show()),
     vscode.commands.registerCommand(STATUS_MENU_COMMAND, async () => {
-      const picked = await vscode.window.showQuickPick(statusMenuActions(), {
-        title: "Sage Status",
-        placeHolder: "Open diagnostics, rebuild the index, or copy a support bundle.",
+      const picked = await vscode.window.showQuickPick(statusMenuActions(vscode.l10n.t), {
+        title: vscode.l10n.t("Sage Status"),
+        placeHolder: vscode.l10n.t("Restart, choose a Sage, read logs, or inspect the index."),
         matchOnDescription: true,
         matchOnDetail: true,
       });

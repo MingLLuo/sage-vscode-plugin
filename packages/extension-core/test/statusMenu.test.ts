@@ -9,15 +9,22 @@ import {
 test("statusMenuActions expose the core troubleshooting commands", () => {
   assert.equal(STATUS_MENU_COMMAND, "sage.__internal.showStatusMenu");
   const commands = statusMenuActions().map((action) => action.command);
-  assert.deepEqual(commands, [
+  assert.deepEqual(commands.slice(0, 3), [
+    "sage.restartLanguageServer",
+    "sage.selectInterpreter",
+    "sage.__internal.showLogs",
+  ], "recovery actions come first");
+  for (const command of [
     "sage.showEnvironmentDetails",
     "sage.showIndexStatus",
     "sage.showDocsStatus",
-    "sage.runUxSelfCheck",
-    "sage.buildDatabase",
     "sage.rebuildIndex",
+    "sage.buildDatabase",
+    "sage.runUxSelfCheck",
     "sage.copySupportBundle",
-  ]);
+  ]) {
+    assert.ok(commands.includes(command), `missing ${command}`);
+  }
 });
 
 test("statusMenuActions include searchable descriptions and details", () => {
