@@ -465,7 +465,7 @@ async function runMultiRootSmoke(): Promise<void> {
   const [alpha, beta] = folders;
   for (const [folder, pythonEnabled, interpreter] of [
     [alpha, false, "/bin/sh"],
-    [beta, true, "/bin/zsh"],
+    [beta, true, "/bin/bash"],
   ] as const) {
     const configuration = vscode.workspace.getConfiguration("sage", folder.uri);
     await configuration.update("analysis.sourceRoots", ["src"], vscode.ConfigurationTarget.WorkspaceFolder);
@@ -517,7 +517,7 @@ async function runMultiRootSmoke(): Promise<void> {
     const terminal = vscode.window.terminals.find((candidate) => candidate.name === `Sage REPL: ${folder.name}`);
     assert.ok(terminal, `${folder.name}: expected separate REPL`);
     assert.equal((terminal.creationOptions as vscode.TerminalOptions).cwd, folder.uri.fsPath);
-    assert.equal((terminal.creationOptions as vscode.TerminalOptions).shellPath, folder === alpha ? "/bin/sh" : "/bin/zsh");
+    assert.equal((terminal.creationOptions as vscode.TerminalOptions).shellPath, folder === alpha ? "/bin/sh" : "/bin/bash");
   }
   const alphaTerminal = vscode.window.terminals.find((terminal) => terminal.name === `Sage REPL: ${alpha.name}`);
   const betaTerminal = vscode.window.terminals.find((terminal) => terminal.name === `Sage REPL: ${beta.name}`);
@@ -544,7 +544,7 @@ async function runMultiRootSmoke(): Promise<void> {
     try {
       await vscode.commands.executeCommand("sage.runCurrentFile");
       const task = await started;
-      assert.equal((task.execution as vscode.ProcessExecution).process, folder === alpha ? "/bin/sh" : "/bin/zsh");
+      assert.equal((task.execution as vscode.ProcessExecution).process, folder === alpha ? "/bin/sh" : "/bin/bash");
       assert.equal((task.scope as vscode.WorkspaceFolder).uri.toString(), folder.uri.toString());
       assert.equal((task.execution as vscode.ProcessExecution).options?.cwd, folder.uri.fsPath);
     } finally {
