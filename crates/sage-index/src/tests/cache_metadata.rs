@@ -359,7 +359,7 @@ fn status_exposes_cache_namespace_and_source_root_fingerprints() {
     assert!(status.source_root_fingerprints[0]
         .marker
         .as_deref()
-        .is_some_and(|marker| marker.ends_with("sage/version.py")));
+        .is_some_and(|marker| Path::new(marker).ends_with(Path::new("sage").join("version.py"))));
 
     let before = status.source_root_fingerprints[0].digest.clone();
     fs::write(root.join("sage").join("version.py"), "version = '10.7'\n").unwrap();
@@ -402,7 +402,7 @@ fn hydrate_reports_stale_cache_when_source_root_fingerprint_changes() {
     assert!(stale.stale_source_roots[0]
         .current_marker
         .as_deref()
-        .is_some_and(|marker| marker.ends_with("sage/version.py")));
+        .is_some_and(|marker| Path::new(marker).ends_with(Path::new("sage").join("version.py"))));
 
     let reconciled = hydrated.reconcile_with_cache().unwrap();
     assert!(!reconciled.cache_stale);

@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import assert from "node:assert/strict";
 import path from "node:path";
 
@@ -197,7 +198,27 @@ async function runFirstRunSmoke(): Promise<void> {
   }, 30_000);
   const status = await vscode.commands.executeCommand<IndexStatusSnapshot>("sage.showIndexStatus");
   assert.ok(status, "first-run index status should be available");
+  // With Sage installed, Run Current File starts a Sage task. Without it (CI runners), the
+  // command must stop up front with an explanation instead of launching a failing task.
+  const sageInstalled = await new Promise<boolean>((resolve) => {
+    execFile("sage", ["--version"], { timeout: 15_000 }, (error) => resolve(!error));
+  });
   let runSubscription: vscode.Disposable | undefined;
+  if (!sageInstalled) {
+    let started = false;
+    runSubscription = vscode.tasks.onDidStartTask(({ execution }) => {
+      if (execution.task.source === "Sage") started = true;
+    });
+    try {
+      await vscode.commands.executeCommand("sage.runCurrentFile");
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      assert.equal(started, false, "without Sage, Run Current File must not launch a task");
+    } finally {
+      runSubscription.dispose();
+    }
+    assert.equal((await lifecycleSnapshot("sage.__test.getLifecycleSnapshot")).unexpectedCloseCount, 0);
+    return;
+  }
   const runStarted = new Promise<vscode.Task>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("first-run Sage task did not start")), 5000);
     runSubscription = vscode.tasks.onDidStartTask(({ execution }) => {
