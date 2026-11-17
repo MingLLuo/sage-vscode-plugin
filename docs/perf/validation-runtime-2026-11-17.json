@@ -1,0 +1,45 @@
+{
+  "verified_at": "2026-11-17T05:37:47.523414+00:00",
+  "checkpoint": "runtime worker and client recovery; before precise diagnostics and folding",
+  "platform": "darwin-arm64",
+  "uncommitted_continuation": true,
+  "commands": [
+    {
+      "command": "SAGE_SOURCE_ROOT=../sage/src npm run test:release",
+      "exit_code": 0,
+      "rust_tests": 313,
+      "extension_unit_tests": 227
+    },
+    {
+      "command": "npm run test:extension-host",
+      "exit_code": 0,
+      "scenarios": [
+        "startup-failure",
+        "no-folder",
+        "first-run",
+        "plain-python",
+        "smoke",
+        "multi-root"
+      ],
+      "scenario_exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "command": "npm run package:vsix",
+      "exit_code": 0
+    }
+  ],
+  "artifact": {
+    "path": "dist/sage-vscode-extension-0.1.0-darwin-arm64.vsix",
+    "bytes": 4659784,
+    "sha256": "5992ff6a1a07e004ac149759fab611ed332c9c64e3a4c0892aa328c6f4d48134"
+  },
+  "published": false,
+  "normal_user_profile_modified": false
+}

@@ -1,0 +1,82 @@
+{
+  "verified_at": "2026-11-17T05:43:24.052002+00:00",
+  "checkpoint": "precise diagnostics and multiline function boundaries",
+  "platform": "darwin-arm64",
+  "base_commit": "aee9517cbace36a0d8c051edda4e8743cfbf9b22",
+  "uncommitted_continuation": true,
+  "commands": [
+    {
+      "command": "SAGE_SOURCE_ROOT=../sage/src npm run test:release",
+      "exit_code": 0,
+      "rust_tests_at_start": 320,
+      "extension_unit_tests": 227
+    },
+    {
+      "command": "cargo test --locked (final source, including dedented-string regression)",
+      "exit_code": 0,
+      "rust_tests": 321
+    },
+    {
+      "command": "cargo clippy --locked --all-targets --all-features -- -D warnings (final source)",
+      "exit_code": 0
+    },
+    {
+      "command": "npm run test:extension-host",
+      "exit_code": 0,
+      "scenarios": [
+        "startup-failure",
+        "no-folder",
+        "first-run",
+        "plain-python",
+        "smoke",
+        "multi-root"
+      ],
+      "scenario_exit_codes": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "command": "npm run package:vsix",
+      "exit_code": 0
+    },
+    {
+      "command": "SAGE_SOURCE_ROOT=../sage/src node scripts/perf-baseline.mjs --out docs/perf/baseline-diagnostics-2026-11-17.json",
+      "exit_code": 0
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    },
+    {
+      "command": "Final full Sage snapshot compared with explained diagnostic checkpoint",
+      "exit_code": 0,
+      "files": 3921,
+      "symbols": 126514,
+      "semantic_spans": 273949,
+      "diagnostics": 50,
+      "unexplained_differences": 0
+    }
+  ],
+  "artifact": {
+    "path": "dist/sage-vscode-extension-0.1.0-darwin-arm64.vsix",
+    "bytes": 4674997,
+    "sha256": "65a8d43975265d4e80455886b1365e054e695bf49cdf073560750b007597dc8e"
+  },
+  "remaining_acceptance_failures": [
+    "Cold/rebuild RSS above 400 MiB",
+    "matrix references above 2 seconds",
+    "Library cache duplicated across workspaces"
+  ],
+  "not_verified": [
+    "Native non-macOS-arm64 CI (gh is not authenticated)",
+    "One-hour soak",
+    "Shared-cache redesign and remaining M1-M5 requirements"
+  ],
+  "published": false,
+  "normal_user_profile_modified": false
+}

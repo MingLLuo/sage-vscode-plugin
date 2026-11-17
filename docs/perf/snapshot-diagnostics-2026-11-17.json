@@ -1,0 +1,274 @@
+{
+  "status": "different",
+  "files_before": 3921,
+  "files_after": 3921,
+  "totals": {
+    "symbols": {
+      "before": 126514,
+      "after": 126514
+    },
+    "semantic_spans": {
+      "before": 273949,
+      "after": 273949
+    },
+    "diagnostics": {
+      "before": 78,
+      "after": 50
+    }
+  },
+  "added": 0,
+  "removed": 0,
+  "changed": {
+    "symbols": 0,
+    "semantic_spans": 0,
+    "diagnostics": 30
+  },
+  "examples": {
+    "added": [],
+    "removed": [],
+    "symbols": [],
+    "semantic_spans": [],
+    "diagnostics": [
+      {
+        "path": "sage/categories/category_with_axiom.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 196,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/categories/primer.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 1199,
+        "previous_caret_text": "^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/coding/codes_catalog.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 7,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/combinat/alternating_sign_matrix.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 489,
+        "previous_caret_text": "                ^    ^    ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/combinat/fast_vector_partitions.pyx",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 176,
+        "previous_caret_text": "            b ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/combinat/finite_state_machine.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 31,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/combinat/fully_packed_loop.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 181,
+        "previous_caret_text": "            ^    ^    ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/combinat/permutation.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 18,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/combinat/six_vertex_model.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 37,
+        "previous_caret_text": "                ^    ^    ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/combinat/tutorial.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 546,
+        "previous_caret_text": "^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/databases/findstat.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 30,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/geometry/pseudolines.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 155,
+        "previous_caret_text": "^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/graphs/generic_graph.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 715,
+        "previous_caret_text": "            ....:     #    ^     ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/graphs/graph_decompositions/graph_products.pyx",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 96,
+        "previous_caret_text": "^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/graphs/isgci.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 25,
+        "previous_caret_text": "^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/graphs/partial_cube.py",
+        "before": 1,
+        "after": 2,
+        "previous_caret_line": 15,
+        "previous_caret_text": "^^^^^^^^^^^",
+        "explanation": "Removed the unconditional caret report; existing Python XOR warnings are no longer hidden by its early return."
+      },
+      {
+        "path": "sage/interfaces/gap3.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 395,
+        "previous_caret_text": "                          ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/libs/gap/util.pyx",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 416,
+        "previous_caret_text": "               ^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/matrix/matrix_mod2_dense.pyx",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 2764,
+        "previous_caret_text": "    parity_table[i] = 1 & ((i) ^ (i>>1) ^ (i>>2) ^ (i>>3) ^",
+        "explanation": "Removed the Sage-specific incomplete-exponent report from a valid continued Cython XOR expression."
+      },
+      {
+        "path": "sage/misc/cython.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 252,
+        "previous_caret_text": "             ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/misc/sage_eval.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 148,
+        "previous_caret_text": "                                     ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/misc/verbose.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 8,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/modules/fp_graded/morphism.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 1130,
+        "previous_caret_text": "        #     \\         ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/quadratic_forms/quadratic_form__theta.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 138,
+        "previous_caret_text": "    correct up to the power `q^{\\text{q\\_prec}}`. (So its error is `O(q^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/rings/asymptotic/asymptotic_ring.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 104,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/rings/asymptotic/growth_group.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 152,
+        "previous_caret_text": "^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/sat/boolean_polynomials.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 14,
+        "previous_caret_text": "^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/structure/element.pyx",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 90,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/structure/unique_representation.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 38,
+        "previous_caret_text": "^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      },
+      {
+        "path": "sage/typeset/character_art.py",
+        "before": 1,
+        "after": 0,
+        "previous_caret_line": 724,
+        "previous_caret_text": "             ^",
+        "explanation": "Removed the old unconditional trailing-caret report from comments/docstrings."
+      }
+    ]
+  }
+}

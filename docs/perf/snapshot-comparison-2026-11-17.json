@@ -1,0 +1,33 @@
+{
+  "status": "identical",
+  "files_before": 3921,
+  "files_after": 3921,
+  "totals": {
+    "symbols": {
+      "before": 126514,
+      "after": 126514
+    },
+    "semantic_spans": {
+      "before": 273949,
+      "after": 273949
+    },
+    "diagnostics": {
+      "before": 78,
+      "after": 78
+    }
+  },
+  "added": 0,
+  "removed": 0,
+  "changed": {
+    "symbols": 0,
+    "semantic_spans": 0,
+    "diagnostics": 0
+  },
+  "examples": {
+    "added": [],
+    "removed": [],
+    "symbols": [],
+    "semantic_spans": [],
+    "diagnostics": []
+  }
+}

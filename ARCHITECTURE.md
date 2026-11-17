@@ -25,8 +25,29 @@
 
 - Cache namespaces are derived from normalized workspace/source roots and parser options, allowing different Sage
   checkouts to coexist without mixing symbols.
-- Startup hydrates the persistent cache first and reconciles source changes in the background. Save and watcher events
-  use incremental path refreshes.
+- Initialization publishes an empty index immediately. A single index actor hydrates and reconciles the persistent
+  cache on a dedicated worker. Save and watcher notifications enqueue coalesced path events; they never wait for indexing.
+- Readers load immutable `ArcSwap` snapshots. Indexed files are shared through `Arc`, and one writer publishes completed
+  generations without holding a reader lock. Linked-file prewarming reads files when its queued job executes, so a delayed
+  discovery cannot restore a pre-save version.
+- Open-document updates take a synchronous lock before their first await and replace versioned `Arc` snapshots. Heavy
+  hover/completion/token work uses a bounded blocking lane; references have a separate lane and cooperative cancellation.
+  Diagnostics are debounced for 200 ms and only publish against the current document version. Semantic tokens are cached
+  per document snapshot, with range responses filtered from that cache.
+- Syntax diagnostics use ERROR/MISSING node ranges and map generated Sage coordinates back through operator and generator
+  rewrites. Comment/string carets and continued exponents do not create standalone errors. Function folding and call-hierarchy
+  bounds share logical-line and string handling with lexical analysis, including multiline signatures.
+- Shutdown stops queued indexing and diagnostics, and transport exit has a bounded runtime shutdown even with stdin open.
+  Runtime documentation uses replaceable sessions, a bounded request lane and independent process control, so slow imports
+  cannot block shutdown or reconfiguration. Unix workers own a process group; Windows workers are assigned to a kill-on-close
+  Job Object (native Windows validation remains pending). Complete cancellation coverage for other handlers remains tracked work.
+- Runtime docs use a private protocol descriptor with echoed request ID and symbol. Python/native stdout is diverted away
+  from the protocol. Isolated Python imports Sage before appending workspace paths; per-process cache directories are private
+  and removed after reaping. Missing symbols have a 30-second negative cache, startup failures back off, and positive/negative
+  cache storage is bounded by entry count and bytes.
+- Clients validate the selected server with a cancellable `--version` probe before starting LSP. Invalid executables require
+  a configuration change or manual retry; other crashes retain bounded automatic recovery. Deactivation shares one four-second
+  deadline across startup, client stop and runtime-source discovery.
 - Open documents override on-disk index rows. External Sage sources remain read-only and are mapped back to their
   physical files by the extension client.
 - A full Sage installation is optional for static editing. When a compatible runtime is available, it enriches docs and

@@ -76,7 +76,7 @@ home paths are not leaked.
 ## Current Status
 
 - Repository bootstrap, Rust build, TypeScript build, and syntax sync are locally validated.
-- The extension launches `sage-ls` from `SAGE_LS_PATH`, `sage.languageServer.rustPath`, local `target/*`, or `PATH`.
+- The extension launches `sage-ls` from explicit `sage.languageServer.rustPath`, `SAGE_LS_PATH`, the matching packaged binary, development-only `target/*`, or `PATH`.
 - The extension provides a Getting Started walkthrough, environment-first interpreter selection, status presentation, run
   commands, managed REPL, documentation panel, index/docs status commands, support bundle capture, rebuild, and an editor
   UX self-check command.
@@ -153,10 +153,13 @@ visual polish, latency gates, debuggability, Mac packaging, future Sage-update r
 `npm run test:reference-export` generates a temporary `.sage-reference` package and verifies the static viewer, source
 shards, search index, keyboard/hash interactions, documentation rendering, and private-path stripping.
 
-`npm run package:vsix` rebuilds and stages the current macOS release `sage-ls` binary, verifies generated assets and
-package contents, then writes `dist/sage-vscode-extension-0.1.0.vsix`.
+`npm run package:vsix` rebuilds and stages the current host release `sage-ls` binary, verifies generated assets and
+package contents, then writes `dist/sage-vscode-extension-0.1.0-<target>.vsix`. Use `-- --target darwin-arm64`
+(or another supported target) to select explicitly. The platform workflow builds six native binaries and eight VSIX
+variants including Alpine aliases; only macOS arm64 has been verified locally. See the
+[continuation audit](docs/process/runtime-audit-2026-11-17.md) for verification and outstanding production milestones.
 
-`npm run doctor:mac` checks the local Mac package, staged Rust language server, VS Code CLI, an importable Sage runtime,
+`npm run doctor:mac` (retained command name) checks the current host package, staged Rust language server, VS Code CLI, an importable Sage runtime,
 and the Sage source root before you open a workspace. A source checkout that prints its version but cannot import
 `sage.all` is reported as a warning instead of being treated as a usable runtime. Use `-- --json` for a machine-readable
 report or `-- --strict` to fail when required packaged artifacts are missing.
