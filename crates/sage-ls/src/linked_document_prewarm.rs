@@ -6,10 +6,10 @@
 
 use super::{
     document_links::sage_document_links,
+    index_jobs::{IndexActor, IndexHandle},
     open_documents::{canonical_path_for_comparison, uri_to_path},
-    NavigationQueryCache,
 };
-use sage_index::{parse_file_for_roots, parse_source, IndexedFile, WorkspaceIndex};
+use sage_index::parse_source;
 use std::{
     collections::{BTreeSet, HashMap},
     path::{Path, PathBuf},
@@ -19,7 +19,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::{oneshot, Mutex, RwLock};
+use tokio::sync::{oneshot, Mutex};
 use tower_lsp_server::ls_types::Uri;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -39,9 +39,8 @@ impl LinkedDocumentPrewarmer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn schedule(
         &self,
-        index: Arc<RwLock<WorkspaceIndex>>,
-        index_work_gate: Arc<Mutex<()>>,
-        navigation_cache: Arc<RwLock<NavigationQueryCache>>,
+        index: IndexHandle,
+        index_actor: IndexActor,
         shutting_down: Arc<AtomicBool>,
         uri: Uri,
         text: String,
@@ -54,7 +53,7 @@ impl LinkedDocumentPrewarmer {
         let revision = self.register_revision(key.clone(), document_version);
         let prewarmer = self.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(Duration::from_millis(40)).await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
             if shutting_down.load(Ordering::Acquire) || !prewarmer.is_current(&key, revision) {
                 return;
             }
@@ -76,15 +75,14 @@ impl LinkedDocumentPrewarmer {
                 return;
             }
 
-            let roots = {
-                let index = index.read().await;
+            {
+                let index = index.load_full();
                 for module in import_modules.into_iter().take(16) {
                     if let Some(target) = index.source_path_for_module(&module) {
                         targets.push(target);
                     }
                 }
-                index.options().roots.clone()
-            };
+            }
             let mut seen = BTreeSet::new();
             targets.retain(|target| {
                 let target = canonical_path_for_comparison(target);
@@ -95,29 +93,7 @@ impl LinkedDocumentPrewarmer {
                 return;
             }
 
-            let Some(parsed_files) = detached_worker("sage-linked-parse", move || {
-                parse_linked_files(&targets, &roots)
-            })
-            .await
-            else {
-                return;
-            };
-            if parsed_files.is_empty()
-                || shutting_down.load(Ordering::Acquire)
-                || !prewarmer.is_current(&key, revision)
-            {
-                return;
-            }
-
-            let _index_work_guard = index_work_gate.lock().await;
-            if shutting_down.load(Ordering::Acquire) || !prewarmer.is_current(&key, revision) {
-                return;
-            }
-            let mut index = index.write().await;
-            let loaded = index.preload_indexed_files(parsed_files);
-            if loaded > 0 {
-                navigation_cache.write().await.clear();
-            }
+            index_actor.preload(targets);
         });
     }
 
@@ -138,7 +114,13 @@ impl LinkedDocumentPrewarmer {
             document_version,
             generation: self.next_generation.fetch_add(1, Ordering::AcqRel) + 1,
         };
-        self.revisions_lock().insert(key, revision);
+        let mut revisions = self.revisions_lock();
+        if revisions
+            .get(&key)
+            .is_none_or(|previous| previous.document_version <= document_version)
+        {
+            revisions.insert(key, revision);
+        }
         revision
     }
 
@@ -178,13 +160,6 @@ fn linked_document_targets_and_imports(path: &Path, text: &str) -> (Vec<PathBuf>
     (targets, import_modules_for_prewarm(path, text))
 }
 
-fn parse_linked_files(targets: &[PathBuf], roots: &[PathBuf]) -> Vec<IndexedFile> {
-    targets
-        .iter()
-        .filter_map(|target| parse_file_for_roots(target, roots).ok())
-        .collect()
-}
-
 pub(super) fn import_modules_for_prewarm(path: &Path, text: &str) -> Vec<String> {
     let mut modules = BTreeSet::new();
     let parsed = parse_source(module_name_for_path(path), path, text);
@@ -211,7 +186,7 @@ fn module_name_for_path(path: &Path) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sage_index::IndexOptions;
+    use sage_index::{IndexOptions, WorkspaceIndex};
     use std::{fs, time::SystemTime};
 
     #[test]
@@ -222,6 +197,9 @@ mod tests {
         let second = prewarmer.register_revision(path.clone(), 2);
 
         assert!(!prewarmer.is_current(&path, first));
+        assert!(prewarmer.is_current(&path, second));
+        let delayed_old_version = prewarmer.register_revision(path.clone(), 1);
+        assert!(!prewarmer.is_current(&path, delayed_old_version));
         assert!(prewarmer.is_current(&path, second));
     }
 
@@ -250,22 +228,22 @@ mod tests {
         fs::write(&first_target, "def first_target():\n    return 1\n").unwrap();
         fs::write(&second_target, "def second_target():\n    return 2\n").unwrap();
         let uri = Uri::from_file_path(&document_path).unwrap();
-        let index = Arc::new(RwLock::new(WorkspaceIndex::new(IndexOptions {
-            roots: vec![root.clone()],
-            editable_roots: vec![root.clone()],
-            exclude_globs: Vec::new(),
-            cache_dir: root.join("cache"),
-            enable_pyx: true,
-        })));
-        let index_work_gate = Arc::new(Mutex::new(()));
-        let navigation_cache = Arc::new(RwLock::new(NavigationQueryCache::default()));
+        let index = Arc::new(arc_swap::ArcSwap::from_pointee(WorkspaceIndex::new(
+            IndexOptions {
+                roots: vec![root.clone()],
+                editable_roots: vec![root.clone()],
+                exclude_globs: Vec::new(),
+                cache_dir: root.join("cache"),
+                enable_pyx: true,
+            },
+        )));
         let shutting_down = Arc::new(AtomicBool::new(false));
         let prewarmer = LinkedDocumentPrewarmer::default();
+        let actor = IndexActor::new(index.clone(), None, shutting_down.clone());
 
         prewarmer.schedule(
             index.clone(),
-            index_work_gate.clone(),
-            navigation_cache.clone(),
+            actor.clone(),
             shutting_down.clone(),
             uri.clone(),
             "load('first.py')\n".to_string(),
@@ -273,20 +251,20 @@ mod tests {
         );
         prewarmer.schedule(
             index.clone(),
-            index_work_gate,
-            navigation_cache,
+            actor.clone(),
             shutting_down,
             uri,
             "load('second.py')\n".to_string(),
             2,
         );
 
-        tokio::time::sleep(Duration::from_millis(300)).await;
-        let index = index.read().await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let index = index.load_full();
         assert!(index.resolve_symbol("first_target", None).is_none());
         assert!(index.resolve_symbol("second_target", None).is_some());
         drop(index);
 
+        actor.stop();
         fs::remove_dir_all(root).unwrap();
     }
 

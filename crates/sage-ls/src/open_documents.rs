@@ -5,39 +5,63 @@
 //! its client-facing URI over stale text and ranges from the on-disk index.
 
 use super::document_links::normalize_path_lexically;
+use super::text_positions::LineIndex;
+use std::sync::{Arc, OnceLock, RwLock};
 use std::{
     collections::HashMap,
     path::{Path, PathBuf},
 };
-use tower_lsp_server::ls_types::Uri;
+use tower_lsp_server::ls_types::{SemanticToken, Uri};
 
-pub(super) type OpenDocumentMap = HashMap<Uri, OpenDocument>;
+pub(super) type OpenDocumentMap = HashMap<Uri, Arc<OpenDocument>>;
+
+/// Locks are only held for map access; callers receive immutable, shared snapshots.
+#[derive(Default)]
+pub(super) struct DocumentStore(RwLock<OpenDocumentMap>);
+impl DocumentStore {
+    pub(super) fn read(&self) -> std::sync::RwLockReadGuard<'_, OpenDocumentMap> {
+        self.0
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+    pub(super) fn write(&self) -> std::sync::RwLockWriteGuard<'_, OpenDocumentMap> {
+        self.0
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub(super) struct OpenDocument {
     pub(super) text: String,
+    pub(super) lines: LineIndex,
+    pub(super) tokens: OnceLock<Vec<SemanticToken>>,
     pub(super) version: i32,
     pub(super) content_fingerprint: Option<u64>,
     physical_path: Option<PathBuf>,
 }
 
 impl OpenDocument {
-    pub(super) fn live(uri: &Uri, text: String, version: i32) -> Self {
-        Self {
+    pub(super) fn live(uri: &Uri, text: String, version: i32) -> Arc<Self> {
+        Arc::new(Self {
+            lines: LineIndex::new(&text),
+            tokens: OnceLock::new(),
             text,
             version,
             content_fingerprint: None,
             physical_path: uri_to_path(uri).map(|path| canonical_path_for_comparison(&path)),
-        }
+        })
     }
 
-    pub(super) fn on_disk(uri: &Uri, text: String) -> Self {
-        Self {
+    pub(super) fn on_disk(uri: &Uri, text: String) -> Arc<Self> {
+        Arc::new(Self {
+            lines: LineIndex::new(&text),
+            tokens: OnceLock::new(),
             content_fingerprint: Some(source_text_fingerprint(&text)),
             text,
             version: i32::MIN,
             physical_path: uri_to_path(uri).map(|path| canonical_path_for_comparison(&path)),
-        }
+        })
     }
 
     pub(super) fn physical_path(&self, uri: &Uri) -> Option<PathBuf> {
@@ -51,7 +75,7 @@ impl OpenDocument {
 pub(super) struct LiveDocument {
     pub(super) uri: Uri,
     pub(super) path: PathBuf,
-    pub(super) document: OpenDocument,
+    pub(super) document: Arc<OpenDocument>,
 }
 
 pub(super) fn live_document_for_uri_or_path(

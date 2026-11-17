@@ -67,8 +67,7 @@ fn documentation_record_from_symbol(symbol: SymbolRecord) -> DocumentationRecord
             .unwrap_or_else(|| symbol.detail.clone()),
         summary,
         docstring: symbol.docstring,
-        uri: Uri::from_file_path(&symbol.path)
-            .map(|uri| uri.to_string()),
+        uri: Uri::from_file_path(&symbol.path).map(|uri| uri.to_string()),
         markers: Vec::new(),
         sections: Vec::new(),
     }

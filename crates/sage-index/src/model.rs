@@ -124,7 +124,7 @@ pub struct IndexedFile {
     pub(super) identifier_filter: Vec<u8>,
 }
 
-pub(super) type SymbolLookupCache = Arc<Mutex<HashMap<String, Vec<SymbolRecord>>>>;
+pub(super) type SymbolLookupCache = Arc<Mutex<HashMap<String, Arc<Vec<SymbolRecord>>>>>;
 pub(super) type FileLookupCache = Arc<Mutex<HashMap<PathBuf, IndexedFile>>>;
 pub(super) type SageMethodLookupCache = Arc<Mutex<HashMap<(String, String), Option<SymbolRecord>>>>;
 pub(super) type ReferenceLookupCache = Arc<Mutex<HashMap<String, Vec<ReferenceRecord>>>>;
@@ -135,8 +135,8 @@ pub(super) type PendingRefreshPaths = Arc<Mutex<BTreeMap<PathBuf, u64>>>;
 pub struct WorkspaceIndex {
     pub(super) options: IndexOptions,
     pub(super) db_path: PathBuf,
-    pub(super) files: BTreeMap<PathBuf, IndexedFile>,
-    pub(super) symbols_by_name: HashMap<String, Vec<SymbolRecord>>,
+    pub(super) files: BTreeMap<PathBuf, Arc<IndexedFile>>,
+    pub(super) symbols_by_name: Arc<HashMap<String, Vec<SymbolRecord>>>,
     pub(super) generation: u64,
     pub(super) last_index_ms: u128,
     pub(super) last_operation: Option<String>,

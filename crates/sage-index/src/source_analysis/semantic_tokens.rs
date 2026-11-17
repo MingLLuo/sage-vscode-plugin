@@ -214,16 +214,14 @@ fn is_shadowed_name<'a>(
                 .or_insert_with(|| {
                     scopes.function_statically_binds_name(source, function_line, name)
                         && (scopes.is_function_parameter_at_header(function_line, name)
-                            || lines.iter().enumerate().any(|(line_number, source_line)| {
-                                let trimmed = source_line.trim_start();
-                                scopes.is_code_line(line_number as u32)
-                                    && scopes.is_direct_function_body_line(
-                                        line_number as u32,
-                                        function_line,
-                                    )
-                                    && line_rebinds_name(trimmed, name)
-                                    && !is_sage_import_binding(trimmed)
-                            }))
+                            || scopes
+                                .direct_function_source_lines(source, function_line)
+                                .any(|(line_number, source_line)| {
+                                    let trimmed = source_line.trim_start();
+                                    scopes.is_code_line(line_number)
+                                        && line_rebinds_name(trimmed, name)
+                                        && !is_sage_import_binding(trimmed)
+                                }))
                 })
         })
     {

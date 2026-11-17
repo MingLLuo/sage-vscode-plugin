@@ -39,7 +39,7 @@ fn navigation_candidate_limit_counts_only_records_with_locations() {
         import_from: None,
         signature: None,
     }));
-    index.symbols_by_name.insert("crowded".to_string(), records);
+    Arc::make_mut(&mut index.symbols_by_name).insert("crowded".to_string(), records);
 
     let (line, character) = first_position(source, "crowded");
     let query =

@@ -41,7 +41,8 @@ use query_support::*;
 pub use query_support::{
     active_parameter_for_keyword, function_call_at_position, function_call_context_at_position,
     local_import_alias_symbol_from_source, local_import_alias_symbol_from_source_name,
-    local_import_alias_symbol_from_symbols, sage_prewarm_modules_for_source, FunctionCallContext,
+    local_import_alias_symbol_from_symbols, sage_prewarm_modules_for_source, source_block_ranges,
+    FunctionCallContext,
 };
 use sage_specs::{
     SAGE_EXPORT_MAP, SAGE_METHOD_ALIAS_SPECS, SAGE_METHOD_SPECS, SAGE_OWNER_METHOD_MODULES,

@@ -24,7 +24,10 @@ fn digest(parts: impl IntoIterator<Item = String>) -> String {
         hasher.update([0]);
     }
     let bytes = hasher.finalize();
-    bytes[..8].iter().map(|byte| format!("{byte:02x}")).collect()
+    bytes[..8]
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn main() -> Result<()> {

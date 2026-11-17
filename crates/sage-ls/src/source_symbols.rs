@@ -5,7 +5,9 @@ use super::{
     open_documents::{
         canonical_path_for_comparison, physical_paths, unique_live_documents, OpenDocumentMap,
     },
-    text_positions::{lsp_position_for_byte_column, lsp_range_for_path_cached, lsp_range_for_text},
+    text_positions::{
+        lsp_position_for_byte_column, lsp_range_for_path_cached, lsp_range_for_text, LineIndex,
+    },
     Backend,
 };
 use sage_index::{parse_source, SymbolKind as SageSymbolKind, SymbolRecord};
@@ -73,10 +75,11 @@ pub(super) fn document_symbols_for_source(
     symbols: &[SymbolRecord],
 ) -> Vec<DocumentSymbol> {
     let folds = sage_folding_ranges(text);
+    let lines = LineIndex::new(text);
     let mut items: Vec<_> = symbols
         .iter()
         .filter(|symbol| is_outline_document_symbol(&symbol.kind))
-        .map(|symbol| document_symbol_for_record(text, &folds, symbol))
+        .map(|symbol| document_symbol_for_record(text, &lines, &folds, symbol))
         .collect();
     items.sort_by_key(|symbol| {
         (
@@ -105,24 +108,43 @@ fn is_outline_document_symbol(kind: &SageSymbolKind) -> bool {
 
 fn document_symbol_for_record(
     text: &str,
+    lines: &LineIndex,
     folds: &[FoldingRange],
     symbol: &SymbolRecord,
 ) -> DocumentSymbol {
-    let selection_range = lsp_range_for_text(text, &symbol.range);
+    let selection_range = lines.range(text, &symbol.range);
+    let end_of_line = |line| {
+        lines.bounds(line).map_or(0, |(start, end)| {
+            text[start..end].encode_utf16().count() as u32
+        })
+    };
     let range = if is_document_symbol_container_kind(&symbol.kind) {
-        symbol_body_range(text, folds, symbol).unwrap_or(selection_range)
+        folds
+            .iter()
+            .find(|range| range.start_line == symbol.range.start_line)
+            .map(|fold| {
+                Range::new(
+                    Position::new(fold.start_line, 0),
+                    Position::new(fold.end_line, end_of_line(fold.end_line)),
+                )
+            })
+            .unwrap_or_else(|| {
+                Range::new(
+                    selection_range.start,
+                    Position::new(
+                        symbol.range.start_line,
+                        end_of_line(symbol.range.start_line),
+                    ),
+                )
+            })
     } else {
-        line_selection_range(
-            text,
-            symbol.range.start_line,
-            lsp_position_for_byte_column(
-                text,
+        Range::new(
+            selection_range.start,
+            Position::new(
                 symbol.range.start_line,
-                symbol.range.start_character,
-            )
-            .character,
+                end_of_line(symbol.range.start_line),
+            ),
         )
-        .unwrap_or(selection_range)
     };
     DocumentSymbol {
         name: symbol.name.clone(),
@@ -183,10 +205,9 @@ impl Backend {
         }
         let indexed = self
             .index
-            .read()
-            .await
+            .load_full()
             .workspace_symbols(query, limit.saturating_mul(2).max(limit));
-        let documents = self.open_documents.read().await.clone();
+        let documents = self.open_documents.read().clone();
         workspace_symbol_information_from(indexed, &documents, query, limit)
     }
 }

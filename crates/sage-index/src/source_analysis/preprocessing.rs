@@ -1,6 +1,11 @@
 use super::*;
 
 pub fn preprocess_sage_source(source: &str) -> PreprocessResult {
+    preprocess_with_mapping(source).0
+}
+
+pub(super) fn preprocess_with_mapping(source: &str) -> (PreprocessResult, Vec<PreprocessEdit>) {
+    let mut mapping = Vec::new();
     let mut generated = String::with_capacity(source.len());
     let mut edits = Vec::new();
     let mut quote = RewriteQuoteState::default();
@@ -18,6 +23,7 @@ pub fn preprocess_sage_source(source: &str) -> PreprocessResult {
                     {
                         generated.push_str(&rewrite.generated);
                         edits.extend(rewrite.edits);
+                        mapping.extend(rewrite.mapping);
                         if statement.end_line as usize + 1 < lines.len() || source.ends_with('\n') {
                             generated.push('\n');
                         }
@@ -30,6 +36,7 @@ pub fn preprocess_sage_source(source: &str) -> PreprocessResult {
         let (rewritten, mut line_edits) =
             rewrite_sage_operators_in_segment(line, line_index as u32, 0, 0, &mut quote);
         generated.push_str(&rewritten);
+        mapping.extend(line_edits.iter().cloned());
         edits.append(&mut line_edits);
         quote.finish_line();
         if line_index + 1 < lines.len() || source.ends_with('\n') {
@@ -37,11 +44,12 @@ pub fn preprocess_sage_source(source: &str) -> PreprocessResult {
         }
         line_index += 1;
     }
-    PreprocessResult { generated, edits }
+    (PreprocessResult { generated, edits }, mapping)
 }
 
 #[derive(Clone, Debug)]
 struct LineRewrite {
+    mapping: Vec<PreprocessEdit>,
     generated: String,
     edits: Vec<PreprocessEdit>,
 }
@@ -92,6 +100,36 @@ fn rewrite_preparser_assignment(statement: &str, line_index: u32) -> Option<Line
     {
         generator_bindings.push_str(&format!("; {name} = {parent}.gen({index})"));
     }
+    // Unlike the public explanatory edit, these edits describe actual replaced
+    // spans, so diagnostics can map both RHS operators and synthetic bindings.
+    let mut mapping = vec![PreprocessEdit {
+        line: line_index,
+        source_character: captures.name("parent")?.end() as u32,
+        generated_character: captures.name("parent")?.end() as u32,
+        source_text: statement[captures.name("parent")?.end()..rhs.start()].to_string(),
+        generated_text: " = ".to_string(),
+    }];
+    mapping.extend(op_edits.iter().cloned());
+    let source_insertion = terminal_insertion(rhs_source);
+    let generated_insertion = terminal_insertion(&rewritten_rhs);
+    let position = |text: &str, offset: usize, base: usize| {
+        let prefix = &text[..offset];
+        let line = prefix.bytes().filter(|byte| *byte == b'\n').count();
+        let column = prefix
+            .rfind('\n')
+            .map_or(base + offset, |last| offset - last - 1);
+        (line as u32, column as u32)
+    };
+    let (relative_line, source_column) = position(rhs_source, source_insertion, rhs.start());
+    let (_, generated_column) =
+        position(&rewritten_rhs, generated_insertion, generated_prefix.len());
+    mapping.push(PreprocessEdit {
+        line: line_index + relative_line,
+        source_character: source_column,
+        generated_character: generated_column,
+        source_text: String::new(),
+        generated_text: generator_bindings.clone(),
+    });
     insert_before_terminal_comment(&mut rewritten_rhs, &generator_bindings);
     let generated = format!("{generated_prefix}{rewritten_rhs}");
     let mut edits = vec![PreprocessEdit {
@@ -102,7 +140,11 @@ fn rewrite_preparser_assignment(statement: &str, line_index: u32) -> Option<Line
         generated_text: "preparser-assignment".to_string(),
     }];
     edits.append(&mut op_edits);
-    Some(LineRewrite { generated, edits })
+    Some(LineRewrite {
+        generated,
+        edits,
+        mapping,
+    })
 }
 
 fn rewrite_sage_operators_in_multiline_segment(
@@ -253,18 +295,17 @@ fn insert_before_terminal_comment(rhs: &mut String, suffix: &str) {
     if suffix.is_empty() {
         return;
     }
+    rhs.insert_str(terminal_insertion(rhs), suffix);
+}
+
+fn terminal_insertion(rhs: &str) -> usize {
     let comment = terminal_line_comment_start(rhs).unwrap_or(rhs.len());
     let line_start = rhs[..comment].rfind('\n').map_or(0, |index| index + 1);
     let mut insertion = comment;
-    while insertion > line_start
-        && rhs
-            .as_bytes()
-            .get(insertion - 1)
-            .is_some_and(|byte| byte.is_ascii_whitespace())
-    {
+    while insertion > line_start && rhs.as_bytes()[insertion - 1].is_ascii_whitespace() {
         insertion -= 1;
     }
-    rhs.insert_str(insertion, suffix);
+    insertion
 }
 
 fn terminal_line_comment_start(text: &str) -> Option<usize> {

@@ -326,7 +326,7 @@ impl WorkspaceIndex {
             .and_then(|cache| cache.get(&key).cloned())?;
         let record = best_symbol(
             symbols
-                .into_iter()
+                .iter()
                 .filter(|symbol| {
                     symbol.name == name
                         && symbol.kind != SymbolKind::Import
@@ -338,6 +338,7 @@ impl WorkspaceIndex {
                             target.source_name,
                         )
                 })
+                .cloned()
                 .collect(),
         )?;
         Some(SageExportResolution {
@@ -367,7 +368,7 @@ impl WorkspaceIndex {
             return None;
         }
 
-        let candidates = self.symbol_candidates(&source_name);
+        let candidates = self.import_candidates(&source_name, &source_module);
         if let Some(definition) = candidates
             .iter()
             .filter(|candidate| {
@@ -473,16 +474,49 @@ impl WorkspaceIndex {
             .or(Some(next_import))
     }
 
+    /// Import resolution only needs the source module, not every same-named symbol
+    /// and its documentation across the Sage tree. Filter before cloning the cache.
+    fn import_candidates(&self, name: &str, module: &str) -> Vec<SymbolRecord> {
+        let matches = |candidate: &&SymbolRecord| {
+            import_target_definition_matches(candidate, module, name)
+                || (candidate.kind == SymbolKind::Import
+                    && candidate.name == name
+                    && module_matches_import(&candidate.module, module))
+        };
+        let key = name.to_ascii_lowercase();
+        let cached = self
+            .symbol_lookup_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&key).cloned());
+        let Some(cached) = cached else {
+            return self
+                .symbol_candidates(name)
+                .iter()
+                .filter(matches)
+                .cloned()
+                .collect();
+        };
+        let mut candidates: Vec<_> = cached.iter().filter(matches).cloned().collect();
+        if let Some(memory) = self.symbols_by_name.get(&key) {
+            candidates.extend(memory.iter().filter(matches).cloned());
+        }
+        dedupe_symbol_records(candidates)
+    }
+
     pub(super) fn symbol_candidates(&self, name: &str) -> Vec<SymbolRecord> {
         let key = name.to_ascii_lowercase();
-        if let Ok(cache) = self.symbol_lookup_cache.lock() {
-            if let Some(cached) = cache.get(&key) {
-                let mut symbols = cached.clone();
-                if let Some(memory_symbols) = self.symbols_by_name.get(&key) {
-                    symbols.extend(memory_symbols.clone());
-                }
-                return dedupe_symbol_records(symbols);
+        let cached = self
+            .symbol_lookup_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&key).cloned());
+        if let Some(cached) = cached {
+            let mut symbols = cached.as_ref().clone();
+            if let Some(memory_symbols) = self.symbols_by_name.get(&key) {
+                symbols.extend(memory_symbols.clone());
             }
+            return dedupe_symbol_records(symbols);
         }
         let mut symbols = if self.cached_symbol_count > 0 {
             load_symbols_by_name_from_db(&self.db_path, name, &self.options.roots)
@@ -492,7 +526,7 @@ impl WorkspaceIndex {
         };
         let persistent_symbols = symbols.clone();
         if let Ok(mut cache) = self.symbol_lookup_cache.lock() {
-            cache.insert(key.clone(), persistent_symbols);
+            cache.insert(key.clone(), Arc::new(persistent_symbols));
         }
         if let Some(memory_symbols) = self.symbols_by_name.get(&key) {
             symbols.extend(memory_symbols.clone());
@@ -502,14 +536,17 @@ impl WorkspaceIndex {
 
     fn symbol_candidates_without_docs(&self, name: &str) -> Vec<SymbolRecord> {
         let key = name.to_ascii_lowercase();
-        if let Ok(cache) = self.symbol_lookup_cache.lock() {
-            if let Some(cached) = cache.get(&key) {
-                let mut symbols = cached.clone();
-                if let Some(memory_symbols) = self.symbols_by_name.get(&key) {
-                    symbols.extend(memory_symbols.clone());
-                }
-                return dedupe_symbol_records(symbols);
+        let cached = self
+            .symbol_lookup_cache
+            .lock()
+            .ok()
+            .and_then(|cache| cache.get(&key).cloned());
+        if let Some(cached) = cached {
+            let mut symbols = cached.as_ref().clone();
+            if let Some(memory_symbols) = self.symbols_by_name.get(&key) {
+                symbols.extend(memory_symbols.clone());
             }
+            return dedupe_symbol_records(symbols);
         }
         let mut symbols = if self.cached_symbol_count > 0 {
             load_symbols_by_name_from_db_without_docs(&self.db_path, name, &self.options.roots)
@@ -519,7 +556,7 @@ impl WorkspaceIndex {
         };
         let persistent_symbols = symbols.clone();
         if let Ok(mut cache) = self.symbol_lookup_cache.lock() {
-            cache.insert(key.clone(), persistent_symbols);
+            cache.insert(key.clone(), Arc::new(persistent_symbols));
         }
         if let Some(memory_symbols) = self.symbols_by_name.get(&key) {
             symbols.extend(memory_symbols.clone());

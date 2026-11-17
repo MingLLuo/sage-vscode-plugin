@@ -49,6 +49,7 @@ pub(crate) struct LexicalScopeMap {
     line_scopes: Vec<Vec<LexicalScope>>,
     line_blocks: Vec<Vec<ControlFlowBlock>>,
     function_parameters: HashMap<u32, BTreeSet<String>>,
+    direct_function_lines: HashMap<u32, Vec<(u32, usize, usize)>>,
     code_lines: Vec<bool>,
 }
 
@@ -64,7 +65,7 @@ impl LexicalScopeMap {
         let code_map = CodeMap::new(source);
         let lines = line_offsets(source);
         let continuation_lines = complete_logical_continuation_lines(&lines, &code_map);
-        let mut line_scopes = Vec::with_capacity(lines.len());
+        let mut line_scopes: Vec<Vec<LexicalScope>> = Vec::with_capacity(lines.len());
         let mut line_blocks = Vec::with_capacity(lines.len());
         let mut code_lines = Vec::with_capacity(lines.len());
         let mut active: Vec<(LexicalScope, usize)> = Vec::new();
@@ -187,7 +188,20 @@ impl LexicalScopeMap {
             }
         }
 
+        let mut direct_function_lines: HashMap<u32, Vec<(u32, usize, usize)>> = HashMap::new();
+        for (line, (start, text)) in lines.iter().enumerate() {
+            if let Some(scope) = line_scopes[line].last() {
+                if scope.kind == LexicalScopeKind::Function {
+                    direct_function_lines.entry(scope.line).or_default().push((
+                        line as u32,
+                        *start,
+                        start + text.len(),
+                    ));
+                }
+            }
+        }
         Self {
+            direct_function_lines,
             line_scopes,
             line_blocks,
             function_parameters,
@@ -342,26 +356,32 @@ impl LexicalScopeMap {
             .collect()
     }
 
+    pub(crate) fn direct_function_source_lines<'a>(
+        &'a self,
+        source: &'a str,
+        function_line: u32,
+    ) -> impl Iterator<Item = (u32, &'a str)> + 'a {
+        self.direct_function_lines
+            .get(&function_line)
+            .into_iter()
+            .flatten()
+            .map(move |(line, start, end)| (*line, &source[*start..*end]))
+    }
+
     pub(crate) fn function_statically_binds_name(
         &self,
         source: &str,
         function_line: u32,
         name: &str,
     ) -> bool {
-        let function_scope = LexicalScope {
-            line: function_line,
-            kind: LexicalScopeKind::Function,
-        };
-        let direct_lines = source.lines().enumerate().filter(|(line, _)| {
-            self.line_scopes.get(*line).and_then(|scopes| scopes.last()) == Some(&function_scope)
-        });
+        let direct_lines = self.direct_function_source_lines(source, function_line);
         let mut declares_outer_binding = false;
         let mut rebinds = self
             .function_parameters
             .get(&function_line)
             .is_some_and(|parameters| parameters.contains(name));
         for (line, source_line) in direct_lines {
-            if !self.is_code_line(line as u32) {
+            if !self.is_code_line(line) {
                 continue;
             }
             let trimmed = source_line.trim_start();
@@ -731,6 +751,71 @@ fn binding_targets_contain(targets: &str, target: &str) -> bool {
     }
     (saw_top_level_separator || stripped_outer)
         && binding_targets_contain(&targets[start..], target)
+}
+
+/// Indentation suites using the same logical-line and string rules as name lookup.
+/// Returned pairs are inclusive line numbers, including multiline headers.
+pub fn source_block_ranges(source: &str) -> Vec<(u32, u32)> {
+    let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
+    let source = normalized.as_str();
+    let code_map = CodeMap::new(source);
+    let lines = line_offsets(source);
+    let continuations = complete_logical_continuation_lines(&lines, &code_map);
+    // (start, header end, indentation, last nonblank body line)
+    let mut active: Vec<(u32, u32, usize, u32)> = Vec::new();
+    let mut ranges = Vec::new();
+    for (line_number, (offset, line)) in lines.iter().enumerate() {
+        let row = line_number as u32;
+        let trimmed = line.trim_start();
+        let byte_indent = line.len() - trimmed.len();
+        let indent = line[..byte_indent].chars().fold(0, |column, c| {
+            if c == '\t' {
+                (column / 8 + 1) * 8
+            } else {
+                column + 1
+            }
+        });
+        let is_code = !trimmed.is_empty() && code_map.is_code_offset(offset + byte_indent);
+        let starts_string = trimmed.starts_with(['\'', '"'])
+            && (offset + byte_indent == 0 || code_map.is_code_offset(offset + byte_indent - 1));
+        if (is_code || starts_string) && !continuations[line_number] {
+            while active
+                .last()
+                .is_some_and(|(_, header_end, width, _)| row > *header_end && indent <= *width)
+            {
+                let (start, _, _, end) = active.pop().unwrap();
+                if end > start {
+                    ranges.push((start, end));
+                }
+            }
+        }
+        if !trimmed.is_empty() {
+            for (_, _, width, end) in &mut active {
+                // A standalone dedented comment belongs to the following suite;
+                // column-zero text inside a string still belongs to this one.
+                if !trimmed.starts_with('#') || indent > *width {
+                    *end = row;
+                }
+            }
+        }
+        if !is_code
+            || continuations[line_number]
+            || (lexical_scope_kind(trimmed).is_none() && control_flow_block_kind(trimmed).is_none())
+        {
+            continue;
+        }
+        if let Some(header_end) = definition_header_end(source, offset + byte_indent) {
+            let (header_end_line, _) = code_map.line_col(header_end);
+            active.push((row, header_end_line, indent, row));
+        }
+    }
+    for (start, _, _, end) in active {
+        if end > start {
+            ranges.push((start, end));
+        }
+    }
+    ranges.sort_unstable();
+    ranges
 }
 
 #[cfg(test)]

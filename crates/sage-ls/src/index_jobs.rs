@@ -1,406 +1,310 @@
-//! Background index lifecycle and coordination.
-//!
-//! Rebuilds, cache reconciliation, and file refreshes share one work gate. Keeping their
-//! generation checks together makes index installation ordering explicit.
-
-use super::{refresh_editor_feature_caches, Backend};
-use sage_index::WorkspaceIndex;
+//! One writer publishes immutable index snapshots. Notifications only enqueue work.
+use super::Backend;
+use arc_swap::ArcSwap;
+use sage_index::{parse_file_for_roots, WorkspaceIndex};
 use serde_json::{json, Value};
-use std::{path::PathBuf, sync::atomic::Ordering};
-use tokio::sync::{oneshot, RwLock};
-use tower_lsp_server::ls_types::MessageType;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
+use tokio::sync::{oneshot, Notify};
+use tower_lsp_server::{ls_types::MessageType, Client};
 
-async fn finish_pending_index_job(
-    pending_jobs: &RwLock<usize>,
-    pending_index_task: &RwLock<Option<String>>,
-) {
-    let mut pending = pending_jobs.write().await;
-    *pending = pending.saturating_sub(1);
-    if *pending == 0 {
-        *pending_index_task.write().await = None;
+pub(super) type IndexHandle = Arc<ArcSwap<WorkspaceIndex>>;
+
+#[derive(Default)]
+struct Queue {
+    reconcile: bool,
+    rebuild: bool,
+    paths: BTreeMap<PathBuf, bool>, // true = deleted; the last event wins
+    preloads: BTreeSet<PathBuf>,
+    active: Option<&'static str>,
+}
+
+impl Queue {
+    fn pending(&self) -> usize {
+        usize::from(self.reconcile)
+            + usize::from(self.rebuild)
+            + usize::from(!self.paths.is_empty())
+            + usize::from(!self.preloads.is_empty())
+            + usize::from(self.active.is_some())
+    }
+
+    fn take(&mut self) -> Option<Job> {
+        let job = if std::mem::take(&mut self.reconcile) {
+            Job::Reconcile
+        } else if std::mem::take(&mut self.rebuild) {
+            Job::Rebuild
+        } else if !self.paths.is_empty() {
+            Job::Refresh(std::mem::take(&mut self.paths))
+        } else if !self.preloads.is_empty() {
+            Job::Preload(std::mem::take(&mut self.preloads).into_iter().collect())
+        } else {
+            return None;
+        };
+        self.active = Some(job.label());
+        Some(job)
+    }
+}
+
+enum Job {
+    Reconcile,
+    Rebuild,
+    Refresh(BTreeMap<PathBuf, bool>),
+    Preload(Vec<PathBuf>),
+}
+
+impl Job {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Reconcile => "cache-check",
+            Self::Rebuild => "rebuild",
+            Self::Refresh(_) => "refresh",
+            Self::Preload(_) => "prewarm",
+        }
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct IndexActor {
+    index: IndexHandle,
+    queue: Arc<Mutex<Queue>>,
+    wake: Arc<Notify>,
+    stopped: Arc<AtomicBool>,
+}
+
+impl IndexActor {
+    pub(super) fn new(
+        index: IndexHandle,
+        client: Option<Client>,
+        stopped: Arc<AtomicBool>,
+    ) -> Self {
+        let actor = Self {
+            index,
+            queue: Arc::default(),
+            wake: Arc::default(),
+            stopped,
+        };
+        tokio::spawn(actor.clone().run(client));
+        actor
+    }
+
+    fn queue(&self) -> std::sync::MutexGuard<'_, Queue> {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    pub(super) fn reconcile(&self) {
+        self.queue().reconcile = true;
+        self.wake.notify_one();
+    }
+
+    pub(super) fn rebuild(&self) {
+        self.queue().rebuild = true;
+        self.wake.notify_one();
+    }
+
+    pub(super) fn refresh(&self, changed: Vec<PathBuf>, deleted: Vec<PathBuf>) {
+        // Serialize marking and installation so an event cannot land in an old snapshot.
+        let mut queue = self.queue();
+        self.index
+            .load()
+            .mark_paths_pending_refresh(&changed, &deleted);
+        for path in changed {
+            queue.paths.insert(path, false);
+        }
+        for path in deleted {
+            queue.paths.insert(path, true);
+        }
+        drop(queue);
+        self.wake.notify_one();
+    }
+
+    pub(super) fn preload(&self, paths: Vec<PathBuf>) {
+        let mut queue = self.queue();
+        queue.preloads.extend(paths);
+        drop(queue);
+        self.wake.notify_one();
+    }
+
+    pub(super) fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
+        *self.queue() = Queue::default();
+        self.wake.notify_one();
+    }
+
+    async fn run(self, client: Option<Client>) {
+        loop {
+            self.wake.notified().await;
+            loop {
+                if self.stopped.load(Ordering::Acquire) {
+                    return;
+                }
+                let Some(job) = self.queue().take() else {
+                    break;
+                };
+                let label = job.label();
+                let current = self.index.load_full();
+                let index_handle = self.index.clone();
+                let queue = self.queue.clone();
+                let stopped = self.stopped.clone();
+                let (sender, receiver) = oneshot::channel();
+                // A detached worker avoids Tokio waiting for a long filesystem scan on exit.
+                let started = std::thread::Builder::new()
+                    .name(format!("sage-index-{label}"))
+                    .spawn(move || {
+                        let result = (|| -> anyhow::Result<()> {
+                            let previous_generation = current.generation();
+                            let mut next = match job {
+                                Job::Rebuild => WorkspaceIndex::new(current.options().clone()),
+                                _ => current.clone_for_background_work(),
+                            };
+                            if matches!(job, Job::Reconcile) {
+                                let _ = next.hydrate_from_cache();
+                                let _guard = queue
+                                    .lock()
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                if !stopped.load(Ordering::Acquire) {
+                                    let mut hydrated = next.clone();
+                                    hydrated.finalize_pending_refresh_install(
+                                        &index_handle.load_full(),
+                                    );
+                                    index_handle.store(Arc::new(hydrated));
+                                }
+                            }
+                            if matches!(job, Job::Reconcile | Job::Rebuild) {
+                                maybe_delay_background_index_for_test();
+                            }
+                            if stopped.load(Ordering::Acquire) {
+                                return Ok(());
+                            }
+                            match job {
+                                Job::Reconcile => {
+                                    next.reconcile_with_cache()?;
+                                }
+                                Job::Rebuild => {
+                                    next.rebuild()?;
+                                }
+                                Job::Refresh(paths) => {
+                                    let (deleted, changed): (Vec<_>, Vec<_>) =
+                                        paths.into_iter().partition(|(_, deleted)| *deleted);
+                                    next.refresh_paths(
+                                        &changed
+                                            .into_iter()
+                                            .map(|(path, _)| path)
+                                            .collect::<Vec<_>>(),
+                                        &deleted
+                                            .into_iter()
+                                            .map(|(path, _)| path)
+                                            .collect::<Vec<_>>(),
+                                    )?;
+                                }
+                                Job::Preload(paths) => {
+                                    // Read at execution time: a discovery result may have
+                                    // waited behind a newer save or deletion.
+                                    let files = paths
+                                        .iter()
+                                        .filter_map(|path| {
+                                            parse_file_for_roots(path, &next.options().roots).ok()
+                                        })
+                                        .collect();
+                                    next.preload_indexed_files(files);
+                                }
+                            }
+                            next.ensure_generation_after(previous_generation);
+                            let _guard = queue
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if !stopped.load(Ordering::Acquire) {
+                                next.finalize_pending_refresh_install(&index_handle.load_full());
+                                index_handle.store(Arc::new(next));
+                            }
+                            Ok(())
+                        })();
+                        let _ = sender.send(result.map_err(|error| format!("{error:#}")));
+                    });
+                let result = match started {
+                    Ok(_) => receiver
+                        .await
+                        .unwrap_or_else(|error| Err(error.to_string())),
+                    Err(error) => Err(error.to_string()),
+                };
+                self.queue().active = None;
+                if self.stopped.load(Ordering::Acquire) {
+                    return;
+                }
+                if let Some(client) = &client {
+                    if let Err(error) = result {
+                        client
+                            .log_message(
+                                MessageType::WARNING,
+                                format!("sage-ls {label} failed: {error}"),
+                            )
+                            .await;
+                    } else {
+                        // Refresh requests may wait for a client response; never hold up the writer.
+                        let client = client.clone();
+                        tokio::spawn(async move {
+                            super::refresh_editor_feature_caches(&client).await;
+                        });
+                    }
+                }
+            }
+        }
     }
 }
 
 #[cfg(debug_assertions)]
 fn maybe_delay_background_index_for_test() {
-    let delay_ms = std::env::var("SAGE_LS_TEST_BACKGROUND_DELAY_MS")
+    let delay = std::env::var("SAGE_LS_TEST_BACKGROUND_DELAY_MS")
         .ok()
         .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| *value <= 30_000)
-        .unwrap_or_default();
-    if delay_ms > 0 {
-        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-    }
+        .unwrap_or(0)
+        .min(30_000);
+    std::thread::sleep(std::time::Duration::from_millis(delay));
 }
-
 #[cfg(not(debug_assertions))]
 fn maybe_delay_background_index_for_test() {}
 
-pub(super) fn index_job_result_is_current(
-    latest_job_generation: u64,
-    job_generation: u64,
-    current_index_generation: u64,
-    initial_index_generation: u64,
-) -> bool {
-    latest_job_generation == job_generation && current_index_generation == initial_index_generation
-}
-
 impl Backend {
-    pub(super) fn spawn_rebuild(&self) {
-        let index = self.index.clone();
-        let pending_jobs = self.pending_jobs.clone();
-        let pending_index_task = self.pending_index_task.clone();
-        let navigation_cache = self.navigation_cache.clone();
-        let client = self.client.clone();
-        let index_job_generation = self.index_job_generation.clone();
-        let job_generation = index_job_generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let index_work_gate = self.index_work_gate.clone();
-        let shutting_down = self.shutting_down.clone();
-        tokio::spawn(async move {
-            if shutting_down.load(Ordering::Acquire) {
-                return;
-            }
-            {
-                let mut pending = pending_jobs.write().await;
-                *pending = pending.saturating_add(1);
-                *pending_index_task.write().await = Some("rebuild".to_string());
-            }
-            let work_guard = index_work_gate.lock_owned().await;
-            if shutting_down.load(Ordering::Acquire)
-                || index_job_generation.load(Ordering::Acquire) != job_generation
-            {
-                finish_pending_index_job(&pending_jobs, &pending_index_task).await;
-                return;
-            }
-            let (initial_generation, options) = {
-                let current = index.read().await;
-                (current.status().generation, current.options().clone())
-            };
-            let (sender, receiver) = oneshot::channel();
-            let worker = std::thread::Builder::new()
-                .name("sage-index-rebuild".to_string())
-                .spawn(move || {
-                    maybe_delay_background_index_for_test();
-                    let mut rebuilt = WorkspaceIndex::new(options);
-                    let result = rebuilt
-                        .rebuild()
-                        .map(|_| {
-                            rebuilt.ensure_generation_after(initial_generation);
-                            let status = rebuilt.status();
-                            (rebuilt, status)
-                        })
-                        .map_err(|error| format!("{error:#}"));
-                    let _ = sender.send((result, work_guard));
-                });
-            let (result, work_guard) = match worker {
-                Ok(handle) => {
-                    drop(handle);
-                    match receiver.await {
-                        Ok((result, work_guard)) => (result, Some(work_guard)),
-                        Err(error) => (
-                            Err(format!(
-                                "index rebuild worker stopped before returning: {error}"
-                            )),
-                            None,
-                        ),
-                    }
-                }
-                Err(error) => (Err(format!("start index rebuild worker: {error}")), None),
-            };
-            if shutting_down.load(Ordering::Acquire) {
-                drop(work_guard);
-                finish_pending_index_job(&pending_jobs, &pending_index_task).await;
-                return;
-            }
-            let result = match result {
-                Ok((mut rebuilt, status)) => {
-                    let mut current = index.write().await;
-                    if index_job_result_is_current(
-                        index_job_generation.load(Ordering::Acquire),
-                        job_generation,
-                        current.status().generation,
-                        initial_generation,
-                    ) {
-                        rebuilt.finalize_pending_refresh_install(&current);
-                        *current = rebuilt;
-                        Ok((status, true))
-                    } else {
-                        Ok((current.status(), false))
-                    }
-                }
-                Err(error) => Err(error),
-            };
-            drop(work_guard);
-            finish_pending_index_job(&pending_jobs, &pending_index_task).await;
-            if shutting_down.load(Ordering::Acquire) {
-                return;
-            }
-            match result {
-                Ok((status, installed)) => {
-                    if installed {
-                        navigation_cache.write().await.clear();
-                    }
-                    client
-                        .log_message(
-                            MessageType::INFO,
-                            format!(
-                                "sage-ls indexed {} files and {} symbols in {}ms (installed={})",
-                                status.indexed_file_count,
-                                status.symbol_count,
-                                status.last_index_ms,
-                                installed,
-                            ),
-                        )
-                        .await;
-                    if installed {
-                        refresh_editor_feature_caches(&client).await;
-                    }
-                }
-                Err(error) => {
-                    client
-                        .log_message(
-                            MessageType::WARNING,
-                            format!("sage-ls index rebuild failed: {error}"),
-                        )
-                        .await;
-                }
-            }
-        });
-    }
-
-    pub(super) fn spawn_cache_reconcile(&self) {
-        let index = self.index.clone();
-        let pending_jobs = self.pending_jobs.clone();
-        let pending_index_task = self.pending_index_task.clone();
-        let navigation_cache = self.navigation_cache.clone();
-        let client = self.client.clone();
-        let index_job_generation = self.index_job_generation.clone();
-        let job_generation = index_job_generation.fetch_add(1, Ordering::AcqRel) + 1;
-        let index_work_gate = self.index_work_gate.clone();
-        let shutting_down = self.shutting_down.clone();
-        tokio::spawn(async move {
-            if shutting_down.load(Ordering::Acquire) {
-                return;
-            }
-            {
-                let mut pending = pending_jobs.write().await;
-                *pending = pending.saturating_add(1);
-                *pending_index_task.write().await = Some("cache-check".to_string());
-            }
-            let work_guard = index_work_gate.lock_owned().await;
-            if shutting_down.load(Ordering::Acquire)
-                || index_job_generation.load(Ordering::Acquire) != job_generation
-            {
-                finish_pending_index_job(&pending_jobs, &pending_index_task).await;
-                return;
-            }
-            let (initial_generation, reconciled) = {
-                let index = index.read().await;
-                (index.status().generation, index.clone_for_background_work())
-            };
-            let (sender, receiver) = oneshot::channel();
-            let worker = std::thread::Builder::new()
-                .name("sage-index-reconcile".to_string())
-                .spawn(move || {
-                    maybe_delay_background_index_for_test();
-                    let mut reconciled = reconciled;
-                    let result = reconciled
-                        .reconcile_with_cache()
-                        .map(|_| {
-                            let status = reconciled.status();
-                            (reconciled, status)
-                        })
-                        .map_err(|error| format!("{error:#}"));
-                    let _ = sender.send((result, work_guard));
-                });
-            let (result, work_guard) = match worker {
-                Ok(handle) => {
-                    drop(handle);
-                    match receiver.await {
-                        Ok((result, work_guard)) => (result, Some(work_guard)),
-                        Err(error) => (
-                            Err(format!(
-                                "cache reconcile worker stopped before returning: {error}"
-                            )),
-                            None,
-                        ),
-                    }
-                }
-                Err(error) => (Err(format!("start cache reconcile worker: {error}")), None),
-            };
-            if shutting_down.load(Ordering::Acquire) {
-                drop(work_guard);
-                finish_pending_index_job(&pending_jobs, &pending_index_task).await;
-                return;
-            }
-            let result = match result {
-                Ok((mut reconciled, status)) => {
-                    let mut current = index.write().await;
-                    if index_job_result_is_current(
-                        index_job_generation.load(Ordering::Acquire),
-                        job_generation,
-                        current.status().generation,
-                        initial_generation,
-                    ) {
-                        reconciled.finalize_pending_refresh_install(&current);
-                        *current = reconciled;
-                        Ok((status, true))
-                    } else {
-                        Ok((current.status(), false))
-                    }
-                }
-                Err(error) => Err(error),
-            };
-            drop(work_guard);
-            finish_pending_index_job(&pending_jobs, &pending_index_task).await;
-            if shutting_down.load(Ordering::Acquire) {
-                return;
-            }
-            match result {
-                Ok((status, installed)) => {
-                    if installed {
-                        navigation_cache.write().await.clear();
-                    }
-                    client
-                        .log_message(
-                            MessageType::INFO,
-                            format!(
-                                "sage-ls reconciled {} files and {} symbols from persistent cache in {}ms ({} hit/{} miss, installed={})",
-                                status.indexed_file_count,
-                                status.symbol_count,
-                                status.last_index_ms,
-                                status.cache_hit_count,
-                                status.cache_miss_count,
-                                installed,
-                            ),
-                        )
-                        .await;
-                    if installed {
-                        refresh_editor_feature_caches(&client).await;
-                    }
-                }
-                Err(error) => {
-                    client
-                        .log_message(
-                            MessageType::WARNING,
-                            format!("sage-ls cache reconcile failed: {error}"),
-                        )
-                        .await;
-                }
-            }
-        });
-    }
-
-    pub(super) async fn refresh_paths(&self, changed: Vec<PathBuf>, deleted: Vec<PathBuf>) {
-        {
-            let index = self.index.read().await;
-            index.mark_paths_pending_refresh(&changed, &deleted);
-        }
-        let work_guard = self.index_work_gate.clone().lock_owned().await;
-        if self.shutting_down.load(Ordering::Acquire) {
-            return;
-        }
-        let changed_count = changed.len();
-        let deleted_count = deleted.len();
-        let (initial_generation, refreshed) = {
-            let index = self.index.read().await;
-            (index.status().generation, index.clone_for_background_work())
-        };
-        let (sender, receiver) = oneshot::channel();
-        let worker = std::thread::Builder::new()
-            .name("sage-index-refresh".to_string())
-            .spawn(move || {
-                let mut refreshed = refreshed;
-                let result = refreshed
-                    .refresh_paths(&changed, &deleted)
-                    .map(|status| (refreshed, status))
-                    .map_err(|error| format!("{error:#}"));
-                let _ = sender.send((result, work_guard));
-            });
-        let (result, work_guard) = match worker {
-            Ok(handle) => {
-                drop(handle);
-                match receiver.await {
-                    Ok((result, work_guard)) => (result, Some(work_guard)),
-                    Err(error) => (
-                        Err(format!(
-                            "index refresh worker stopped before returning: {error}"
-                        )),
-                        None,
-                    ),
-                }
-            }
-            Err(error) => (Err(format!("start index refresh worker: {error}")), None),
-        };
-        if self.shutting_down.load(Ordering::Acquire) {
-            drop(work_guard);
-            return;
-        }
-        let result = match result {
-            Ok((mut refreshed, status)) => {
-                let mut current = self.index.write().await;
-                if current.status().generation == initial_generation {
-                    refreshed.finalize_pending_refresh_install(&current);
-                    *current = refreshed;
-                    Ok((status, true))
-                } else {
-                    Ok((current.status(), false))
-                }
-            }
-            Err(error) => Err(error),
-        };
-        drop(work_guard);
-        if self.shutting_down.load(Ordering::Acquire) {
-            return;
-        }
-        match result {
-            Ok((status, installed)) => {
-                if installed {
-                    self.navigation_cache.write().await.clear();
-                }
-                self.client
-                    .log_message(
-                        MessageType::INFO,
-                        format!(
-                            "sage-ls refreshed {} changed and {} deleted files in {}ms (installed={})",
-                            changed_count, deleted_count, status.last_index_ms, installed,
-                        ),
-                    )
-                    .await;
-                if installed {
-                    refresh_editor_feature_caches(&self.client).await;
-                }
-            }
-            Err(error) => {
-                self.client
-                    .log_message(
-                        MessageType::WARNING,
-                        format!("sage-ls incremental refresh failed: {error}"),
-                    )
-                    .await;
-            }
-        }
-    }
-
     pub(super) async fn index_status_payload(&self) -> Value {
         let analysis_mode = *self.analysis_mode.read().await;
         let mut payload =
-            serde_json::to_value(self.index.read().await.status()).unwrap_or_else(|_| json!({}));
+            serde_json::to_value(self.index.load_full().status()).unwrap_or_else(|_| json!({}));
         if let Some(object) = payload.as_object_mut() {
-            object.insert("analysis_mode".to_string(), json!(analysis_mode.as_str()));
+            let queue = self.index_actor.queue();
+            object.insert("analysis_mode".into(), json!(analysis_mode.as_str()));
             object.insert(
-                "workspace_symbol_limit".to_string(),
+                "workspace_symbol_limit".into(),
                 json!(analysis_mode.workspace_symbol_limit()),
             );
-            object.insert(
-                "pending_jobs".to_string(),
-                json!(*self.pending_jobs.read().await),
-            );
-            object.insert(
-                "pending_task".to_string(),
-                json!(self.pending_index_task.read().await.clone()),
-            );
+            object.insert("pending_jobs".into(), json!(queue.pending()));
+            object.insert("pending_task".into(), json!(queue.active));
         }
         payload
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn refreshes_coalesce_and_latest_event_wins() {
+        let mut queue = Queue::default();
+        let path = PathBuf::from("demo.sage");
+        queue.paths.insert(path.clone(), true);
+        queue.paths.insert(path.clone(), false);
+        assert_eq!(queue.pending(), 1);
+        let Some(Job::Refresh(paths)) = queue.take() else {
+            panic!("expected refresh");
+        };
+        assert_eq!(paths.get(&path), Some(&false));
+        assert_eq!(queue.pending(), 1);
+        assert!(queue.take().is_none());
     }
 }

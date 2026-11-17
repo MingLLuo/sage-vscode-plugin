@@ -151,7 +151,7 @@ pub(super) fn sage_folding_ranges(text: &str) -> Vec<FoldingRange> {
     let mut ranges = Vec::new();
     add_explicit_region_folds(&lines, &mut ranges);
     add_comment_block_folds(&lines, &mut ranges);
-    add_indentation_folds(&lines, &mut ranges);
+    add_indentation_folds(text, &mut ranges);
     dedupe_folding_ranges(ranges)
 }
 
@@ -208,68 +208,12 @@ fn add_comment_block_folds(lines: &[&str], ranges: &mut Vec<FoldingRange>) {
     }
 }
 
-fn add_indentation_folds(lines: &[&str], ranges: &mut Vec<FoldingRange>) {
-    for (line_number, line) in lines.iter().enumerate() {
-        let code = code_before_comment(line).trim_end();
-        if !is_foldable_block_header(code.trim_start()) {
-            continue;
-        }
-        let start_indent = leading_indent_width(line);
-        let mut last_inside_line = None;
-        for (next_line_number, next_line) in lines.iter().enumerate().skip(line_number + 1) {
-            let trimmed = next_line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            let indent = leading_indent_width(next_line);
-            if indent <= start_indent {
-                break;
-            }
-            last_inside_line = Some(next_line_number);
-        }
-        let Some(end_line) = last_inside_line else {
-            continue;
-        };
-        if end_line > line_number {
-            ranges.push(folding_range(line_number, end_line, None));
-        }
-    }
-}
-
-fn is_foldable_block_header(trimmed_code: &str) -> bool {
-    if !trimmed_code.ends_with(':') {
-        return false;
-    }
-    let headers = [
-        "def ",
-        "async def ",
-        "class ",
-        "cdef ",
-        "cpdef ",
-        "if ",
-        "elif ",
-        "else:",
-        "for ",
-        "async for ",
-        "while ",
-        "with ",
-        "async with ",
-        "try:",
-        "except",
-        "finally:",
-        "match ",
-        "case ",
-    ];
-    headers
-        .iter()
-        .any(|header| trimmed_code.starts_with(header))
-}
-
-fn leading_indent_width(line: &str) -> usize {
-    line.chars()
-        .take_while(|ch| *ch == ' ' || *ch == '\t')
-        .map(|ch| if ch == '\t' { 4 } else { 1 })
-        .sum()
+fn add_indentation_folds(text: &str, ranges: &mut Vec<FoldingRange>) {
+    ranges.extend(
+        sage_index::source_block_ranges(text)
+            .into_iter()
+            .map(|(start, end)| folding_range(start as usize, end as usize, None)),
+    );
 }
 
 fn folding_range(

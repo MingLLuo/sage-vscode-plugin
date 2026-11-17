@@ -1,100 +1,33 @@
+//! Versioned runtime sessions keep reconfiguration, cancellation and shutdown independent of slow Sage IO.
 use anyhow::{anyhow, Context, Result};
 use sage_index::{DocsStatus, DocumentationRecord, DocumentationSection};
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{mpsc, Arc, Mutex};
-use std::time::Duration;
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex, MutexGuard,
+};
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
+mod process;
+use process::{ProcessControl, RuntimeDocsProcess};
 
 const WORKER_TIMEOUT: Duration = Duration::from_secs(3);
-const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
-const WORKER_SCRIPT: &str = r#"
-import inspect
-import json
-import sys
-import traceback
+// Startup runs in the background: real source builds can take over 30 seconds to import Sage.
+const WORKER_STARTUP_TIMEOUT: Duration = Duration::from_secs(60);
+const MAX_FRAME_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_PREFETCH: usize = 16;
+const MAX_CACHE_ENTRIES: usize = 256;
+const MAX_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const NEGATIVE_CACHE_TTL: Duration = Duration::from_secs(30);
 
-try:
-    from sage.all import *  # noqa: F401,F403
-    from sage.misc.sageinspect import sage_getdef, sage_getdoc, sage_getfile, sage_getsourcelines
-    print(json.dumps({"ready": True}), flush=True)
-except Exception as exc:
-    print(json.dumps({"ready": False, "error": traceback.format_exc()}), flush=True)
-    sys.exit(0)
-
-def resolve_symbol(name):
-    obj = None
-    namespace = globals()
-    for part in name.split("."):
-        if not part:
-            raise KeyError(name)
-        if obj is None:
-            obj = namespace[part]
-        else:
-            obj = getattr(obj, part)
-    return obj
-
-def one_line(value):
-    value = (value or "").strip()
-    for line in value.splitlines():
-        line = line.strip()
-        if line:
-            return line
-    return ""
-
-for line in sys.stdin:
-    try:
-        request = json.loads(line)
-        name = request.get("symbol", "")
-        obj = resolve_symbol(name)
-        try:
-            # Embedded formatting preserves docs without probing optional packages
-            # (e.g. starting Maxima merely to format sin's doctest tags).
-            doc = sage_getdoc(obj, obj_name=name, embedded=True) or ""
-        except TypeError:
-            doc = sage_getdoc(obj) or ""
-        if not doc:
-            doc = inspect.getdoc(obj) or ""
-        try:
-            detail = sage_getdef(obj, name) or ""
-        except Exception:
-            detail = ""
-        try:
-            path = sage_getfile(obj) or ""
-        except Exception:
-            path = ""
-        source_line = None
-        source_text = None
-        try:
-            source_lines, source_line = sage_getsourcelines(obj)
-            source_text = source_lines[0].rstrip() if source_lines else None
-        except Exception:
-            pass
-        module = getattr(obj, "__module__", "") or "sage.runtime"
-        kind = type(obj).__name__
-        print(json.dumps({
-            "ok": True,
-            "name": name,
-            "module_name": module,
-            "kind": kind,
-            "detail": detail,
-            "summary": one_line(doc) or detail or name,
-            "docstring": doc,
-            "uri": path,
-            "source_line": source_line,
-            "source_text": source_text,
-        }), flush=True)
-    except Exception as exc:
-        print(json.dumps({
-            "ok": False,
-            "error": str(exc),
-            "traceback": traceback.format_exc(limit=2),
-        }), flush=True)
-"#;
+fn lock<T>(value: &Mutex<T>) -> MutexGuard<'_, T> {
+    value
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct RuntimeDocsConfig {
@@ -103,67 +36,370 @@ pub struct RuntimeDocsConfig {
     pub interpreter_args: Vec<String>,
     pub source_roots: Vec<PathBuf>,
 }
-
-#[derive(Clone, Debug)]
-struct RuntimeDocsCounters {
-    state: String,
-    degraded_reason: Option<String>,
-    cache_hits: usize,
-    cache_misses: usize,
-    timeout_count: usize,
-    queue_depth: usize,
-}
-
-impl Default for RuntimeDocsCounters {
-    fn default() -> Self {
-        Self {
-            state: "unconfigured-static-fallback".to_string(),
-            degraded_reason: Some(
-                "runtime docs worker is not configured yet; static indexed docs are active"
-                    .to_string(),
-            ),
-            cache_hits: 0,
-            cache_misses: 0,
-            timeout_count: 0,
-            queue_depth: 0,
-        }
-    }
-}
-
-#[derive(Clone, Default)]
-pub struct RuntimeDocsWorker {
-    config: Arc<Mutex<RuntimeDocsConfig>>,
-    counters: Arc<Mutex<RuntimeDocsCounters>>,
-    cache: Arc<Mutex<HashMap<String, DocumentationRecord>>>,
-    sources: Arc<Mutex<HashMap<String, RuntimeSourceLocation>>>,
-    inflight: Arc<Mutex<HashSet<String>>>,
-    process: Arc<Mutex<Option<RuntimeDocsProcess>>>,
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct RuntimeSourceLocation {
     pub path: PathBuf,
     pub line: u32,
     pub source_text: String,
 }
-
-struct RuntimeDocsProcess {
-    child: Child,
-    stdin: ChildStdin,
-    output: mpsc::Receiver<std::io::Result<String>>,
+struct CacheEntry {
+    record: Option<DocumentationRecord>,
+    source: Option<RuntimeSourceLocation>,
+    created: Instant,
+    bytes: usize,
 }
-
-#[derive(Clone, Debug, Deserialize)]
+struct State {
+    name: String,
+    degraded_reason: Option<String>,
+    cache: HashMap<String, CacheEntry>,
+    cache_bytes: usize,
+    inflight: HashSet<String>,
+    cache_hits: usize,
+    cache_misses: usize,
+    timeout_count: usize,
+    failures: u32,
+    retry_at: Option<Instant>,
+}
+struct Session {
+    config: RuntimeDocsConfig,
+    state: Mutex<State>,
+    // Only the bounded blocking request worker touches process. Shutdown uses control.
+    process: Mutex<Option<RuntimeDocsProcess>>,
+    control: Mutex<Option<Arc<ProcessControl>>>,
+    stopped: AtomicBool,
+    slots: Arc<Semaphore>,
+    next_id: AtomicU64,
+}
+#[derive(Clone)]
+pub struct RuntimeDocsWorker {
+    session: Arc<Mutex<Arc<Session>>>,
+}
+impl Default for RuntimeDocsWorker {
+    fn default() -> Self {
+        Self {
+            session: Arc::new(Mutex::new(Arc::new(Session::new(
+                RuntimeDocsConfig::default(),
+            )))),
+        }
+    }
+}
+impl Drop for RuntimeDocsWorker {
+    fn drop(&mut self) {
+        if Arc::strong_count(&self.session) == 1 {
+            self.shutdown();
+        }
+    }
+}
+impl RuntimeDocsWorker {
+    fn session(&self) -> Arc<Session> {
+        lock(&self.session).clone()
+    }
+    pub async fn configure(&self, config: RuntimeDocsConfig) {
+        let previous = std::mem::replace(&mut *lock(&self.session), Arc::new(Session::new(config)));
+        previous.stop();
+    }
+    pub fn shutdown(&self) {
+        self.session().stop();
+    }
+    pub async fn lookup(&self, symbol: &str) -> Option<DocumentationRecord> {
+        self.session()
+            .lookup(symbol)
+            .await
+            .and_then(|entry| entry.record)
+    }
+    pub fn cached(&self, symbol: &str) -> Option<DocumentationRecord> {
+        self.session().cached(symbol).and_then(|entry| entry.record)
+    }
+    pub async fn source_location(&self, symbol: &str) -> Option<RuntimeSourceLocation> {
+        self.session()
+            .lookup(symbol)
+            .await
+            .and_then(|entry| entry.source)
+    }
+    pub fn prefetch(&self, symbol: &str) {
+        let session = self.session();
+        let symbol = symbol.trim().to_string();
+        if !session.available() || symbol.is_empty() || session.cached(&symbol).is_some() {
+            return;
+        }
+        {
+            let mut state = lock(&session.state);
+            if state.inflight.len() >= MAX_PREFETCH || !state.inflight.insert(symbol.clone()) {
+                return;
+            }
+        }
+        tokio::spawn(async move {
+            let _ = session.lookup(&symbol).await;
+            lock(&session.state).inflight.remove(&symbol);
+        });
+    }
+    pub fn hover_status_message(&self) -> String {
+        match lock(&self.session().state).name.as_str() {
+            "disabled" => "Runtime documentation is disabled. Enable `sage.analysis.enableRuntimeIntrospection` to load full Sage documentation.",
+            "unavailable" | "unconfigured-static-fallback" => "Select a Sage interpreter to load full documentation.",
+            "degraded" => "Runtime documentation could not be loaded. Run `Sage: Show Docs Status` for details.",
+            _ => "Loading Sage documentation. Hover again shortly, or run `Sage: Show Documentation`.",
+        }.into()
+    }
+    pub async fn status(&self, mut base: DocsStatus) -> DocsStatus {
+        let session = self.session();
+        let state = lock(&session.state);
+        base.runtime_worker_state = state.name.clone();
+        base.runtime_degraded_reason = state.degraded_reason.clone();
+        base.runtime_queue_depth = state.inflight.len();
+        base.runtime_timeout_count = state.timeout_count;
+        base.runtime_cache_hits = state.cache_hits;
+        base.runtime_cache_misses = state.cache_misses;
+        base
+    }
+}
+#[derive(Clone)]
+struct LookupResult {
+    record: Option<DocumentationRecord>,
+    source: Option<RuntimeSourceLocation>,
+}
+impl Session {
+    fn new(config: RuntimeDocsConfig) -> Self {
+        let (name, reason) = if !config.enabled {
+            ("disabled", Some("runtime introspection is disabled".into()))
+        } else if config.interpreter_path.trim().is_empty() {
+            ("unavailable", Some("Sage interpreter path is empty".into()))
+        } else {
+            ("idle-static-fallback", None)
+        };
+        Self {
+            config,
+            state: Mutex::new(State {
+                name: name.into(),
+                degraded_reason: reason,
+                cache: HashMap::new(),
+                cache_bytes: 0,
+                inflight: HashSet::new(),
+                cache_hits: 0,
+                cache_misses: 0,
+                timeout_count: 0,
+                failures: 0,
+                retry_at: None,
+            }),
+            process: Mutex::new(None),
+            control: Mutex::new(None),
+            stopped: AtomicBool::new(false),
+            slots: Arc::new(Semaphore::new(1)),
+            next_id: AtomicU64::new(1),
+        }
+    }
+    fn available(&self) -> bool {
+        !self.stopped.load(Ordering::Acquire)
+            && self.config.enabled
+            && !self.config.interpreter_path.trim().is_empty()
+            && lock(&self.state)
+                .retry_at
+                .is_none_or(|deadline| Instant::now() >= deadline)
+    }
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
+        self.slots.close();
+        if let Some(control) = lock(&self.control).take() {
+            control.terminate();
+        }
+        let mut state = lock(&self.state);
+        state.name = "stopped".into();
+        state.inflight.clear();
+    }
+    fn cached(&self, symbol: &str) -> Option<LookupResult> {
+        let mut state = lock(&self.state);
+        let entry = state.cache.get(symbol)?;
+        if entry.record.is_none() && entry.created.elapsed() >= NEGATIVE_CACHE_TTL {
+            if let Some(expired) = state.cache.remove(symbol) {
+                state.cache_bytes -= expired.bytes;
+            }
+            return None;
+        }
+        let result = LookupResult {
+            record: entry.record.clone(),
+            source: entry.source.clone(),
+        };
+        state.cache_hits += 1;
+        Some(result)
+    }
+    async fn lookup(self: &Arc<Self>, symbol: &str) -> Option<LookupResult> {
+        if symbol.trim().is_empty() || symbol.len() > 4096 || !self.available() {
+            return None;
+        }
+        if let Some(entry) = self.cached(symbol) {
+            return Some(entry);
+        }
+        // Only one blocking worker exists per session; queued callers stay on async tasks.
+        let permit = self.slots.clone().acquire_owned().await.ok()?;
+        if !self.available() {
+            return None;
+        }
+        if let Some(entry) = self.cached(symbol) {
+            return Some(entry);
+        }
+        lock(&self.state).cache_misses += 1;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let _cancel = super::CancelOnDrop(cancelled.clone());
+        let session = self.clone();
+        let symbol = symbol.to_string();
+        tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            let result = session.query(&symbol, &cancelled);
+            let mut state = lock(&session.state);
+            if session.stopped.load(Ordering::Acquire) {
+                return None;
+            }
+            if cancelled.load(Ordering::Acquire) {
+                state.name = "idle-static-fallback".into();
+                state.degraded_reason = None;
+                return None;
+            }
+            match result {
+                Ok(entry) => {
+                    state.name = "ready".into();
+                    state.degraded_reason = None;
+                    state.failures = 0;
+                    state.retry_at = None;
+                    let bytes = entry.record.as_ref().map_or(0, |r| {
+                        r.name.len()
+                            + r.module_name.len()
+                            + r.kind.len()
+                            + r.detail.len()
+                            + r.summary.len()
+                            + r.docstring.as_ref().map_or(0, String::len)
+                            + r.uri.as_ref().map_or(0, String::len)
+                    }) + symbol.len()
+                        + entry.source.as_ref().map_or(0, |s| s.source_text.len());
+                    while state.cache.len() >= MAX_CACHE_ENTRIES
+                        || state.cache_bytes + bytes > MAX_CACHE_BYTES
+                    {
+                        let Some(key) = state
+                            .cache
+                            .iter()
+                            .min_by_key(|(_, v)| v.created)
+                            .map(|(k, _)| k.clone())
+                        else {
+                            break;
+                        };
+                        if let Some(expired) = state.cache.remove(&key) {
+                            state.cache_bytes -= expired.bytes;
+                        }
+                    }
+                    if bytes <= MAX_CACHE_BYTES {
+                        state.cache_bytes += bytes;
+                        state.cache.insert(
+                            symbol,
+                            CacheEntry {
+                                record: entry.record.clone(),
+                                source: entry.source.clone(),
+                                created: Instant::now(),
+                                bytes,
+                            },
+                        );
+                    }
+                    Some(entry)
+                }
+                Err(error) => {
+                    if error.downcast_ref::<std::sync::mpsc::RecvTimeoutError>()
+                        == Some(&std::sync::mpsc::RecvTimeoutError::Timeout)
+                    {
+                        state.timeout_count += 1;
+                    }
+                    state.failures = state.failures.saturating_add(1);
+                    let delay =
+                        Duration::from_secs(1u64 << state.failures.saturating_sub(1).min(6));
+                    state.retry_at = Some(Instant::now() + delay);
+                    state.name = "degraded".into();
+                    state.degraded_reason = Some(error.to_string());
+                    None
+                }
+            }
+        })
+        .await
+        .ok()
+        .flatten()
+    }
+    fn query(&self, symbol: &str, cancelled: &AtomicBool) -> Result<LookupResult> {
+        let mut process = lock(&self.process);
+        if self.stopped.load(Ordering::Acquire) || cancelled.load(Ordering::Acquire) {
+            return Err(anyhow!("request cancelled"));
+        }
+        if process.is_none() {
+            lock(&self.state).name = "starting".into();
+            *process = Some(RuntimeDocsProcess::spawn(self, cancelled)?);
+        }
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let response = process
+            .as_mut()
+            .expect("worker was started")
+            .request(self, cancelled, id, symbol);
+        let response = match response {
+            Ok(response) => response,
+            Err(error) => {
+                process.take();
+                lock(&self.control).take();
+                return Err(error);
+            }
+        };
+        if !response.ok {
+            if response.missing {
+                return Ok(LookupResult {
+                    record: None,
+                    source: None,
+                });
+            }
+            return Err(anyhow!(response
+                .error
+                .unwrap_or_else(|| "runtime lookup failed".into())));
+        }
+        let source = match (&response.uri, response.source_line, &response.source_text) {
+            (Some(path), Some(line), Some(text))
+                if Path::new(path).is_absolute() && line > 0 && !text.trim().is_empty() =>
+            {
+                Some(RuntimeSourceLocation {
+                    path: PathBuf::from(path),
+                    line: line - 1,
+                    source_text: text.clone(),
+                })
+            }
+            _ => None,
+        };
+        Ok(LookupResult {
+            source,
+            record: Some(DocumentationRecord {
+                name: response.name,
+                module_name: response
+                    .module_name
+                    .unwrap_or_else(|| "sage.runtime".into()),
+                kind: response.kind.unwrap_or_else(|| "RuntimeObject".into()),
+                detail: response.detail.unwrap_or_default(),
+                summary: response.summary.unwrap_or_else(|| symbol.into()),
+                docstring: response.docstring,
+                uri: response.uri.filter(|value| !value.is_empty()),
+                markers: vec!["runtime".into()],
+                sections: Vec::<DocumentationSection>::new(),
+            }),
+        })
+    }
+}
+impl Drop for Session {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+#[derive(Deserialize)]
 struct WorkerReady {
     ready: bool,
     error: Option<String>,
 }
-
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Deserialize)]
 struct WorkerResponse {
+    id: u64,
+    name: String,
     ok: bool,
+    #[serde(default)]
+    missing: bool,
     error: Option<String>,
-    name: Option<String>,
     module_name: Option<String>,
     kind: Option<String>,
     detail: Option<String>,
@@ -173,587 +409,5 @@ struct WorkerResponse {
     source_line: Option<u32>,
     source_text: Option<String>,
 }
-
-impl RuntimeDocsWorker {
-    pub async fn configure(&self, config: RuntimeDocsConfig) {
-        *self
-            .config
-            .lock()
-            .expect("runtime docs config lock poisoned") = config.clone();
-        self.cache
-            .lock()
-            .expect("runtime docs cache lock poisoned")
-            .clear();
-        self.sources
-            .lock()
-            .expect("runtime source cache lock poisoned")
-            .clear();
-        self.inflight
-            .lock()
-            .expect("runtime docs inflight lock poisoned")
-            .clear();
-        self.stop_process();
-        let mut counters = self
-            .counters
-            .lock()
-            .expect("runtime docs counters lock poisoned");
-        counters.cache_hits = 0;
-        counters.cache_misses = 0;
-        counters.timeout_count = 0;
-        counters.queue_depth = 0;
-        if !config.enabled {
-            counters.state = "disabled".to_string();
-            counters.degraded_reason = Some("runtime introspection is disabled".to_string());
-        } else if config.interpreter_path.trim().is_empty() {
-            counters.state = "unavailable".to_string();
-            counters.degraded_reason = Some("Sage interpreter path is empty".to_string());
-        } else {
-            counters.state = "idle-static-fallback".to_string();
-            counters.degraded_reason = None;
-        }
-    }
-
-    pub async fn lookup(&self, symbol: &str) -> Option<DocumentationRecord> {
-        if symbol.trim().is_empty() {
-            return None;
-        }
-        if let Some(record) = self
-            .cache
-            .lock()
-            .expect("runtime docs cache lock poisoned")
-            .get(symbol)
-            .cloned()
-        {
-            self.counters
-                .lock()
-                .expect("runtime docs counters lock poisoned")
-                .cache_hits += 1;
-            return Some(record);
-        }
-        self.counters
-            .lock()
-            .expect("runtime docs counters lock poisoned")
-            .cache_misses += 1;
-        let worker = self.clone();
-        let symbol = symbol.to_string();
-        let result =
-            tokio::task::spawn_blocking(move || worker.lookup_uncached_blocking(&symbol)).await;
-        match result {
-            Ok(Ok(Some(record))) => {
-                self.cache
-                    .lock()
-                    .expect("runtime docs cache lock poisoned")
-                    .insert(record.name.clone(), record.clone());
-                Some(record)
-            }
-            Ok(Ok(None)) => None,
-            Ok(Err(error)) => {
-                let mut counters = self
-                    .counters
-                    .lock()
-                    .expect("runtime docs counters lock poisoned");
-                if error.downcast_ref::<mpsc::RecvTimeoutError>()
-                    == Some(&mpsc::RecvTimeoutError::Timeout)
-                {
-                    counters.timeout_count += 1;
-                }
-                counters.state = "degraded".to_string();
-                counters.degraded_reason = Some(error.to_string());
-                None
-            }
-            Err(error) => {
-                let mut counters = self
-                    .counters
-                    .lock()
-                    .expect("runtime docs counters lock poisoned");
-                counters.state = "degraded".to_string();
-                counters.degraded_reason = Some(error.to_string());
-                None
-            }
-        }
-    }
-
-    pub fn cached(&self, symbol: &str) -> Option<DocumentationRecord> {
-        if symbol.trim().is_empty() {
-            return None;
-        }
-        let record = self
-            .cache
-            .lock()
-            .expect("runtime docs cache lock poisoned")
-            .get(symbol)
-            .cloned();
-        if record.is_some() {
-            self.counters
-                .lock()
-                .expect("runtime docs counters lock poisoned")
-                .cache_hits += 1;
-        }
-        record
-    }
-
-    pub async fn source_location(&self, symbol: &str) -> Option<RuntimeSourceLocation> {
-        self.lookup(symbol).await?;
-        self.sources
-            .lock()
-            .expect("runtime source cache lock poisoned")
-            .get(symbol)
-            .cloned()
-    }
-
-    pub fn hover_status_message(&self) -> String {
-        let counters = self
-            .counters
-            .lock()
-            .expect("runtime docs counters lock poisoned");
-        match counters.state.as_str() {
-            "disabled" => "Runtime documentation is disabled. Enable `sage.analysis.enableRuntimeIntrospection` to load full Sage documentation.",
-            "unavailable" | "unconfigured-static-fallback" => "Select a Sage interpreter to load full documentation.",
-            "degraded" => "Runtime documentation could not be loaded. Run `Sage: Show Docs Status` for details.",
-            _ => "Loading Sage documentation. Hover again shortly, or run `Sage: Show Documentation`.",
-        }.to_string()
-    }
-
-    pub fn prefetch(&self, symbol: &str) {
-        let symbol = symbol.trim().to_string();
-        if symbol.is_empty() {
-            return;
-        }
-        let config = self
-            .config
-            .lock()
-            .expect("runtime docs config lock poisoned")
-            .clone();
-        if !config.enabled || config.interpreter_path.trim().is_empty() {
-            return;
-        }
-        if self
-            .cache
-            .lock()
-            .expect("runtime docs cache lock poisoned")
-            .contains_key(&symbol)
-        {
-            return;
-        }
-        {
-            let mut inflight = self
-                .inflight
-                .lock()
-                .expect("runtime docs inflight lock poisoned");
-            if !inflight.insert(symbol.clone()) {
-                return;
-            }
-            self.counters
-                .lock()
-                .expect("runtime docs counters lock poisoned")
-                .queue_depth = inflight.len();
-        }
-        let worker = self.clone();
-        tokio::spawn(async move {
-            let _ = worker.lookup(&symbol).await;
-            worker.finish_prefetch(&symbol);
-        });
-    }
-
-    pub async fn status(&self, mut base: DocsStatus) -> DocsStatus {
-        let counters = self
-            .counters
-            .lock()
-            .expect("runtime docs counters lock poisoned");
-        base.runtime_worker_state = counters.state.clone();
-        base.runtime_degraded_reason = counters.degraded_reason.clone();
-        base.runtime_queue_depth = counters.queue_depth;
-        base.runtime_timeout_count = counters.timeout_count;
-        base.runtime_cache_hits = counters.cache_hits;
-        base.runtime_cache_misses = counters.cache_misses;
-        base
-    }
-
-    fn lookup_uncached_blocking(&self, symbol: &str) -> Result<Option<DocumentationRecord>> {
-        let config = self
-            .config
-            .lock()
-            .expect("runtime docs config lock poisoned")
-            .clone();
-        if !config.enabled || config.interpreter_path.trim().is_empty() {
-            return Ok(None);
-        }
-        let mut guard = self
-            .process
-            .lock()
-            .expect("runtime docs process lock poisoned");
-        if guard.is_none() {
-            *guard = Some(self.spawn_process(&config)?);
-        }
-        let process = guard
-            .as_mut()
-            .ok_or_else(|| anyhow!("runtime docs process is unavailable"))?;
-        let response = (|| -> Result<WorkerResponse> {
-            let request = json!({ "symbol": symbol }).to_string();
-            process.stdin.write_all(request.as_bytes())?;
-            process.stdin.write_all(b"\n")?;
-            process.stdin.flush()?;
-            let line = process.read_line(WORKER_TIMEOUT)?;
-            serde_json::from_str(&line)
-                .with_context(|| format!("parse runtime docs response: {line}"))
-        })();
-        let response = match response {
-            Ok(response) => response,
-            Err(error) => {
-                *guard = None;
-                let message = format!("runtime documentation lookup for {symbol}: {error}");
-                return Err(error.context(message));
-            }
-        };
-        if !response.ok {
-            return Err(anyhow!(response
-                .error
-                .unwrap_or_else(|| "runtime lookup failed".to_string())));
-        }
-        if let (Some(path), Some(line), Some(source_text)) =
-            (&response.uri, response.source_line, &response.source_text)
-        {
-            if Path::new(path).is_absolute() && line > 0 && !source_text.trim().is_empty() {
-                self.sources
-                    .lock()
-                    .expect("runtime source cache lock poisoned")
-                    .insert(
-                        symbol.to_string(),
-                        RuntimeSourceLocation {
-                            path: PathBuf::from(path),
-                            line: line - 1,
-                            source_text: source_text.clone(),
-                        },
-                    );
-            }
-        }
-        let record = DocumentationRecord {
-            name: response.name.unwrap_or_else(|| symbol.to_string()),
-            module_name: response
-                .module_name
-                .unwrap_or_else(|| "sage.runtime".to_string()),
-            kind: response.kind.unwrap_or_else(|| "RuntimeObject".to_string()),
-            detail: response.detail.unwrap_or_default(),
-            summary: response.summary.unwrap_or_else(|| symbol.to_string()),
-            docstring: response.docstring,
-            uri: response.uri.filter(|value| !value.is_empty()),
-            markers: vec!["runtime".to_string()],
-            sections: Vec::<DocumentationSection>::new(),
-        };
-        let mut counters = self
-            .counters
-            .lock()
-            .expect("runtime docs counters lock poisoned");
-        counters.state = "ready".to_string();
-        counters.degraded_reason = None;
-        Ok(Some(record))
-    }
-
-    fn spawn_process(&self, config: &RuntimeDocsConfig) -> Result<RuntimeDocsProcess> {
-        self.counters
-            .lock()
-            .expect("runtime docs counters lock poisoned")
-            .state = "starting".to_string();
-        let mut command = Command::new(&config.interpreter_path);
-        command.args(&config.interpreter_args);
-        if looks_like_sage_command(&config.interpreter_path) {
-            command.arg("-python");
-        }
-        command.arg("-u").arg("-c").arg(WORKER_SCRIPT);
-        command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-        command.env("PYTHONUNBUFFERED", "1");
-        let runtime_home = std::env::temp_dir().join("sage-vscode-runtime-home");
-        prepare_runtime_home(&runtime_home)?;
-        // Keep the interpreter's HOME: replacing it also changes GAP's startup
-        // configuration and can break sage.all imports. Isolate only the caches.
-        command.env("DOT_SAGE", runtime_home.join(".sage"));
-        command.env("XDG_CACHE_HOME", runtime_home.join(".cache"));
-        if !config.source_roots.is_empty() {
-            let joined = std::env::join_paths(&config.source_roots)
-                .context("join runtime source roots for PYTHONPATH")?;
-            command.env("PYTHONPATH", joined);
-        }
-        let mut child = command
-            .spawn()
-            .with_context(|| format!("spawn runtime docs worker {}", config.interpreter_path))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("runtime docs worker stdin is unavailable"))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("runtime docs worker stdout is unavailable"))?;
-        let (sender, output) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines() {
-                let failed = line.is_err();
-                if sender.send(line).is_err() || failed {
-                    break;
-                }
-            }
-        });
-        let process = RuntimeDocsProcess {
-            child,
-            stdin,
-            output,
-        };
-        let line = process.read_line(WORKER_STARTUP_TIMEOUT)?;
-        let ready: WorkerReady = serde_json::from_str(&line)
-            .with_context(|| format!("parse runtime docs worker ready response: {line}"))?;
-        if !ready.ready {
-            return Err(anyhow!(
-                "{}",
-                ready
-                    .error
-                    .unwrap_or_else(|| "Sage imports failed".to_string())
-            ));
-        }
-        self.counters
-            .lock()
-            .expect("runtime docs counters lock poisoned")
-            .state = "ready".to_string();
-        Ok(process)
-    }
-
-    fn stop_process(&self) {
-        self.process
-            .lock()
-            .expect("runtime docs process lock poisoned")
-            .take();
-    }
-
-    fn finish_prefetch(&self, symbol: &str) {
-        let queue_depth = {
-            let mut inflight = self
-                .inflight
-                .lock()
-                .expect("runtime docs inflight lock poisoned");
-            inflight.remove(symbol);
-            inflight.len()
-        };
-        self.counters
-            .lock()
-            .expect("runtime docs counters lock poisoned")
-            .queue_depth = queue_depth;
-    }
-}
-
-impl RuntimeDocsProcess {
-    fn read_line(&self, timeout: Duration) -> Result<String> {
-        self.output
-            .recv_timeout(timeout)
-            .with_context(|| {
-                format!(
-                    "runtime docs worker response exceeded {}ms or worker exited",
-                    timeout.as_millis()
-                )
-            })?
-            .context("read runtime docs worker response")
-    }
-}
-
-impl Drop for RuntimeDocsProcess {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
-}
-
-fn prepare_runtime_home(runtime_home: &Path) -> Result<()> {
-    for directory in [runtime_home.join(".sage"), runtime_home.join(".cache")] {
-        fs::create_dir_all(&directory).with_context(|| {
-            format!(
-                "create Sage runtime worker directory {}",
-                directory.display()
-            )
-        })?;
-    }
-    Ok(())
-}
-
-fn looks_like_sage_command(path: &str) -> bool {
-    let name = std::path::Path::new(path)
-        .file_name()
-        .and_then(|value| value.to_str())
-        .unwrap_or(path)
-        .to_ascii_lowercase();
-    name == "sage" || name.starts_with("sage-") || name.starts_with("sage.")
-}
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use sage_index::DocsStatus;
-
-    fn base_status() -> DocsStatus {
-        DocsStatus {
-            doc_db_path: "/tmp/sage-index.sqlite".to_string(),
-            offline_doc_count: 12,
-            preferred_source: "auto".to_string(),
-            runtime_worker_state: "static-fallback".to_string(),
-            runtime_degraded_reason: Some("static fallback active".to_string()),
-            runtime_queue_depth: 0,
-            runtime_timeout_count: 0,
-            runtime_cache_hits: 0,
-            runtime_cache_misses: 0,
-        }
-    }
-
-    #[tokio::test]
-    async fn configure_reports_explicit_static_fallback_states() {
-        let worker = RuntimeDocsWorker::default();
-
-        worker
-            .configure(RuntimeDocsConfig {
-                enabled: true,
-                interpreter_path: "/usr/bin/python3".to_string(),
-                interpreter_args: Vec::new(),
-                source_roots: Vec::new(),
-            })
-            .await;
-        let status = worker.status(base_status()).await;
-        assert_eq!(status.runtime_worker_state, "idle-static-fallback");
-        assert_eq!(status.runtime_degraded_reason, None);
-
-        worker
-            .configure(RuntimeDocsConfig {
-                enabled: false,
-                interpreter_path: "/usr/bin/python3".to_string(),
-                interpreter_args: Vec::new(),
-                source_roots: Vec::new(),
-            })
-            .await;
-        let status = worker.status(base_status()).await;
-        assert_eq!(status.runtime_worker_state, "disabled");
-        assert!(status
-            .runtime_degraded_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("disabled"));
-
-        worker
-            .configure(RuntimeDocsConfig {
-                enabled: true,
-                interpreter_path: " ".to_string(),
-                interpreter_args: Vec::new(),
-                source_roots: Vec::new(),
-            })
-            .await;
-        let status = worker.status(base_status()).await;
-        assert_eq!(status.runtime_worker_state, "unavailable");
-        assert!(status
-            .runtime_degraded_reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("empty"));
-    }
-
-    #[tokio::test]
-    async fn hover_prefetch_starts_runtime_process_without_blocking() {
-        let worker = RuntimeDocsWorker::default();
-        worker
-            .configure(RuntimeDocsConfig {
-                enabled: true,
-                interpreter_path: "/bin/false".to_string(),
-                interpreter_args: Vec::new(),
-                source_roots: Vec::new(),
-            })
-            .await;
-
-        worker.prefetch("PolynomialRing");
-
-        let status = worker.status(base_status()).await;
-        assert_eq!(status.runtime_queue_depth, 1);
-        tokio::time::timeout(Duration::from_secs(2), async {
-            loop {
-                let status = worker.status(base_status()).await;
-                if status.runtime_queue_depth == 0 {
-                    assert_eq!(status.runtime_cache_misses, 1);
-                    assert_eq!(status.runtime_worker_state, "degraded");
-                    break;
-                }
-                tokio::task::yield_now().await;
-            }
-        })
-        .await
-        .expect("prefetch must finish without blocking the async executor");
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn cold_prefetch_allows_slow_startup_and_caches_documentation() {
-        let worker = RuntimeDocsWorker::default();
-        worker.configure(RuntimeDocsConfig {
-            enabled: true,
-            interpreter_path: "/bin/sh".to_string(),
-            interpreter_args: vec!["-c".to_string(), r#"
-sleep 1
-printf '%s\n' '{"ready":true}'
-while IFS= read -r request; do
-    printf '%s\n' '{"ok":true,"name":"sin","docstring":"The sine function.","summary":"The sine function."}'
-done
-"#.to_string()],
-            source_roots: Vec::new(),
-        }).await;
-        worker.prefetch("sin");
-        worker.prefetch("sin");
-        tokio::time::timeout(Duration::from_secs(4), async {
-            loop {
-                if let Some(record) = worker.cached("sin") {
-                    assert_eq!(record.docstring.as_deref(), Some("The sine function."));
-                    break;
-                }
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
-        .await
-        .expect("cold hover should eventually get real docs");
-        let status = worker.status(base_status()).await;
-        assert_eq!(status.runtime_cache_misses, 1);
-        assert_eq!(status.runtime_timeout_count, 0);
-        assert_eq!(status.runtime_degraded_reason, None);
-    }
-
-    #[cfg(unix)]
-    #[tokio::test]
-    async fn stalled_response_times_out_and_discards_worker() {
-        let worker = RuntimeDocsWorker::default();
-        worker
-            .configure(RuntimeDocsConfig {
-                enabled: true,
-                interpreter_path: "/bin/sh".to_string(),
-                interpreter_args: vec![
-                    "-c".to_string(),
-                    "printf '%s\\n' '{\"ready\":true}'; read -r request; exec sleep 5".to_string(),
-                ],
-                source_roots: Vec::new(),
-            })
-            .await;
-        let record = tokio::time::timeout(Duration::from_secs(5), worker.lookup("sin"))
-            .await
-            .expect("timeout must not block while trying to kill the worker");
-        assert!(record.is_none());
-        assert!(worker.process.lock().unwrap().is_none());
-        let status = worker.status(base_status()).await;
-        assert_eq!(status.runtime_timeout_count, 1);
-        assert_eq!(status.runtime_worker_state, "degraded");
-    }
-
-    #[test]
-    fn runtime_home_is_created_before_starting_sage() {
-        let runtime_home =
-            std::env::temp_dir().join(format!("sage-ls-runtime-home-test-{}", std::process::id()));
-        fs::remove_dir_all(&runtime_home).ok();
-
-        prepare_runtime_home(&runtime_home).expect("runtime home should be prepared");
-
-        assert!(runtime_home.is_dir());
-        assert!(runtime_home.join(".sage").is_dir());
-        assert!(runtime_home.join(".cache").is_dir());
-        fs::remove_dir_all(runtime_home).ok();
-    }
-}
+mod tests;

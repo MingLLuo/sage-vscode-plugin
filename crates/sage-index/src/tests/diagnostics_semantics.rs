@@ -335,3 +335,63 @@ fn local_document_highlights_follow_the_function_binding() {
         2
     );
 }
+
+#[test]
+fn diagnostics_ignore_carets_in_comments_and_multiline_strings() {
+    let source = "# documentation ^\ntext = \"\"\"example ^\nstill text ^\n\"\"\"\n";
+    assert!(diagnostics_for_source(Path::new("demo.sage"), source).is_empty());
+    assert!(diagnostics_for_source(Path::new("demo.py"), source).is_empty());
+}
+
+#[test]
+fn diagnostics_locate_multiple_errors_without_hiding_following_lines() {
+    let source = "value = 2^\nvalid = 3\nbroken = )\n";
+    let diagnostics = diagnostics_for_source(Path::new("demo.sage"), source);
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.range.start_line == 0 && d.range.end_character >= 7),
+        "{diagnostics:?}"
+    );
+    assert!(
+        diagnostics.iter().any(|d| d.range.start_line == 2),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn diagnostics_map_sage_operators_and_generator_prefixes() {
+    for line in [
+        "value = 2^3 + )",
+        "K.<i> = NumberField(2^3 + )",
+        "结果 = 2^3 + )",
+    ] {
+        let source = format!("valid = 1\n{line}\n");
+        let diagnostics = diagnostics_for_source(Path::new("demo.sage"), &source);
+        assert!(!diagnostics.is_empty(), "{source}");
+        for diagnostic in diagnostics {
+            assert_eq!(diagnostic.range.start_line, 1, "{diagnostic:?}");
+            assert!(diagnostic.range.end_character > 0, "{diagnostic:?}");
+            assert!(
+                diagnostic.range.end_character <= line.len() as u32,
+                "{diagnostic:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn diagnostics_locate_errors_on_cr_lines() {
+    let source = "valid = 1\rdef broken()\r    pass\r";
+    let diagnostics = diagnostics_for_source(Path::new("demo.py"), source);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert_eq!(diagnostics[0].range.start_line, 1);
+    assert_eq!(diagnostics[0].range.end_line, 2);
+}
+
+#[test]
+fn diagnostics_allow_exponents_continued_on_the_next_line() {
+    let source = "value = (2^\n    3)\n";
+    let diagnostics = diagnostics_for_source(Path::new("demo.sage"), source);
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}

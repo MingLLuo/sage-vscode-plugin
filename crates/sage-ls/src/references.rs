@@ -101,7 +101,7 @@ impl Backend {
         else {
             return Ok(Some(Vec::new()));
         };
-        let index = self.index.read().await;
+        let index = self.index.load_full();
         let parsed = index.parse_source_for_query(&path, &document.text);
         let highlights = sage_index::references_in_source(&path, &document.text, &target.word)
             .into_iter()
@@ -140,7 +140,7 @@ impl Backend {
                 params.context.include_declaration,
                 ReferenceCollectionMode::References,
             )
-            .await,
+            .await?,
         ))
     }
 
@@ -151,7 +151,6 @@ impl Backend {
         let versions_before: HashMap<Uri, i32> = self
             .open_documents
             .read()
-            .await
             .iter()
             .map(|(uri, document)| (uri.clone(), document.version))
             .collect();
@@ -182,7 +181,7 @@ impl Backend {
                 true,
                 ReferenceCollectionMode::Rename,
             )
-            .await
+            .await?
         {
             changes.entry(location.uri).or_default().push(TextEdit {
                 range: location.range,
@@ -190,7 +189,7 @@ impl Backend {
             });
         }
         if *self.versioned_workspace_edits.read().await {
-            let documents = self.open_documents.read().await;
+            let documents = self.open_documents.read();
             if changes.keys().any(|uri| {
                 documents.get(uri).map(|document| document.version)
                     != versions_before.get(uri).copied()
@@ -226,13 +225,13 @@ impl Backend {
             return false;
         }
         let text = if let Some(document) = self.document_for_uri(&target.declaration.uri).await {
-            document.text
+            document.text.clone()
         } else if let Ok(on_disk) = std::fs::read_to_string(&target.definition.path) {
             on_disk
         } else {
             return false;
         };
-        let index = self.index.read().await;
+        let index = self.index.load_full();
         let parsed = index.parse_source_for_query(&target.definition.path, &text);
         let target_line = target.declaration.range.start.line as usize;
         let target_indent = text
@@ -278,8 +277,7 @@ impl Backend {
         }
         let parsed = self
             .index
-            .read()
-            .await
+            .load_full()
             .parse_source_for_query(&physical_path, &document.text);
         if let Some(target) = local_import_alias_rename_target_with_symbols(
             uri,
@@ -290,8 +288,7 @@ impl Backend {
         ) {
             if !self
                 .index
-                .read()
-                .await
+                .load_full()
                 .is_editable_path(&target.definition.path)
             {
                 return None;
@@ -301,8 +298,7 @@ impl Backend {
         let target = self.resolved_reference_target_at(uri, position).await?;
         let is_editable = self
             .index
-            .read()
-            .await
+            .load_full()
             .is_editable_path(&target.definition.path);
         if !is_editable {
             return None;
@@ -382,69 +378,85 @@ impl Backend {
         target: &ResolvedReferenceTarget,
         include_declaration: bool,
         mode: ReferenceCollectionMode,
-    ) -> Vec<Location> {
-        let mut seen = BTreeSet::new();
-        let mut locations = Vec::new();
-        let open_documents = self.open_documents.read().await.clone();
-        let open_paths: BTreeSet<PathBuf> = open_document_physical_paths(&open_documents)
-            .into_iter()
-            .collect();
-        if include_declaration {
-            if let Some(declaration) = target.declaration.clone() {
-                push_reference_location(&mut locations, &mut seen, declaration);
+    ) -> Result<Vec<Location>> {
+        let open_documents = self.open_documents.read().clone();
+        let snapshots = open_documents.clone();
+        let target = target.clone();
+        let index = self.index.load_full();
+        let locations = super::run_cancellable(self.reference_slots.clone(), move |cancelled| {
+            let target = &target;
+            let mut seen = BTreeSet::new();
+            let mut locations = Vec::new();
+            let open_paths: BTreeSet<PathBuf> = open_document_physical_paths(&open_documents)
+                .into_iter()
+                .collect();
+            if include_declaration {
+                if let Some(declaration) = target.declaration.clone() {
+                    push_reference_location(&mut locations, &mut seen, declaration);
+                }
             }
-        }
-        let index = self.index.read().await;
-        let indexed_locations = indexed_reference_locations(&index, target, mode, &open_paths);
-        for location in indexed_locations {
-            push_scoped_reference_location(
-                &mut locations,
-                &mut seen,
-                location,
-                target.declaration.as_ref(),
-                include_declaration,
-            );
-        }
-        for live in unique_live_documents(&open_documents) {
-            if !reference_path_is_collectible(&index, &live.path, mode) {
-                continue;
-            }
-            collect_source_reference_locations(
+            let indexed_locations = indexed_reference_locations_cancellable(
                 &index,
-                &live.uri,
-                &live.path,
-                &live.document.text,
                 target,
-                include_declaration,
-                &mut locations,
-                &mut seen,
+                mode,
+                &open_paths,
+                &cancelled,
             );
-        }
-        // Same-file references (sibling callers, recursion) must not depend on background index
-        // readiness: always scan the definition's own file when no live document covers it.
-        // Indexed hits for the same file use the same path-derived URI, so `seen` deduplicates.
-        let definition_path = &target.definition.path;
-        if !open_paths.contains(&canonical_path_for_comparison(definition_path))
-            && reference_path_is_collectible(&index, definition_path, mode)
-        {
-            if let (Ok(text), Some(uri)) = (
-                std::fs::read_to_string(definition_path),
-                Uri::from_file_path(definition_path),
-            ) {
+            for location in indexed_locations {
+                push_scoped_reference_location(
+                    &mut locations,
+                    &mut seen,
+                    location,
+                    target.declaration.as_ref(),
+                    include_declaration,
+                );
+            }
+            for live in unique_live_documents(&open_documents) {
+                if !reference_path_is_collectible(&index, &live.path, mode) {
+                    continue;
+                }
                 collect_source_reference_locations(
                     &index,
-                    &uri,
-                    definition_path,
-                    &text,
+                    &live.uri,
+                    &live.path,
+                    &live.document.text,
                     target,
                     include_declaration,
                     &mut locations,
                     &mut seen,
                 );
             }
+            // Same-file references (sibling callers, recursion) must not depend on background index
+            // readiness: always scan the definition's own file when no live document covers it.
+            // Indexed hits for the same file use the same path-derived URI, so `seen` deduplicates.
+            let definition_path = &target.definition.path;
+            if !open_paths.contains(&canonical_path_for_comparison(definition_path))
+                && reference_path_is_collectible(&index, definition_path, mode)
+            {
+                if let (Ok(text), Some(uri)) = (
+                    std::fs::read_to_string(definition_path),
+                    Uri::from_file_path(definition_path),
+                ) {
+                    collect_source_reference_locations(
+                        &index,
+                        &uri,
+                        definition_path,
+                        &text,
+                        target,
+                        include_declaration,
+                        &mut locations,
+                        &mut seen,
+                    );
+                }
+            }
+            drop(index);
+            locations
+        })
+        .await?;
+        for (uri, snapshot) in snapshots {
+            self.ensure_current_document(&uri, &snapshot)?;
         }
-        drop(index);
-        locations
+        Ok(locations)
     }
 }
 
@@ -680,11 +692,28 @@ fn reference_query_or_aliased_import_matches_target(
     reference_query_matches_target(&alias_query, target)
 }
 
+#[cfg(test)]
 pub(super) fn indexed_reference_locations(
     index: &WorkspaceIndex,
     target: &ResolvedReferenceTarget,
     mode: ReferenceCollectionMode,
     open_paths: &BTreeSet<PathBuf>,
+) -> Vec<Location> {
+    indexed_reference_locations_cancellable(
+        index,
+        target,
+        mode,
+        open_paths,
+        &std::sync::atomic::AtomicBool::new(false),
+    )
+}
+
+fn indexed_reference_locations_cancellable(
+    index: &WorkspaceIndex,
+    target: &ResolvedReferenceTarget,
+    mode: ReferenceCollectionMode,
+    open_paths: &BTreeSet<PathBuf>,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Vec<Location> {
     let indexed_references = match mode {
         ReferenceCollectionMode::References => index.references(&target.word),
@@ -706,6 +735,9 @@ pub(super) fn indexed_reference_locations(
         .collect::<Vec<_>>()
         .into_par_iter()
         .map(|(path, references)| {
+            if cancelled.load(std::sync::atomic::Ordering::Acquire) {
+                return Vec::new();
+            }
             let Ok(text) = std::fs::read_to_string(&path) else {
                 return Vec::new();
             };
@@ -715,6 +747,7 @@ pub(super) fn indexed_reference_locations(
             let parsed = index
                 .fresh_file_for_query(&path)
                 .unwrap_or_else(|| index.parse_source_for_query(&path, &text));
+            let lines = super::text_positions::LineIndex::new(&text);
             let ranges: Vec<_> = references
                 .iter()
                 .map(|reference| reference.range.clone())
@@ -742,7 +775,7 @@ pub(super) fn indexed_reference_locations(
                 })
                 .map(|(reference, _)| Location {
                     uri: uri.clone(),
-                    range: lsp_range_for_text(&text, &reference.range),
+                    range: lines.range(&text, &reference.range),
                 })
                 .collect()
         })

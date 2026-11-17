@@ -113,30 +113,17 @@ impl WorkspaceIndex {
 
     pub fn clone_for_background_work(&self) -> Self {
         let mut clone = self.clone();
+        // Keep warmed records without copying their documentation. Each snapshot owns
+        // its map so invalidation cannot mutate the previous generation's cache.
         clone.symbol_lookup_cache = Arc::new(Mutex::new(
             self.symbol_lookup_cache
                 .lock()
-                .map(|cache| cache.clone())
-                .unwrap_or_default(),
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .clone(),
         ));
-        clone.file_lookup_cache = Arc::new(Mutex::new(
-            self.file_lookup_cache
-                .lock()
-                .map(|cache| cache.clone())
-                .unwrap_or_default(),
-        ));
-        clone.sage_method_lookup_cache = Arc::new(Mutex::new(
-            self.sage_method_lookup_cache
-                .lock()
-                .map(|cache| cache.clone())
-                .unwrap_or_default(),
-        ));
-        clone.reference_lookup_cache = Arc::new(Mutex::new(
-            self.reference_lookup_cache
-                .lock()
-                .map(|cache| cache.clone())
-                .unwrap_or_default(),
-        ));
+        clone.file_lookup_cache = Arc::default();
+        clone.sage_method_lookup_cache = Arc::default();
+        clone.reference_lookup_cache = Arc::default();
         clone.identifier_filter_cache_was_ready = self
             .identifier_filter_cache
             .lock()
@@ -180,11 +167,11 @@ impl WorkspaceIndex {
                     .or_default()
                     .push(symbol.clone());
             }
-            files.insert(file.path.clone(), file);
+            files.insert(file.path.clone(), Arc::new(file));
         }
 
         self.files = files;
-        self.symbols_by_name = symbols_by_name;
+        self.symbols_by_name = Arc::new(symbols_by_name);
         self.generation = self.generation.saturating_add(1);
         self.last_index_ms = started.elapsed().as_millis();
         self.loaded_roots = self.options.roots.clone();
@@ -237,7 +224,7 @@ impl WorkspaceIndex {
                         .unwrap_or(false);
                     if mismatches.is_empty() && file_count > 0 && editable_roots_unchanged {
                         self.files.clear();
-                        self.symbols_by_name.clear();
+                        self.symbols_by_name = Arc::default();
                         self.clear_lookup_cache();
                         self.loaded_roots = self.options.roots.clone();
                         self.cached_file_count = file_count;
@@ -295,7 +282,7 @@ impl WorkspaceIndex {
             .collect();
 
         self.files.clear();
-        self.symbols_by_name.clear();
+        self.symbols_by_name = Arc::default();
         self.clear_identifier_filter_cache();
         self.clear_lookup_cache();
         self.loaded_roots = self.options.roots.clone();
@@ -400,7 +387,7 @@ impl WorkspaceIndex {
             self.cache_hit_count = self.cache_hit_count.saturating_add(file_count);
         }
         self.files.clear();
-        self.symbols_by_name.clear();
+        self.symbols_by_name = Arc::default();
         self.clear_identifier_filter_cache();
         self.clear_lookup_cache();
         self.cached_file_count = file_count;
@@ -481,7 +468,9 @@ impl WorkspaceIndex {
             }
             match parse_file_for_roots(path, &self.options.roots) {
                 Ok(file) => {
-                    if let Some(previous) = self.files.insert(file.path.clone(), file.clone()) {
+                    if let Some(previous) =
+                        self.files.insert(file.path.clone(), Arc::new(file.clone()))
+                    {
                         insert_file_symbol_names(&mut dirty_lookup_names, &previous);
                     }
                     insert_file_symbol_names(&mut dirty_lookup_names, &file);
@@ -599,7 +588,7 @@ impl WorkspaceIndex {
             {
                 continue;
             }
-            if let Some(previous) = self.files.insert(file.path.clone(), file.clone()) {
+            if let Some(previous) = self.files.insert(file.path.clone(), Arc::new(file.clone())) {
                 insert_file_symbol_names(&mut dirty_lookup_names, &previous);
             }
             insert_file_symbol_names(&mut dirty_lookup_names, &file);
@@ -611,6 +600,11 @@ impl WorkspaceIndex {
             self.clear_lookup_cache_entries(&dirty_lookup_names);
         }
         loaded
+    }
+
+    /// In-memory revision for query cache keys; does not open SQLite.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     pub fn status(&self) -> IndexStatus {
@@ -696,8 +690,12 @@ impl WorkspaceIndex {
     }
 
     fn rebuild_symbol_map(&mut self) {
-        let files: Vec<_> = self.files.values().cloned().collect();
-        self.symbols_by_name = symbol_map_from_files(&files);
+        let files: Vec<_> = self
+            .files
+            .values()
+            .map(|file| file.as_ref().clone())
+            .collect();
+        self.symbols_by_name = Arc::new(symbol_map_from_files(&files));
     }
 
     fn persist_all(&self) -> Result<()> {

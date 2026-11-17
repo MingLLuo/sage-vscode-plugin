@@ -42,7 +42,6 @@ async fn runtime_definition_does_not_override_local_bindings_or_non_code() {
         backend
             .open_documents
             .write()
-            .await
             .insert(uri.clone(), OpenDocument::live(&uri, text.to_string(), 1));
         backend.navigation_cache.write().await.clear();
         let result = backend

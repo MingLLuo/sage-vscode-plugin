@@ -22,6 +22,7 @@ pub use completion::{
     local_import_alias_symbol_from_source, local_import_alias_symbol_from_source_name,
     local_import_alias_symbol_from_symbols,
 };
+pub use lexical_scope::source_block_ranges;
 pub use sage_types::sage_prewarm_modules_for_source;
 
 pub(super) use calls::*;

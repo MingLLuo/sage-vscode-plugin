@@ -123,7 +123,10 @@ pub(super) fn doc_after_offset(source: &str, offset: usize) -> Option<String> {
 }
 
 pub(super) fn definition_header_end(source: &str, offset: usize) -> Option<usize> {
-    let line_start = source[..offset].rfind('\n').map_or(0, |index| index + 1);
+    let line_start = source
+        .get(..offset)?
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
     let mut depth = 0usize;
     for (relative, ch) in source[line_start..].char_indices() {
         let absolute = line_start + relative;

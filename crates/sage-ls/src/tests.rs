@@ -8,8 +8,18 @@ mod reference_tests;
 async fn documentation_placeholder_at_position_attempts_runtime_lookup() {
     let (service, _socket) = LspService::new(Backend::new);
     let backend = service.inner();
+    // Enable an unavailable test runtime: an unconfigured worker now correctly
+    // skips IO instead of counting it as a cache miss.
+    backend
+        .runtime_docs
+        .configure(RuntimeDocsConfig {
+            enabled: true,
+            interpreter_path: "sage-docs-no-such-interpreter".into(),
+            ..RuntimeDocsConfig::default()
+        })
+        .await;
     let uri = parse_uri("file:///workspace/docs.sage").unwrap();
-    backend.open_documents.write().await.insert(
+    backend.open_documents.write().insert(
         uri.clone(),
         OpenDocument::live(&uri, "PolynomialRing(QQ, 'x')".to_string(), 1),
     );
@@ -32,8 +42,18 @@ async fn documentation_placeholder_at_position_attempts_runtime_lookup() {
 async fn explicit_documentation_symbol_overrides_cursor_and_keeps_local_docs() {
     let (service, _socket) = LspService::new(Backend::new);
     let backend = service.inner();
+    // Enable an unavailable test runtime: an unconfigured worker now correctly
+    // skips IO instead of counting it as a cache miss.
+    backend
+        .runtime_docs
+        .configure(RuntimeDocsConfig {
+            enabled: true,
+            interpreter_path: "sage-docs-no-such-interpreter".into(),
+            ..RuntimeDocsConfig::default()
+        })
+        .await;
     let uri = parse_uri("file:///workspace/docs.py").unwrap();
-    backend.open_documents.write().await.insert(
+    backend.open_documents.write().insert(
         uri.clone(),
         OpenDocument::live(&uri, "def selected():\n    \"\"\"Selected function documentation.\"\"\"\n    pass\ndef adjacent():\n    \"\"\"Wrong documentation.\"\"\"\n    pass\n".to_string(),
             1,
@@ -60,13 +80,6 @@ async fn explicit_documentation_symbol_overrides_cursor_and_keeps_local_docs() {
         status["runtime_cache_misses"], 1,
         "runtime preference must attempt lookup even when local docs exist"
     );
-}
-
-#[test]
-fn background_index_results_require_latest_job_and_unchanged_index() {
-    assert!(index_job_result_is_current(2, 2, 7, 7));
-    assert!(!index_job_result_is_current(3, 2, 7, 7));
-    assert!(!index_job_result_is_current(2, 2, 8, 7));
 }
 
 #[test]
@@ -978,4 +991,107 @@ fn hint_label(hint: &InlayHint) -> Option<&str> {
         InlayHintLabel::String(label) => Some(label.as_str()),
         InlayHintLabel::LabelParts(_) => None,
     }
+}
+
+#[tokio::test]
+async fn document_snapshots_survive_edits_and_reject_stale_versions() {
+    let (service, _socket) = LspService::new(Backend::new);
+    let backend = service.inner();
+    let uri = parse_uri("file:///workspace/snapshot.sage").unwrap();
+    backend
+        .did_open(DidOpenTextDocumentParams {
+            text_document: TextDocumentItem {
+                uri: uri.clone(),
+                language_id: "sagemath".into(),
+                version: 1,
+                text: "x = '😀'\n".into(),
+            },
+        })
+        .await;
+    let old = backend.open_documents.read().get(&uri).unwrap().clone();
+    for (version, replacement) in [(2, "中"), (1, "stale")] {
+        backend
+            .did_change(DidChangeTextDocumentParams {
+                text_document: VersionedTextDocumentIdentifier {
+                    uri: uri.clone(),
+                    version,
+                },
+                content_changes: vec![TextDocumentContentChangeEvent {
+                    range: Some(Range::new(Position::new(0, 5), Position::new(0, 7))),
+                    range_length: None,
+                    text: replacement.into(),
+                }],
+            })
+            .await;
+    }
+    assert_eq!(old.text, "x = '😀'\n");
+    assert_eq!(
+        backend.open_documents.read().get(&uri).unwrap().text,
+        "x = '中'\n"
+    );
+    assert!(backend.ensure_current_document(&uri, &old).is_err());
+    backend.shutdown().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancelling_blocking_query_releases_reserved_slot() {
+    let slots = Arc::new(tokio::sync::Semaphore::new(1));
+    let started = Arc::new(AtomicBool::new(false));
+    let marker = started.clone();
+    let pool = slots.clone();
+    let task = tokio::spawn(async move {
+        run_cancellable(pool, move |cancelled| {
+            marker.store(true, Ordering::Release);
+            while !cancelled.load(Ordering::Acquire) {
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+        })
+        .await
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(2), async {
+        while !started.load(Ordering::Acquire) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+    task.abort();
+    let _ = task.await;
+    let _permit = tokio::time::timeout(std::time::Duration::from_secs(2), slots.acquire())
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[test]
+fn multiline_function_folds_and_call_hierarchy_include_column_zero_string_lines() {
+    let source = "def caller(\n    value,\n):\n    text = \"\"\"example\ncolumn zero\n\"\"\"\n    target(value)\n\ndef sibling():\n    other()\n";
+    let folds = sage_folding_ranges(source);
+    assert!(
+        folds
+            .iter()
+            .any(|fold| fold.start_line == 0 && fold.end_line == 6),
+        "{folds:?}"
+    );
+    let path = PathBuf::from("/tmp/multiline-caller.sage");
+    let uri = Uri::from_file_path(&path).unwrap();
+    let item = enclosing_call_hierarchy_item(&uri, &path, source, Position::new(6, 6)).unwrap();
+    assert_eq!(item.name, "caller");
+    assert_eq!(item.range.start.line, 0);
+    assert_eq!(item.range.end.line, 6);
+    let sibling = enclosing_call_hierarchy_item(&uri, &path, source, Position::new(9, 6)).unwrap();
+    assert_eq!(sibling.name, "sibling");
+}
+
+#[test]
+fn function_fold_stops_before_a_dedented_string_statement() {
+    let source =
+        "def caller():\n    target()\n\"\"\"module-level string\nnot part of caller\n\"\"\"\n";
+    let folds = sage_folding_ranges(source);
+    assert!(
+        folds
+            .iter()
+            .any(|fold| fold.start_line == 0 && fold.end_line == 1),
+        "{folds:?}"
+    );
 }

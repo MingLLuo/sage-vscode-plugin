@@ -219,7 +219,7 @@ impl Backend {
         ) else {
             return Ok(None);
         };
-        let index = self.index.read().await;
+        let index = self.index.load_full();
         let Some(definition) =
             index.type_definition_at_source(&path, &document.text, query_position)
         else {
@@ -330,7 +330,7 @@ impl Backend {
         // Navigation queries omit presentation records. Resolve with lexical
         // context before allowing a runtime fallback; a same-named local or an
         // ambiguous member must never jump to a Sage global.
-        let query = self.index.read().await.query_source_at_with_features(
+        let query = self.index.load_full().query_source_at_with_features(
             path,
             text,
             position,
@@ -350,7 +350,7 @@ impl Backend {
         let source = self.runtime_docs.source_location(&record.name).await?;
         let (uri, text) =
             if let Some((uri, document)) = self.open_document_for_path(&source.path).await {
-                (uri, document.text)
+                (uri, document.text.clone())
             } else {
                 (
                     Uri::from_file_path(&source.path)?,
@@ -360,8 +360,11 @@ impl Backend {
         runtime_source_location(uri, &text, &source)
     }
 
-    pub(super) async fn open_document_for_path(&self, path: &Path) -> Option<(Uri, OpenDocument)> {
-        let documents = self.open_documents.read().await;
+    pub(super) async fn open_document_for_path(
+        &self,
+        path: &Path,
+    ) -> Option<(Uri, std::sync::Arc<OpenDocument>)> {
+        let documents = self.open_documents.read();
         let live = live_document_for_path(&documents, path)?;
         Some((live.uri, live.document))
     }
@@ -397,25 +400,30 @@ impl Backend {
                 ..QueryResult::default()
             };
         };
-        let index = self.index.read().await;
-        let index_generation = index.status().generation;
+        let index = self.index.load_full();
+        let index_generation = index.generation();
         let flavor = request_kind.cache_flavor();
         let key = navigation_query_cache_key(uri, document, position, index_generation, flavor);
         if let Some(query) = self.navigation_cache.read().await.get(&key) {
             drop(index);
             return query;
         }
-        let query = index.query_source_at_navigation_for_role(
-            path,
-            &document.text,
-            query_position,
-            request_kind.index_role(),
-        );
+        let path = path.to_path_buf();
+        let text = document.text.clone();
+        let query = super::run_blocking(self.query_slots.clone(), move || {
+            index.query_source_at_navigation_for_role(
+                &path,
+                &text,
+                query_position,
+                request_kind.index_role(),
+            )
+        })
+        .await
+        .unwrap_or_default();
         self.navigation_cache.write().await.insert(
             navigation_query_cache_key(uri, document, position, index_generation, flavor),
             query.clone(),
         );
-        drop(index);
         query
     }
 

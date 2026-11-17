@@ -36,8 +36,7 @@ fn symbol_lookup_prefers_definitions_over_imports() {
         signature: Some("target()".to_string()),
     };
     let mut index = WorkspaceIndex::default();
-    index
-        .symbols_by_name
+    Arc::make_mut(&mut index.symbols_by_name)
         .insert("target".to_string(), vec![import, definition]);
 
     let symbol = index.symbol("target").expect("symbol should resolve");

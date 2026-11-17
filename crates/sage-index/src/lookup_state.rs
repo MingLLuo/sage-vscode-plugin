@@ -11,7 +11,7 @@ impl WorkspaceIndex {
                 return Some(file.clone());
             }
         }
-        let mut file = if let Some(file) = self.files.get(&path).cloned() {
+        let mut file = if let Some(file) = self.files.get(&path).map(|file| file.as_ref().clone()) {
             file
         } else if self.cached_file_count > 0 {
             load_file_from_db(&self.db_path, &path).ok()?
@@ -357,7 +357,7 @@ impl WorkspaceIndex {
             for name in names {
                 let key = name.to_ascii_lowercase();
                 let symbols = grouped.remove(&key).unwrap_or_default();
-                cache.insert(key, dedupe_symbol_records(symbols));
+                cache.insert(key, Arc::new(dedupe_symbol_records(symbols)));
             }
         }
         self.prewarm_hot_sage_method_cache();

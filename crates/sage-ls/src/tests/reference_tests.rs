@@ -841,7 +841,10 @@ async fn incoming_calls_find_same_file_callers_before_the_index_is_ready() {
         .unwrap_or_default();
     let _ = std::fs::remove_dir_all(&root);
 
-    let callers: Vec<&str> = incoming.iter().map(|call| call.from.name.as_str()).collect();
+    let callers: Vec<&str> = incoming
+        .iter()
+        .map(|call| call.from.name.as_str())
+        .collect();
     assert_eq!(
         callers,
         vec!["caller"],

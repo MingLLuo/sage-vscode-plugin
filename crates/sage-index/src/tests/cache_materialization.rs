@@ -1163,3 +1163,35 @@ fn connection_refresh_keeps_polyhedron_method_cache_class_scoped() {
 
     fs::remove_dir_all(root).ok();
 }
+
+#[test]
+fn background_snapshots_keep_warm_records_with_independent_invalidation() {
+    let root = test_root("snapshot-warm-cache");
+    fs::write(root.join("mod.py"), "def warmed_symbol():\n    return 1\n").unwrap();
+    let mut current = WorkspaceIndex::new(IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: vec![root.clone()],
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    });
+    current.rebuild().unwrap();
+    current.symbol_candidates("warmed_symbol");
+    let background = current.clone_for_background_work();
+    let old_records = current.symbol_lookup_cache.lock().unwrap()["warmed_symbol"].clone();
+    let new_records = background.symbol_lookup_cache.lock().unwrap()["warmed_symbol"].clone();
+    assert!(Arc::ptr_eq(&old_records, &new_records));
+    assert!(background.lookup_cache_len() > 0);
+    background.clear_lookup_cache_entries(&BTreeSet::from(["warmed_symbol".to_string()]));
+    assert!(current
+        .symbol_lookup_cache
+        .lock()
+        .unwrap()
+        .contains_key("warmed_symbol"));
+    assert!(!background
+        .symbol_lookup_cache
+        .lock()
+        .unwrap()
+        .contains_key("warmed_symbol"));
+    fs::remove_dir_all(root).ok();
+}

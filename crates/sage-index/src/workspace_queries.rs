@@ -1030,7 +1030,10 @@ impl WorkspaceIndex {
     }
 
     pub fn all_files(&self) -> Vec<IndexedFile> {
-        self.files.values().cloned().collect()
+        self.files
+            .values()
+            .map(|file| file.as_ref().clone())
+            .collect()
     }
 
     fn module_hint_for_query_path(&self, query_path: &Path) -> Option<String> {

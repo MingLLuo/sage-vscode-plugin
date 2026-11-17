@@ -33,8 +33,7 @@ use documentation::{
 #[cfg(test)]
 use editor_features::sage_selection_range;
 use editor_features::{sage_folding_ranges, sage_inlay_hints, sage_selection_ranges};
-#[cfg(test)]
-use index_jobs::index_job_result_is_current;
+use index_jobs::{IndexActor, IndexHandle};
 use initialization::{
     default_excludes, parse_initialization_options, source_roots_from_options,
     workspace_folders_from_options, DocumentationPreferredSource,
@@ -55,8 +54,8 @@ use navigation::{
 #[cfg(test)]
 use open_documents::source_text_fingerprint;
 use open_documents::{
-    live_document_for_path, live_document_for_uri_or_path, parse_uri, uri_to_path, OpenDocument,
-    OpenDocumentMap,
+    live_document_for_path, live_document_for_uri_or_path, parse_uri, uri_to_path, DocumentStore,
+    OpenDocument,
 };
 use references::ReferenceCollectionMode;
 #[cfg(test)]
@@ -84,15 +83,15 @@ use source_symbols::{document_symbols_for_source, module_name_for_path};
 use std::collections::BTreeSet;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use text_positions::{
-    apply_text_document_change, byte_offset_to_utf16_character, is_word_byte, line_byte_bounds,
+    apply_text_document_change, byte_offset_to_utf16_character, is_word_byte,
     lsp_position_for_byte_column, lsp_range_for_text, query_position_from_lsp,
     utf16_character_to_byte_offset, word_at_position,
 };
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::RwLock;
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::request::{
     GotoDeclarationParams, GotoDeclarationResponse, GotoImplementationParams,
@@ -100,6 +99,10 @@ use tower_lsp_server::ls_types::request::{
 };
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer, LspService, Server};
+
+#[cfg(target_env = "musl")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
@@ -147,8 +150,8 @@ async fn refresh_editor_feature_caches(client: &Client) {
 
 struct Backend {
     client: Client,
-    index: Arc<RwLock<WorkspaceIndex>>,
-    open_documents: Arc<RwLock<OpenDocumentMap>>,
+    index: IndexHandle,
+    open_documents: Arc<DocumentStore>,
     navigation_cache: Arc<RwLock<NavigationQueryCache>>,
     navigation_link_support: Arc<RwLock<NavigationLinkSupport>>,
     versioned_workspace_edits: Arc<RwLock<bool>>,
@@ -156,13 +159,13 @@ struct Backend {
     diagnostics_enabled: Arc<RwLock<bool>>,
     docs_on_hover_enabled: Arc<RwLock<bool>>,
     docs_preferred_source: Arc<RwLock<DocumentationPreferredSource>>,
-    pending_jobs: Arc<RwLock<usize>>,
-    pending_index_task: Arc<RwLock<Option<String>>>,
-    index_job_generation: Arc<AtomicU64>,
-    index_work_gate: Arc<Mutex<()>>,
+    index_actor: IndexActor,
     shutting_down: Arc<AtomicBool>,
     linked_document_prewarmer: LinkedDocumentPrewarmer,
     runtime_docs: RuntimeDocsWorker,
+    query_slots: Arc<tokio::sync::Semaphore>,
+    reference_slots: Arc<tokio::sync::Semaphore>,
+    diagnostic_tasks: std::sync::Mutex<HashMap<Uri, tokio::task::AbortHandle>>,
 }
 
 #[derive(Clone, Debug)]
@@ -172,20 +175,83 @@ struct DocumentationPositionContext {
     position: QueryPosition,
 }
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 2)]
-async fn main() {
-    let stdin = tokio::io::stdin();
-    let stdout = tokio::io::stdout();
-    let (service, socket) = LspService::new(Backend::new);
-    Server::new(stdin, stdout, socket).serve(service).await;
+fn main() {
+    if std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--version" || arg == "-V")
+    {
+        println!("sage-ls {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    let threads = std::thread::available_parallelism()
+        .map_or(2, usize::from)
+        .min(4);
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(threads)
+        .enable_all()
+        .build()
+        .expect("create LSP runtime");
+    let orderly = runtime.block_on(async {
+        let (service, socket) = LspService::new(Backend::new);
+        let shutting_down = service.inner().shutting_down.clone();
+        let runtime_docs = service.inner().runtime_docs.clone();
+        Server::new(tokio::io::stdin(), tokio::io::stdout(), socket)
+            .concurrency_level(32)
+            .serve(service)
+            .await;
+        runtime_docs.shutdown();
+        shutting_down.load(Ordering::Acquire)
+    });
+    // Tokio stdin uses a blocking read which cannot be cancelled if the client keeps its pipe open.
+    runtime.shutdown_timeout(std::time::Duration::from_millis(100));
+    std::process::exit(if orderly { 0 } else { 1 });
+}
+
+struct CancelOnDrop(Arc<AtomicBool>);
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
+async fn run_blocking<T: Send + 'static>(
+    slots: Arc<tokio::sync::Semaphore>,
+    work: impl FnOnce() -> T + Send + 'static,
+) -> Result<T> {
+    run_cancellable(slots, move |_| work()).await
+}
+
+async fn run_cancellable<T: Send + 'static>(
+    slots: Arc<tokio::sync::Semaphore>,
+    work: impl FnOnce(Arc<AtomicBool>) -> T + Send + 'static,
+) -> Result<T> {
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let _cancel_on_drop = CancelOnDrop(cancelled.clone());
+    let permit = slots
+        .acquire_owned()
+        .await
+        .map_err(|_| tower_lsp_server::jsonrpc::Error::internal_error())?;
+    tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        if cancelled.load(Ordering::Acquire) {
+            return Err(tower_lsp_server::jsonrpc::Error::request_cancelled());
+        }
+        Ok(work(cancelled))
+    })
+    .await
+    .map_err(|_| tower_lsp_server::jsonrpc::Error::internal_error())?
 }
 
 impl Backend {
     fn new(client: Client) -> Self {
+        let index = Arc::new(arc_swap::ArcSwap::from_pointee(WorkspaceIndex::default()));
+        let shutting_down = Arc::new(AtomicBool::new(false));
+        let index_actor =
+            IndexActor::new(index.clone(), Some(client.clone()), shutting_down.clone());
         Self {
             client,
-            index: Arc::new(RwLock::new(WorkspaceIndex::default())),
-            open_documents: Arc::new(RwLock::new(OpenDocumentMap::new())),
+            index,
+            open_documents: Arc::default(),
             navigation_cache: Arc::new(RwLock::new(NavigationQueryCache::default())),
             navigation_link_support: Arc::new(RwLock::new(NavigationLinkSupport::default())),
             versioned_workspace_edits: Arc::new(RwLock::new(false)),
@@ -193,13 +259,13 @@ impl Backend {
             diagnostics_enabled: Arc::new(RwLock::new(true)),
             docs_on_hover_enabled: Arc::new(RwLock::new(true)),
             docs_preferred_source: Arc::new(RwLock::new(DocumentationPreferredSource::Auto)),
-            pending_jobs: Arc::new(RwLock::new(0)),
-            pending_index_task: Arc::new(RwLock::new(None)),
-            index_job_generation: Arc::new(AtomicU64::new(0)),
-            index_work_gate: Arc::new(Mutex::new(())),
-            shutting_down: Arc::new(AtomicBool::new(false)),
+            index_actor,
+            shutting_down,
             linked_document_prewarmer: LinkedDocumentPrewarmer::default(),
             runtime_docs: RuntimeDocsWorker::default(),
+            query_slots: Arc::new(tokio::sync::Semaphore::new(3)),
+            reference_slots: Arc::new(tokio::sync::Semaphore::new(1)),
+            diagnostic_tasks: std::sync::Mutex::default(),
         }
     }
 }
@@ -266,12 +332,9 @@ impl LanguageServer for Backend {
             cache_dir,
             enable_pyx: options.analysis.enable_pyx_parsing,
         };
-        let mut hydrated = WorkspaceIndex::new(index_options);
-        trace_initialize_phase(initialize_started, "index-new");
-        let _ = hydrated.hydrate_from_cache();
-        trace_initialize_phase(initialize_started, "hydrate");
-        *self.index.write().await = hydrated;
-        self.spawn_cache_reconcile();
+        self.index
+            .store(Arc::new(WorkspaceIndex::new(index_options)));
+        self.index_actor.reconcile();
         trace_initialize_phase(initialize_started, "spawn-reconcile");
 
         Ok(InitializeResult {
@@ -371,13 +434,23 @@ impl LanguageServer for Backend {
     async fn shutdown(&self) -> Result<()> {
         self.shutting_down.store(true, Ordering::Release);
         self.linked_document_prewarmer.cancel_all();
+        self.index_actor.stop();
+        self.runtime_docs.shutdown();
+        for (_, task) in self
+            .diagnostic_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain()
+        {
+            task.abort();
+        }
         Ok(())
     }
 
     async fn did_open(&self, params: DidOpenTextDocumentParams) {
         let uri = params.text_document.uri.clone();
         let text = params.text_document.text.clone();
-        self.open_documents.write().await.insert(
+        self.open_documents.write().insert(
             params.text_document.uri.clone(),
             OpenDocument::live(
                 &params.text_document.uri,
@@ -395,10 +468,14 @@ impl LanguageServer for Backend {
         let uri = params.text_document.uri.clone();
         let mut errors = Vec::new();
         let text = {
-            let mut documents = self.open_documents.write().await;
+            let mut documents = self.open_documents.write();
             let document = documents.entry(uri.clone()).or_insert_with(|| {
                 OpenDocument::live(&uri, String::new(), params.text_document.version)
             });
+            if params.text_document.version <= document.version {
+                return;
+            }
+            let document = Arc::make_mut(document);
             document.version = params.text_document.version;
             document.content_fingerprint = None;
             for change in params.content_changes {
@@ -406,6 +483,8 @@ impl LanguageServer for Backend {
                     errors.push(error);
                 }
             }
+            document.lines = text_positions::LineIndex::new(&document.text);
+            document.tokens.take();
             document.text.clone()
         };
         self.navigation_cache.write().await.invalidate_uri(&uri);
@@ -426,11 +505,18 @@ impl LanguageServer for Backend {
     }
 
     async fn did_close(&self, params: DidCloseTextDocumentParams) {
+        if let Some(task) = self
+            .diagnostic_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&params.text_document.uri)
+        {
+            task.abort();
+        }
         self.linked_document_prewarmer
             .cancel(&params.text_document.uri);
         self.open_documents
             .write()
-            .await
             .remove(&params.text_document.uri);
         self.navigation_cache
             .write()
@@ -444,10 +530,13 @@ impl LanguageServer for Backend {
             if let Some(document) = self
                 .open_documents
                 .write()
-                .await
                 .get_mut(&params.text_document.uri)
             {
+                let document = Arc::make_mut(document);
                 document.text = text.clone();
+                document.content_fingerprint = None;
+                document.lines = text_positions::LineIndex::new(&text);
+                document.tokens.take();
             }
             saved_text = Some(text);
         }
@@ -459,7 +548,6 @@ impl LanguageServer for Backend {
             let version = self
                 .open_documents
                 .read()
-                .await
                 .get(&params.text_document.uri)
                 .map_or(i32::MIN, |document| document.version);
             self.schedule_linked_document_prewarm(
@@ -469,7 +557,7 @@ impl LanguageServer for Backend {
             );
         }
         if let Some(path) = uri_to_path(&params.text_document.uri) {
-            self.refresh_paths(vec![path], Vec::new()).await;
+            self.index_actor.refresh(vec![path], Vec::new());
         }
         if let Some(text) = saved_text.or_else(|| {
             uri_to_path(&params.text_document.uri)
@@ -488,14 +576,20 @@ impl LanguageServer for Backend {
                 continue;
             };
             match event.typ {
-                FileChangeType::DELETED => deleted.push(path),
-                FileChangeType::CREATED | FileChangeType::CHANGED => changed.push(path),
+                FileChangeType::DELETED => {
+                    changed.retain(|p| p != &path);
+                    deleted.push(path);
+                }
+                FileChangeType::CREATED | FileChangeType::CHANGED => {
+                    deleted.retain(|p| p != &path);
+                    changed.push(path);
+                }
                 _ => {}
             }
         }
         if !changed.is_empty() || !deleted.is_empty() {
             self.navigation_cache.write().await.clear();
-            self.refresh_paths(changed, deleted).await;
+            self.index_actor.refresh(changed, deleted);
         }
     }
 
@@ -529,8 +623,8 @@ impl LanguageServer for Backend {
         let Some(query_position) = query_position_from_lsp(&document.text, position) else {
             return Ok(None);
         };
-        let index = self.index.read().await;
-        let index_generation = index.status().generation;
+        let index = self.index.load_full();
+        let index_generation = index.generation();
         let key = navigation_query_cache_key(
             uri,
             &document,
@@ -543,13 +637,18 @@ impl LanguageServer for Backend {
             drop(index);
             query
         } else {
-            let query = index.query_source_at_with_features(
-                &path,
-                &document.text,
-                query_position,
-                None,
-                QueryFeatures::hover(),
-            );
+            let snapshot = document.clone();
+            let query = run_blocking(self.query_slots.clone(), move || {
+                index.query_source_at_with_features(
+                    &path,
+                    &snapshot.text,
+                    query_position,
+                    None,
+                    QueryFeatures::hover(),
+                )
+            })
+            .await?;
+            self.ensure_current_document(uri, &document)?;
             self.navigation_cache.write().await.insert(
                 navigation_query_cache_key(
                     uri,
@@ -560,7 +659,6 @@ impl LanguageServer for Backend {
                 ),
                 query.clone(),
             );
-            drop(index);
             query
         };
         let show_docs_on_hover = *self.docs_on_hover_enabled.read().await;
@@ -642,12 +740,17 @@ impl LanguageServer for Backend {
             else {
                 return Ok(Some(CompletionResponse::Array(Vec::new())));
             };
-            let index = self.index.read().await;
-            let items = index
-                .completion_items_at_source(&document.text, query_position, 100)
-                .into_iter()
-                .map(query_completion_item)
-                .collect();
+            let index = self.index.load_full();
+            let snapshot = document.clone();
+            let items = run_blocking(self.query_slots.clone(), move || {
+                index
+                    .completion_items_at_source(&snapshot.text, query_position, 100)
+                    .into_iter()
+                    .map(query_completion_item)
+                    .collect()
+            })
+            .await?;
+            self.ensure_current_document(uri, &document)?;
             return Ok(Some(CompletionResponse::Array(items)));
         }
         let prefix = self
@@ -657,7 +760,7 @@ impl LanguageServer for Backend {
             )
             .await
             .unwrap_or_default();
-        let index = self.index.read().await;
+        let index = self.index.load_full();
         let items = index
             .symbols_with_prefix(&prefix, 100)
             .into_iter()
@@ -684,8 +787,7 @@ impl LanguageServer for Backend {
             .filter(|module| !module.is_empty());
         let documentation = self
             .index
-            .read()
-            .await
+            .load_full()
             .documentation_for_symbol_with_module(name, module_hint);
         if let Some(documentation) = documentation {
             item.documentation = Some(completion_documentation(hover_markdown_for_documentation(
@@ -744,7 +846,7 @@ impl LanguageServer for Backend {
             let Some(call) = fallback else {
                 return Ok(None);
             };
-            let index = self.index.read().await;
+            let index = self.index.load_full();
             let target =
                 index.query_source_at_navigation(&path, &document.text, call.name_position);
             let confirmed = (target.resolution_confidence.as_deref() == Some("high"))
@@ -849,7 +951,7 @@ impl LanguageServer for Backend {
         };
         for location in self
             .reference_locations(&target, false, ReferenceCollectionMode::References)
-            .await
+            .await?
         {
             if location.uri == params.item.uri && location.range == params.item.selection_range {
                 continue;
@@ -901,7 +1003,7 @@ impl LanguageServer for Backend {
             return Ok(Some(Vec::new()));
         };
         let resolved_calls = {
-            let index = self.index.read().await;
+            let index = self.index.load_full();
             resolve_outgoing_calls(
                 &index,
                 &path,
@@ -927,7 +1029,6 @@ impl LanguageServer for Backend {
         let Some(document) = self
             .open_documents
             .read()
-            .await
             .get(&params.text_document.uri)
             .cloned()
         else {
@@ -940,7 +1041,6 @@ impl LanguageServer for Backend {
         let Some(document) = self
             .open_documents
             .read()
-            .await
             .get(&params.text_document.uri)
             .cloned()
         else {
@@ -956,7 +1056,6 @@ impl LanguageServer for Backend {
         let Some(document) = self
             .open_documents
             .read()
-            .await
             .get(&params.text_document.uri)
             .cloned()
         else {
@@ -975,7 +1074,6 @@ impl LanguageServer for Backend {
         let Some(document) = self
             .open_documents
             .read()
-            .await
             .get(&params.text_document.uri)
             .cloned()
         else {
@@ -983,10 +1081,14 @@ impl LanguageServer for Backend {
         };
         let path = uri_to_path(&params.text_document.uri)
             .unwrap_or_else(|| PathBuf::from("document.sage"));
-        let parsed = parse_source(module_name_for_path(&path), &path, &document.text);
-        Ok(Some(DocumentSymbolResponse::Nested(
-            document_symbols_for_source(&document.text, &parsed.symbols),
-        )))
+        let snapshot = document.clone();
+        let symbols = run_blocking(self.query_slots.clone(), move || {
+            let parsed = parse_source(module_name_for_path(&path), &path, &snapshot.text);
+            document_symbols_for_source(&snapshot.text, &parsed.symbols)
+        })
+        .await?;
+        self.ensure_current_document(&params.text_document.uri, &document)?;
+        Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
     async fn symbol(
@@ -1007,7 +1109,6 @@ impl LanguageServer for Backend {
         let Some(document) = self
             .open_documents
             .read()
-            .await
             .get(&params.text_document.uri)
             .cloned()
         else {
@@ -1018,7 +1119,9 @@ impl LanguageServer for Backend {
         };
         Ok(Some(SemanticTokensResult::Tokens(SemanticTokens {
             result_id: None,
-            data: encode_semantic_tokens(&document.text),
+            data: self
+                .document_tokens(&params.text_document.uri, document)
+                .await?,
         })))
     }
 
@@ -1029,7 +1132,6 @@ impl LanguageServer for Backend {
         let Some(document) = self
             .open_documents
             .read()
-            .await
             .get(&params.text_document.uri)
             .cloned()
         else {
@@ -1040,7 +1142,12 @@ impl LanguageServer for Backend {
         };
         Ok(Some(SemanticTokensRangeResult::Tokens(SemanticTokens {
             result_id: None,
-            data: encode_semantic_tokens_for_range(&document.text, params.range),
+            data: tokens_for_range(
+                &self
+                    .document_tokens(&params.text_document.uri, document)
+                    .await?,
+                params.range,
+            ),
         })))
     }
 
@@ -1049,7 +1156,7 @@ impl LanguageServer for Backend {
             COMMAND_INDEX_STATUS => Ok(Some(self.index_status_payload().await)),
             COMMAND_DOCS_STATUS => Ok(Some(self.docs_status_payload().await)),
             COMMAND_REBUILD_INDEX => {
-                self.spawn_rebuild();
+                self.index_actor.rebuild();
                 Ok(Some(self.index_status_payload().await))
             }
             COMMAND_GET_DOCUMENTATION => {
@@ -1111,35 +1218,94 @@ fn query_feature_bool(payload: &Value, key: &str) -> Option<bool> {
 }
 
 impl Backend {
-    async fn publish_diagnostics_for_text(&self, uri: Uri, text: String) {
+    async fn publish_diagnostics_for_text(&self, uri: Uri, _text: String) {
         let Some(path) = uri_to_path(&uri) else {
             return;
         };
-        let diagnostics = if *self.diagnostics_enabled.read().await {
-            self.index
-                .read()
-                .await
-                .diagnostics_for_source(&path, &text)
-                .into_iter()
-                .map(|diagnostic| Diagnostic {
-                    range: lsp_range_for_text(&text, &diagnostic.range),
-                    severity: Some(diagnostic_severity(&diagnostic.severity)),
-                    code: Some(NumberOrString::String(diagnostic.code)),
-                    source: Some("sage-ls".to_string()),
-                    message: diagnostic.message,
-                    ..Diagnostic::default()
-                })
-                .collect()
-        } else {
-            Vec::new()
+        let Some(document) = self.open_documents.read().get(&uri).cloned() else {
+            return;
         };
-        self.client
-            .publish_diagnostics(uri, diagnostics, None)
+        let enabled = *self.diagnostics_enabled.read().await;
+        let documents = self.open_documents.clone();
+        let client = self.client.clone();
+        let slots = self.query_slots.clone();
+        let index = self.index.load_full();
+        let stopped = self.shutting_down.clone();
+        let task_uri = uri.clone();
+        let task = tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let snapshot = document.clone();
+            let diagnostics = run_blocking(slots, move || {
+                if !enabled {
+                    return Vec::new();
+                }
+                index
+                    .diagnostics_for_source(&path, &snapshot.text)
+                    .into_iter()
+                    .map(|diagnostic| Diagnostic {
+                        range: lsp_range_for_text(&snapshot.text, &diagnostic.range),
+                        severity: Some(diagnostic_severity(&diagnostic.severity)),
+                        code: Some(NumberOrString::String(diagnostic.code)),
+                        source: Some("sage-ls".into()),
+                        message: diagnostic.message,
+                        ..Diagnostic::default()
+                    })
+                    .collect()
+            })
             .await;
+            let current = documents
+                .read()
+                .get(&task_uri)
+                .is_some_and(|current| Arc::ptr_eq(current, &document));
+            if current && !stopped.load(Ordering::Acquire) {
+                if let Ok(diagnostics) = diagnostics {
+                    client
+                        .publish_diagnostics(task_uri, diagnostics, Some(document.version))
+                        .await;
+                }
+            }
+        });
+        let mut tasks = self
+            .diagnostic_tasks
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(previous) = tasks.insert(uri, task.abort_handle()) {
+            previous.abort();
+        }
     }
 
-    async fn document_for_uri(&self, uri: &Uri) -> Option<OpenDocument> {
-        let documents = self.open_documents.read().await;
+    fn ensure_current_document(&self, uri: &Uri, snapshot: &Arc<OpenDocument>) -> Result<()> {
+        if snapshot.content_fingerprint.is_none()
+            && !self
+                .open_documents
+                .read()
+                .get(uri)
+                .is_some_and(|current| Arc::ptr_eq(current, snapshot))
+        {
+            return Err(tower_lsp_server::jsonrpc::Error::content_modified());
+        }
+        Ok(())
+    }
+
+    async fn document_tokens(
+        &self,
+        uri: &Uri,
+        document: Arc<OpenDocument>,
+    ) -> Result<Vec<SemanticToken>> {
+        let snapshot = document.clone();
+        let tokens = run_blocking(self.query_slots.clone(), move || {
+            snapshot
+                .tokens
+                .get_or_init(|| encode_semantic_tokens(&snapshot.text))
+                .clone()
+        })
+        .await?;
+        self.ensure_current_document(uri, &document)?;
+        Ok(tokens)
+    }
+
+    async fn document_for_uri(&self, uri: &Uri) -> Option<Arc<OpenDocument>> {
+        let documents = self.open_documents.read();
         if let Some(live) = live_document_for_uri_or_path(&documents, uri) {
             return Some(live.document);
         }
@@ -1153,8 +1319,8 @@ impl Backend {
         &self,
         definition: &QueryDefinition,
     ) -> Option<CallHierarchyItem> {
-        let documents = self.open_documents.read().await;
-        if let Some(live) = live_document_for_path(&documents, &definition.path) {
+        let live = { live_document_for_path(&self.open_documents.read(), &definition.path) };
+        if let Some(live) = live {
             return call_hierarchy_item_for_local_definition(
                 &live.uri,
                 &live.path,
@@ -1162,7 +1328,6 @@ impl Backend {
                 definition,
             );
         }
-        drop(documents);
         let uri = Uri::from_file_path(&definition.path)?;
         if let Ok(text) = std::fs::read_to_string(&definition.path) {
             if let Some(item) =
@@ -1182,8 +1347,7 @@ impl Backend {
     fn schedule_linked_document_prewarm(&self, uri: Uri, text: String, version: i32) {
         self.linked_document_prewarmer.schedule(
             Arc::clone(&self.index),
-            Arc::clone(&self.index_work_gate),
-            Arc::clone(&self.navigation_cache),
+            self.index_actor.clone(),
             Arc::clone(&self.shutting_down),
             uri,
             text,
@@ -1192,9 +1356,9 @@ impl Backend {
     }
 
     async fn text_for_uri_or_file(&self, uri: &Uri) -> Option<String> {
-        let documents = self.open_documents.read().await;
+        let documents = self.open_documents.read();
         if let Some(live) = live_document_for_uri_or_path(&documents, uri) {
-            return Some(live.document.text);
+            return Some(live.document.text.clone());
         }
         drop(documents);
         let path = uri_to_path(uri)?;
@@ -1228,7 +1392,7 @@ impl Backend {
         let symbol = explicit_symbol.clone().or(position_symbol)?;
         let preferred_source = *self.docs_preferred_source.read().await;
         let record = if let Some(context) = &position_context {
-            let index = self.index.read().await;
+            let index = self.index.load_full();
             if let Some(selected) = &explicit_symbol {
                 index
                     .query_source_symbol(
@@ -1300,7 +1464,7 @@ impl Backend {
         let diagnostics_enabled = *self.diagnostics_enabled.read().await;
         let features = query_features_from_payload(&payload, diagnostics_enabled);
         let diagnostics = if features.diagnostics {
-            let index = self.index.read().await;
+            let index = self.index.load_full();
             index.diagnostics_for_source(&path, &document.text)
         } else {
             Vec::new()
@@ -1315,7 +1479,7 @@ impl Backend {
             })
             .and_then(|position| query_position_from_lsp(&document.text, position));
         let mut query = if let Some(position) = position {
-            self.index.read().await.query_source_at_with_features(
+            self.index.load_full().query_source_at_with_features(
                 &path,
                 &document.text,
                 position,
@@ -1323,7 +1487,7 @@ impl Backend {
                 features,
             )
         } else if let Some(symbol) = payload.get("symbol").and_then(Value::as_str) {
-            self.index.read().await.query_source_symbol_with_options(
+            self.index.load_full().query_source_symbol_with_options(
                 &path,
                 &document.text,
                 symbol,
@@ -1344,7 +1508,7 @@ impl Backend {
     async fn docs_status_payload(&self) -> Value {
         let preferred_source = self.docs_preferred_source.read().await.as_str().to_string();
         let mut status = {
-            let index = self.index.read().await;
+            let index = self.index.load_full();
             index.docs_status()
         };
         status.preferred_source = preferred_source;
@@ -1353,7 +1517,7 @@ impl Backend {
     }
 
     async fn persist_runtime_documentation(&self, symbol: &str, record: &DocumentationRecord) {
-        let index = self.index.read().await;
+        let index = self.index.load_full();
         let _ = index.write_runtime_documentation(symbol, record);
     }
 
@@ -1365,7 +1529,7 @@ impl Backend {
     ) -> Option<DocumentationRecord> {
         let static_record = match source_record {
             Some(record) => Some(record),
-            None => self.index.read().await.documentation_for_symbol(symbol),
+            None => self.index.load_full().documentation_for_symbol(symbol),
         };
         match preferred_source {
             DocumentationPreferredSource::Runtime => {
@@ -1627,24 +1791,54 @@ fn encode_semantic_tokens(text: &str) -> Vec<SemanticToken> {
     encode_semantic_spans(text, semantic_spans(text))
 }
 
+#[cfg(test)]
 fn encode_semantic_tokens_for_range(text: &str, range: Range) -> Vec<SemanticToken> {
-    encode_semantic_spans(
-        text,
-        semantic_spans(text)
-            .into_iter()
-            .filter(|span| semantic_span_intersects_range(text, span, &range)),
-    )
+    tokens_for_range(&encode_semantic_tokens(text), range)
+}
+
+fn tokens_for_range(tokens: &[SemanticToken], range: Range) -> Vec<SemanticToken> {
+    let (mut line, mut column, mut previous_line, mut previous_column) = (0, 0, 0, 0);
+    let mut filtered = Vec::new();
+    for token in tokens {
+        line += token.delta_line;
+        column = if token.delta_line == 0 {
+            column + token.delta_start
+        } else {
+            token.delta_start
+        };
+        if line > range.end.line {
+            break;
+        }
+        if line < range.start.line
+            || (line == range.start.line && column + token.length <= range.start.character)
+            || (line == range.end.line && column >= range.end.character)
+        {
+            continue;
+        }
+        let mut token = *token;
+        token.delta_line = line - previous_line;
+        token.delta_start = if token.delta_line == 0 {
+            column - previous_column
+        } else {
+            column
+        };
+        filtered.push(token);
+        previous_line = line;
+        previous_column = column;
+    }
+    filtered
 }
 
 fn encode_semantic_spans<I>(text: &str, spans: I) -> Vec<SemanticToken>
 where
     I: IntoIterator<Item = sage_index::SemanticSpan>,
 {
+    let lines = text_positions::LineIndex::new(text);
     let mut data = Vec::new();
     let mut previous_line = 0u32;
     let mut previous_start = 0u32;
     for span in spans {
-        let Some((start, length)) = semantic_span_lsp_columns(text, &span) else {
+        let Some((start, length)) = semantic_span_lsp_columns(text, &lines, &span) else {
             continue;
         };
         let delta_line = span.line.saturating_sub(previous_line);
@@ -1666,34 +1860,17 @@ where
     data
 }
 
-fn semantic_span_lsp_columns(text: &str, span: &sage_index::SemanticSpan) -> Option<(u32, u32)> {
-    let (line_start, line_end) = line_byte_bounds(text, span.line)?;
+fn semantic_span_lsp_columns(
+    text: &str,
+    lines: &text_positions::LineIndex,
+    span: &sage_index::SemanticSpan,
+) -> Option<(u32, u32)> {
+    let (line_start, line_end) = lines.bounds(span.line)?;
     let line = &text[line_start..line_end];
     let start = byte_offset_to_utf16_character(line, span.start as usize)?;
     let end =
         byte_offset_to_utf16_character(line, span.start.saturating_add(span.length) as usize)?;
     Some((start, end.saturating_sub(start)))
-}
-
-fn semantic_span_intersects_range(
-    text: &str,
-    span: &sage_index::SemanticSpan,
-    range: &Range,
-) -> bool {
-    if span.line < range.start.line || span.line > range.end.line {
-        return false;
-    }
-    let Some((start, length)) = semantic_span_lsp_columns(text, span) else {
-        return false;
-    };
-    let span_end = start.saturating_add(length);
-    if span.line == range.start.line && span_end <= range.start.character {
-        return false;
-    }
-    if span.line == range.end.line && start >= range.end.character {
-        return false;
-    }
-    true
 }
 
 fn token_type_index(name: &str) -> u32 {

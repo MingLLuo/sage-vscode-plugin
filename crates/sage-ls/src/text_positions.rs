@@ -10,6 +10,51 @@ use std::{
 };
 use tower_lsp_server::ls_types::{Position, Range, TextDocumentContentChangeEvent};
 
+/// Byte bounds of every LSP line, excluding LF, CRLF, and standalone CR.
+#[derive(Clone, Debug)]
+pub(super) struct LineIndex(Vec<(usize, usize)>);
+
+impl LineIndex {
+    pub(super) fn new(text: &str) -> Self {
+        let bytes = text.as_bytes();
+        let mut lines = Vec::new();
+        let (mut start, mut cursor) = (0, 0);
+        while cursor < bytes.len() {
+            if matches!(bytes[cursor], b'\r' | b'\n') {
+                lines.push((start, cursor));
+                if bytes[cursor] == b'\r' && bytes.get(cursor + 1) == Some(&b'\n') {
+                    cursor += 1;
+                }
+                start = cursor + 1;
+            }
+            cursor += 1;
+        }
+        lines.push((start, bytes.len()));
+        Self(lines)
+    }
+
+    pub(super) fn bounds(&self, line: u32) -> Option<(usize, usize)> {
+        self.0.get(line as usize).copied()
+    }
+
+    pub(super) fn position(&self, text: &str, line: u32, column: u32) -> Position {
+        let character = self
+            .bounds(line)
+            .and_then(|(start, end)| {
+                byte_offset_to_utf16_character(&text[start..end], column as usize)
+            })
+            .unwrap_or(column);
+        Position::new(line, character)
+    }
+
+    pub(super) fn range(&self, text: &str, range: &sage_index::SourceRange) -> Range {
+        Range::new(
+            self.position(text, range.start_line, range.start_character),
+            self.position(text, range.end_line, range.end_character),
+        )
+    }
+}
+
 pub(super) fn lsp_range_for_text(text: &str, range: &sage_index::SourceRange) -> Range {
     Range {
         start: lsp_position_for_byte_column(text, range.start_line, range.start_character),
@@ -82,28 +127,22 @@ fn position_to_byte_index(text: &str, position: Position) -> Option<usize> {
 }
 
 pub(super) fn line_byte_bounds(text: &str, target_line: u32) -> Option<(usize, usize)> {
-    if text.is_empty() {
-        return (target_line == 0).then_some((0, 0));
-    }
-
-    let mut line = 0u32;
-    let mut start = 0usize;
-    for segment in text.split_inclusive('\n') {
-        let mut end = start + segment.len();
-        if segment.ends_with('\n') {
-            end = end.saturating_sub(1);
-            if end > start && text.as_bytes().get(end - 1) == Some(&b'\r') {
-                end -= 1;
+    let bytes = text.as_bytes();
+    let (mut line, mut start, mut cursor) = (0, 0, 0);
+    while cursor < bytes.len() {
+        if matches!(bytes[cursor], b'\r' | b'\n') {
+            if line == target_line {
+                return Some((start, cursor));
             }
+            if bytes[cursor] == b'\r' && bytes.get(cursor + 1) == Some(&b'\n') {
+                cursor += 1;
+            }
+            start = cursor + 1;
+            line += 1;
         }
-        if line == target_line {
-            return Some((start, end));
-        }
-        start += segment.len();
-        line = line.saturating_add(1);
+        cursor += 1;
     }
-
-    (text.ends_with('\n') && line == target_line).then_some((text.len(), text.len()))
+    (line == target_line).then_some((start, bytes.len()))
 }
 
 pub(super) fn utf16_character_to_byte_offset(line: &str, character: u32) -> Option<usize> {
@@ -158,4 +197,61 @@ pub(super) fn word_at_position(text: &str, position: Position) -> Option<(String
 
 pub(super) fn is_word_byte(byte: u8) -> bool {
     byte == b'_' || byte.is_ascii_alphanumeric() || byte >= 0x80
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn random_unicode_edits_match_character_model_with_all_line_endings() {
+        let mut state = 42u64;
+        let mut random = |bound: usize| {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            (state >> 32) as usize % bound
+        };
+        let mut model: Vec<char> = "α😀\r\n中\rx\n".chars().collect();
+        let mut actual: String = model.iter().collect();
+        for _ in 0..1000 {
+            let valid: Vec<_> = (0..=model.len())
+                .filter(|&i| !(i > 0 && model[i - 1] == '\r' && model.get(i) == Some(&'\n')))
+                .collect();
+            let mut a = valid[random(valid.len())];
+            let mut b = valid[random(valid.len())];
+            if a > b {
+                std::mem::swap(&mut a, &mut b);
+            }
+            let position = |offset: usize| {
+                let (mut line, mut column) = (0, 0);
+                for (i, ch) in model[..offset].iter().enumerate() {
+                    match ch {
+                        '\r' => {
+                            line += 1;
+                            column = 0;
+                        }
+                        '\n' => {
+                            if i == 0 || model[i - 1] != '\r' {
+                                line += 1;
+                            }
+                            column = 0;
+                        }
+                        ch => column += ch.len_utf16() as u32,
+                    }
+                }
+                Position::new(line, column)
+            };
+            let replacement = ["😀", "α中", "\n", "\r\n", "\r", "", "ab"][random(7)];
+            apply_text_document_change(
+                &mut actual,
+                &TextDocumentContentChangeEvent {
+                    range: Some(Range::new(position(a), position(b))),
+                    range_length: None,
+                    text: replacement.into(),
+                },
+            )
+            .unwrap();
+            model.splice(a..b, replacement.chars());
+            assert_eq!(actual, model.iter().collect::<String>());
+        }
+    }
 }

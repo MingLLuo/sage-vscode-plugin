@@ -9,14 +9,9 @@ fn parse_with_tree_sitter(source: &str) -> Option<tree_sitter::Tree> {
 }
 
 pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<DiagnosticRecord> {
-    if let Some(caret) = sage_trailing_caret_error(source) {
-        return vec![DiagnosticRecord {
-            message: "Syntax error: incomplete Sage exponentiation".to_string(),
-            range: caret,
-            code: "syntax-error".to_string(),
-            severity: "error".to_string(),
-        }];
-    }
+    let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
+    let source = normalized.as_str();
+    let is_sage = path.extension().is_some_and(|ext| ext == "sage");
     let mut diagnostics = if path.extension().is_some_and(|ext| ext == "py")
         && source_looks_sage_heavy_python(source)
     {
@@ -30,44 +25,152 @@ pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<Diagnosti
     {
         return diagnostics;
     }
-    let generated = if path.extension().is_some_and(|ext| ext == "sage") {
-        preprocess_sage_source(source).generated
+    // Normalizing line endings preserves line/byte-column coordinates, including
+    // lone CR lines, while giving the Python grammar its expected LF input.
+    let (generated, mapping) = if is_sage {
+        let (result, mapping) = super::preprocessing::preprocess_with_mapping(&normalized);
+        (result.generated, mapping)
     } else {
-        source.to_string()
+        (normalized.clone(), Vec::new())
+    };
+    let original_lines: Vec<&str> = normalized.split('\n').collect();
+    let carets = if is_sage {
+        sage_trailing_caret_errors(&normalized)
+    } else {
+        Vec::new()
     };
     let Some(tree) = parse_with_tree_sitter(&generated) else {
         return diagnostics;
     };
-    if tree.root_node().has_error() {
-        diagnostics.push(DiagnosticRecord {
-            message: "Syntax error: source could not be parsed".to_string(),
-            range: SourceRange {
-                start_line: 0,
-                start_character: 0,
-                end_line: 0,
-                end_character: 1,
-            },
-            code: "syntax-error".to_string(),
-            severity: "error".to_string(),
-        });
+    // Walk only erroneous branches. Prefer the smallest ERROR nodes; cap reports
+    // so an unfinished large paste cannot flood the editor with diagnostics.
+    let mut pending = vec![tree.root_node()];
+    while let Some(node) = pending.pop() {
+        if diagnostics.len() >= 100 {
+            break;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<_> = node
+            .children(&mut cursor)
+            .filter(|child| child.has_error() || child.is_missing())
+            .collect();
+        if children.is_empty() && (node.is_error() || node.is_missing()) {
+            let start = map_position(node.start_position(), &mapping, &original_lines, false);
+            let end = map_position(node.end_position(), &mapping, &original_lines, true);
+            let range = SourceRange {
+                start_line: start.0,
+                start_character: start.1,
+                end_line: end.0,
+                end_character: end.1,
+            };
+            // Only specialize an actual parser error. A caret at the end of a
+            // continued expression is legal Sage and must not be diagnosed.
+            let matching_carets: Vec<_> = carets
+                .iter()
+                .filter(|caret| {
+                    start.0 == end.0
+                        && (start.0, start.1) <= (caret.start_line, caret.start_character)
+                        && end >= (caret.end_line, caret.end_character)
+                })
+                .collect();
+            if !matching_carets.is_empty() {
+                diagnostics.extend(matching_carets.into_iter().map(|caret| {
+                    syntax_diagnostic(
+                        caret.clone(),
+                        "Syntax error: incomplete Sage exponentiation".to_string(),
+                    )
+                }));
+                continue;
+            }
+            diagnostics.push(syntax_diagnostic(
+                range,
+                if node.is_missing() {
+                    format!("Syntax error: expected `{}`", node.kind())
+                } else {
+                    "Syntax error: unexpected syntax".to_string()
+                },
+            ));
+        } else {
+            pending.extend(children.into_iter().rev());
+        }
     }
+    diagnostics.truncate(100);
+    diagnostics.sort_by_key(|diagnostic| {
+        (
+            diagnostic.range.start_line,
+            diagnostic.range.start_character,
+        )
+    });
+    diagnostics.dedup_by(|a, b| a.range == b.range && a.code == b.code);
     diagnostics
 }
 
-fn sage_trailing_caret_error(source: &str) -> Option<SourceRange> {
-    for (line_index, line) in source.lines().enumerate() {
+fn syntax_diagnostic(range: SourceRange, message: String) -> DiagnosticRecord {
+    DiagnosticRecord {
+        message,
+        range,
+        code: "syntax-error".to_string(),
+        severity: "error".to_string(),
+    }
+}
+
+fn map_position(
+    point: tree_sitter::Point,
+    edits: &[PreprocessEdit],
+    lines: &[&str],
+    end: bool,
+) -> (u32, u32) {
+    let line = point.row.min(lines.len().saturating_sub(1));
+    let column = point.column;
+    let mut mapped = column;
+    // Edits use absolute coordinates in both sources, so the last preceding edit
+    // supplies the total shift without accumulating earlier replacements twice.
+    let mut preceding: Vec<_> = edits
+        .iter()
+        .filter(|edit| edit.line as usize == line)
+        .collect();
+    preceding.sort_by_key(|edit| edit.generated_character);
+    for edit in preceding {
+        let generated = edit.generated_character as usize;
+        if generated > column {
+            break;
+        }
+        let source = edit.source_character as usize;
+        let generated_end = generated + edit.generated_text.len();
+        mapped = if column >= generated_end {
+            source + edit.source_text.len() + column - generated_end
+        } else if column == generated || !end {
+            source
+        } else {
+            source + edit.source_text.len()
+        };
+    }
+    let text = lines[line];
+    mapped = mapped.min(text.len());
+    while !text.is_char_boundary(mapped) {
+        mapped -= 1;
+    }
+    (line as u32, mapped as u32)
+}
+
+fn sage_trailing_caret_errors(source: &str) -> Vec<SourceRange> {
+    let code_map = CodeMap::new(source);
+    let mut offset = 0;
+    let mut ranges = Vec::new();
+    for (line_index, line) in source.split('\n').enumerate() {
         let trimmed = line.trim_end();
-        if trimmed.ends_with('^') {
-            let character = line.rfind('^')? as u32;
-            return Some(SourceRange {
+        if trimmed.ends_with('^') && code_map.is_code_offset(offset + trimmed.len() - 1) {
+            let character = (trimmed.len() - 1) as u32;
+            ranges.push(SourceRange {
                 start_line: line_index as u32,
                 start_character: character,
                 end_line: line_index as u32,
                 end_character: character + 1,
             });
         }
+        offset += line.len() + 1;
     }
-    None
+    ranges
 }
 
 fn source_looks_sage_heavy_python(source: &str) -> bool {
@@ -310,4 +413,35 @@ pub(super) fn scope_references_for_resolved_symbol(
         .into_iter()
         .filter(|reference| reference.path == resolved.path)
         .collect()
+}
+
+#[cfg(test)]
+mod position_tests {
+    use super::*;
+
+    #[test]
+    fn rewritten_positions_return_original_byte_columns() {
+        for (source, generated_fragment, original_fragment) in [
+            ("结果 = 2^3 + bad", "bad", "bad"),
+            ("R.<x> = QQ[] # note", "QQ[", "QQ["),
+            ("R.<x> = QQ[] # note", "# note", "# note"),
+            ("R.<x> = GF(\n  2^3 + bad\n) # note", "bad", "bad"),
+            ("R.<x> = GF(\n  2^3 + bad\n) # note", "# note", "# note"),
+            ("values = [1..5] + bad", "bad", "bad"),
+        ] {
+            let (result, edits) = super::super::preprocessing::preprocess_with_mapping(source);
+            let offset = result.generated.find(generated_fragment).unwrap();
+            let prefix = &result.generated[..offset];
+            let row = prefix.bytes().filter(|b| *b == b'\n').count();
+            let column = prefix.rfind('\n').map_or(offset, |last| offset - last - 1);
+            let lines: Vec<_> = source.split('\n').collect();
+            let expected = lines[row].find(original_fragment).unwrap();
+            assert_eq!(
+                map_position(tree_sitter::Point { row, column }, &edits, &lines, false),
+                (row as u32, expected as u32),
+                "{source} => {}",
+                result.generated
+            );
+        }
+    }
 }
