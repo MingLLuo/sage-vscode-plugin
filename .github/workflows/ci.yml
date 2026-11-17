@@ -5,7 +5,9 @@ on:
     branches:
       - main
       - develop
+    paths-ignore: ["docs/**", "**/*.md"]
   pull_request:
+    paths-ignore: ["docs/**", "**/*.md"]
   # The tag release in package.yml reuses this gate before publishing anything.
   workflow_call:
 
@@ -16,7 +18,57 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  # Test builds need no debug info; it slows linking and bloats the Rust cache.
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+
 jobs:
+  # Fast per-push check of the platforms the macOS gate cannot cover. Full release packaging for
+  # every target runs in package.yml on tags, pull requests, and manual dispatch.
+  rust-tests:
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, runner: ubuntu-24.04 }
+          - { name: win32-x64, runner: windows-2025 }
+          - { name: darwin-x64, runner: macos-15-intel }
+    name: rust-tests (${{ matrix.name }})
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Rust
+        run: rustup toolchain install
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: tests-${{ matrix.name }}
+          cache-on-failure: true
+
+      - name: Test native Rust behavior
+        run: cargo test --locked
+
+      - name: Set up Node.js
+        if: matrix.name == 'linux-x64'
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: ".node-version"
+          cache: "npm"
+          cache-dependency-path: package-lock.json
+
+      - name: Linux editor regression
+        if: matrix.name == 'linux-x64'
+        run: |
+          npm install --global npm@11
+          npm ci
+          node scripts/prepare-vscode-test.mjs
+          xvfb-run -a npm run test:extension-host
+
   node-compatibility:
     runs-on: ubuntu-latest
     timeout-minutes: 15

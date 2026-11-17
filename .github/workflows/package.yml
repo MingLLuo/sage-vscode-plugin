@@ -1,9 +1,15 @@
 name: Platform packages
 
+# Ordinary pushes run the faster ci.yml checks; full release packaging runs for tags, pull requests
+# that touch shipped code, and manual runs (optionally limited to some targets).
 on:
   workflow_dispatch:
+    inputs:
+      targets:
+        description: "Comma-separated targets to package (e.g. linux-x64,win32-x64), or all"
+        default: all
+        required: false
   push:
-    branches: [main]
     tags: ['v*']
   pull_request:
     paths:
@@ -22,21 +28,47 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - id: select
+        shell: bash
+        env:
+          TARGETS: ${{ inputs.targets || 'all' }}
+        run: |
+          all='[
+            {"target":"darwin-arm64","runner":"macos-15","rust":"aarch64-apple-darwin"},
+            {"target":"darwin-x64","runner":"macos-15-intel","rust":"x86_64-apple-darwin"},
+            {"target":"linux-x64","runner":"ubuntu-24.04","rust":"x86_64-unknown-linux-musl"},
+            {"target":"linux-arm64","runner":"ubuntu-24.04-arm","rust":"aarch64-unknown-linux-musl"},
+            {"target":"win32-x64","runner":"windows-2025","rust":"x86_64-pc-windows-msvc"},
+            {"target":"win32-arm64","runner":"windows-11-arm","rust":"aarch64-pc-windows-msvc"}
+          ]'
+          if [[ "$TARGETS" == all ]]; then
+            selected=$(jq -c . <<<"$all")
+          else
+            selected=$(jq -c --arg wanted "$TARGETS" \
+              '($wanted | split(",") | map(gsub("^\\s+|\\s+$"; ""))) as $w | map(select(.target as $t | $w | index($t)))' <<<"$all")
+          fi
+          if [[ "$selected" == "[]" ]]; then
+            echo "::error::no known target in '$TARGETS'"
+            exit 1
+          fi
+          echo "matrix={\"include\":$selected}" >> "$GITHUB_OUTPUT"
+
   package:
+    needs: plan
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - { target: darwin-arm64, runner: macos-15, rust: aarch64-apple-darwin }
-          - { target: darwin-x64, runner: macos-15-intel, rust: x86_64-apple-darwin }
-          - { target: linux-x64, runner: ubuntu-24.04, rust: x86_64-unknown-linux-musl }
-          - { target: linux-arm64, runner: ubuntu-24.04-arm, rust: aarch64-unknown-linux-musl }
-          - { target: win32-x64, runner: windows-2025, rust: x86_64-pc-windows-msvc }
-          - { target: win32-arm64, runner: windows-11-arm, rust: aarch64-pc-windows-msvc }
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     env:
       SAGE_VSIX_TARGET: ${{ matrix.target }}
+      CARGO_PROFILE_DEV_DEBUG: "0"
+      CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -60,6 +92,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ${{ matrix.target }}
+          # Save after failures too, so a red run does not force the next one to compile from scratch.
+          cache-on-failure: true
       - name: Install native musl compiler
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y musl-tools
