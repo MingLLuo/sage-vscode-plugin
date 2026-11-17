@@ -356,7 +356,12 @@ impl WorkspaceIndex {
         if let Ok(mut cache) = self.symbol_lookup_cache.lock() {
             for name in names {
                 let key = name.to_ascii_lowercase();
-                let symbols = grouped.remove(&key).unwrap_or_default();
+                // An empty group means "no Sage export found", not "no symbol with this name":
+                // caching it would hide workspace definitions stored in the database.
+                let Some(symbols) = grouped.remove(&key).filter(|symbols| !symbols.is_empty())
+                else {
+                    continue;
+                };
                 cache.insert(key, Arc::new(dedupe_symbol_records(symbols)));
             }
         }

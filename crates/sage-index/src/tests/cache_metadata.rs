@@ -120,6 +120,12 @@ fn workspace_symbols_rank_exact_prefix_and_word_boundary_matches() {
     let mut hydrated = WorkspaceIndex::new(options);
     hydrated.hydrate_from_cache().unwrap();
     let hydrated_exact = hydrated.workspace_symbols("PolynomialRing", 10);
+    assert!(
+        hydrated_exact
+            .iter()
+            .all(|symbol| symbol.name == "PolynomialRing"),
+        "a restarted index must return only exact matches too: {hydrated_exact:?}"
+    );
     assert_eq!(
         hydrated_exact.first().map(|symbol| symbol.name.as_str()),
         Some("PolynomialRing")
@@ -130,6 +136,16 @@ fn workspace_symbols_rank_exact_prefix_and_word_boundary_matches() {
                 .all(|symbol| symbol.kind != SymbolKind::Import),
             "hydrated workspace symbols should keep the same import-noise suppression: {hydrated_exact:?}"
         );
+    let mut reconciled = WorkspaceIndex::new(hydrated.options().clone());
+    reconciled.hydrate_from_cache().unwrap();
+    reconciled.reconcile_with_cache().unwrap();
+    let reconciled_exact = reconciled.workspace_symbols("PolynomialRing", 10);
+    assert!(
+        reconciled_exact
+            .iter()
+            .all(|symbol| symbol.name == "PolynomialRing"),
+        "a reconciled (warm-started) index must return only exact matches: {reconciled_exact:?}"
+    );
     fs::remove_dir_all(root).ok();
 }
 
@@ -508,4 +524,29 @@ fn editable_reference_cache_hydrates_and_refreshes() {
 
     fs::remove_dir_all(sage_root).ok();
     fs::remove_dir_all(workspace).ok();
+}
+
+#[test]
+fn warm_up_does_not_hide_workspace_definitions_of_hot_sage_names() {
+    // `PolynomialRing` is a hot Sage export name. Without Sage sources in the roots the warm-up
+    // found no exports and cached an empty list, hiding the workspace definition after restart.
+    let root = test_root("hot-name-workspace-definition");
+    fs::write(
+        root.join("constructors.py"),
+        "def PolynomialRing():\n    pass\n",
+    )
+    .unwrap();
+    let options = IndexOptions {
+        roots: vec![root.clone()],
+        editable_roots: Vec::new(),
+        exclude_globs: Vec::new(),
+        cache_dir: root.join(".cache"),
+        enable_pyx: true,
+    };
+    WorkspaceIndex::new(options.clone()).rebuild().unwrap();
+    let mut restarted = WorkspaceIndex::new(options);
+    restarted.hydrate_from_cache().unwrap();
+    restarted.reconcile_with_cache().unwrap();
+    assert!(restarted.symbol("PolynomialRing").is_some());
+    fs::remove_dir_all(root).ok();
 }
