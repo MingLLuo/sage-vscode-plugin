@@ -245,6 +245,10 @@ impl IndexActor {
                         .unwrap_or_else(|error| Err(error.to_string())),
                     Err(error) => Err(error.to_string()),
                 };
+                if matches!(label, "rebuild" | "cache-check") {
+                    // The previous snapshot and the job's parse buffers are gone by now.
+                    tokio::task::spawn_blocking(super::release_freed_memory);
+                }
                 self.queue().active = None;
                 if self.stopped.load(Ordering::Acquire) {
                     return;

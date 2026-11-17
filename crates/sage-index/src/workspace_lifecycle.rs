@@ -183,16 +183,43 @@ impl WorkspaceIndex {
         self.clear_lookup_cache();
         self.last_error = None;
         let persist_started = Instant::now();
+        let mut persisted = true;
         if let Err(error) = self.persist_all() {
             let primary_error = error.to_string();
             if let Err(fallback_error) = self.persist_all_with_fallback() {
+                persisted = false;
                 self.last_error = Some(format!(
                     "{primary_error}; fallback cache failed: {fallback_error}"
                 ));
             }
         }
         self.last_persist_ms = persist_started.elapsed().as_millis();
+        if persisted {
+            self.switch_to_persisted_mode();
+        }
         Ok(self.status())
+    }
+
+    /// Serves queries from the persisted cache, as after a reconcile, instead of keeping every
+    /// parsed file and a second copy of every symbol in memory (about 400 MB for a full Sage
+    /// tree). Keeps the in-memory index when the counts cannot be read back.
+    fn switch_to_persisted_mode(&mut self) {
+        let Ok((file_count, symbol_count, doc_count)) = self.cached_counts_for_current_roots()
+        else {
+            return;
+        };
+        if file_count == 0 {
+            return;
+        }
+        self.files.clear();
+        self.symbols_by_name = Arc::default();
+        self.clear_lookup_cache();
+        self.cached_file_count = file_count;
+        self.cached_symbol_count = symbol_count;
+        self.cached_doc_count = doc_count;
+        // Same warm-up as a fast reconcile, so a rebuilt index answers like a restarted one.
+        self.prewarm_hot_symbol_cache(false);
+        self.prewarm_identifier_filter_cache();
     }
 
     pub fn reconcile_with_cache(&mut self) -> Result<IndexStatus> {

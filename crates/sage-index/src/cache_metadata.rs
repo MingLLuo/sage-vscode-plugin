@@ -5,7 +5,7 @@ pub(super) fn tune_cache_connection(connection: &Connection) -> Result<()> {
         r#"
         pragma synchronous = off;
         pragma temp_store = memory;
-        pragma cache_size = -200000;
+        pragma cache_size = -16000;
         "#,
     )?;
     Ok(())

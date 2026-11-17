@@ -417,7 +417,6 @@ fn refresh_paths_updates_and_deletes_files() {
     index
         .refresh_paths(std::slice::from_ref(&source), &[])
         .unwrap();
-    assert_eq!(index.cached_symbol_count, 0);
     assert!(index.symbol("after").is_some());
     assert!(index.symbol("before").is_none());
     fs::remove_file(&source).unwrap();

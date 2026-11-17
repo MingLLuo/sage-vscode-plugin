@@ -62,9 +62,20 @@ function summarize(values) {
   };
 }
 
+// Memory the process actually holds. On macOS `ps` RSS also counts pages the allocator already
+// returned as reusable (they stay mapped until memory pressure), which overstated usage by
+// hundreds of MB after indexing; `footprint` reports the physical footprint Activity Monitor
+// shows. Other platforms use RSS.
+const MEMORY_METRIC = process.platform === "darwin" ? "phys_footprint" : "rss";
+
 function rssMb(pid) {
   if (process.platform === "win32") return null;
   try {
+    if (process.platform === "darwin") {
+      const output = execFileSync("footprint", ["-p", String(pid)], { encoding: "utf8" });
+      const match = /phys_footprint: ([\d.]+) ([KMG])B/.exec(output);
+      if (match) return round(Number(match[1]) * { K: 1 / 1024, M: 1, G: 1024 }[match[2]]);
+    }
     const kb = Number(execFileSync("ps", ["-o", "rss=", "-p", String(pid)], { encoding: "utf8" }).trim());
     return Number.isFinite(kb) ? round(kb / 1024) : null;
   } catch {
@@ -272,6 +283,7 @@ async function main() {
     recorded_at: new Date().toISOString(),
     profile,
     platform: `${process.platform}-${process.arch}`,
+    memory_metric: MEMORY_METRIC,
     cpus: os.cpus().length,
     samples,
     sage_source_root_files: null,
