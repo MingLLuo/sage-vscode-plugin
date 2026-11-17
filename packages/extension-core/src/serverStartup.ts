@@ -13,6 +13,18 @@ export function isPermanentStartError(error: unknown): boolean {
   return error instanceof LanguageServerLaunchError;
 }
 
+/** Oldest server whose protocol and initialization options this client understands. */
+export const MINIMUM_SERVER_VERSION = "0.2.0";
+
+export function isCompatibleServerVersion(version: string, minimum = MINIMUM_SERVER_VERSION): boolean {
+  const parse = (value: string): number[] => value.split(/[-+]/, 1)[0].split(".").map(Number);
+  const [actual, required] = [parse(version), parse(minimum)];
+  for (let index = 0; index < 3; index += 1) {
+    if ((actual[index] ?? 0) !== (required[index] ?? 0)) return (actual[index] ?? 0) > (required[index] ?? 0);
+  }
+  return true;
+}
+
 /** Verify the selected executable before creating an LSP transport or entering recovery. */
 export async function verifyLanguageServerLaunch(
   launch: LanguageServerLaunch,
@@ -25,6 +37,10 @@ export async function verifyLanguageServerLaunch(
     const match = /^sage-ls (\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/.exec(result.stdout.trim());
     if (result.code !== 0 || !match) throw new LanguageServerLaunchError(
       "The selected executable did not identify itself as sage-ls. Check the language server path or reinstall the VSIX.", launch.command,
+    );
+    if (!isCompatibleServerVersion(match[1])) throw new LanguageServerLaunchError(
+      `The selected sage-ls ${match[1]} is older than ${MINIMUM_SERVER_VERSION}, which this extension requires. Update the language server path or reinstall the VSIX.`,
+      launch.command,
     );
     return match[1];
   } catch (error) {

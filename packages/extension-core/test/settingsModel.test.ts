@@ -176,3 +176,18 @@ test("production does not run a workspace target/debug executable", () => {
     repositoryRoot: "/workspace", environment: {}, platform: "linux", exists: () => true,
   }).command, "sage-ls");
 });
+
+test("an explicit Rust path setting wins over the SAGE_LS_PATH environment override", () => {
+  assert.equal(buildLanguageServerLaunch({
+    interpreterPath: "sage",
+    interpreterArgs: [],
+    languageServerRustPath: "/configured/sage-ls",
+    environment: { SAGE_LS_PATH: "/from/environment/sage-ls" },
+  }).command, "/configured/sage-ls");
+  assert.equal(buildLanguageServerLaunch({
+    interpreterPath: "sage",
+    interpreterArgs: [],
+    languageServerRustPath: "auto",
+    environment: { SAGE_LS_PATH: "/from/environment/sage-ls" },
+  }).command, "/from/environment/sage-ls");
+});

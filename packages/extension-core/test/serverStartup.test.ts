@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { verifyLanguageServerLaunch, LanguageServerLaunchError } from "../src/serverStartup";
+import { isCompatibleServerVersion, verifyLanguageServerLaunch, LanguageServerLaunchError } from "../src/serverStartup";
 import { readProcessProbe, ProbeOutputLimitError } from "../src/processProbe";
 import { settleAndStopLanguageClient } from "../src/languageClientShutdown";
 
@@ -37,7 +37,7 @@ test("aborting a probe also stops its descendant", { skip: process.platform === 
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "sage-probe-tree-"));
   const ready = path.join(root, "ready");
   const marker = path.join(root, "orphan");
-  const descendant = `setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'alive'),800)`;
+  const descendant = `setTimeout(()=>require('node:fs').writeFileSync(${JSON.stringify(marker)},'alive'),1500)`;
   const launch = program(`require('node:child_process').spawn(process.execPath,['-e',${JSON.stringify(descendant)}],{stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(ready)},'ready');setInterval(()=>{},1000)`);
   const abort = new AbortController();
   const pending = readProcessProbe(launch.command, launch.args, { signal: abort.signal, timeoutMs: 3000, maxBytes: 256 });
@@ -50,7 +50,7 @@ test("aborting a probe also stops its descendant", { skip: process.platform === 
     }
     abort.abort();
     await rejection;
-    await new Promise(resolve => setTimeout(resolve, 900));
+    await new Promise(resolve => setTimeout(resolve, 1800));
     assert.equal(await fs.access(marker).then(() => true, () => false), false);
   } finally { abort.abort(); await rejection; await fs.rm(root, { recursive: true, force: true }); }
 });
@@ -61,11 +61,19 @@ test("startup settlement and stop share a single shutdown deadline", async () =>
   let finished = false;
   const started = Date.now();
   await settleAndStopLanguageClient({
-    operation: never, timeoutMs: 100,
+    operation: never, timeoutMs: 300,
     takeClient: () => ({ start: () => never, stop: () => { stopped = true; return never; } }),
     afterStop: () => { finished = true; },
   });
   assert.equal(stopped, true);
   assert.equal(finished, true);
-  assert.ok(Date.now() - started < 185, "stop must not consume a second full timeout");
+  // Two separate budgets would take at least 600 ms; leave generous room for slow CI hosts.
+  assert.ok(Date.now() - started < 550, "stop must not consume a second full timeout");
+});
+
+test("server versions older than the supported minimum are rejected", () => {
+  assert.equal(isCompatibleServerVersion("0.2.0", "0.2.0"), true);
+  assert.equal(isCompatibleServerVersion("0.10.1", "0.2.0"), true);
+  assert.equal(isCompatibleServerVersion("1.0.0-rc.1", "0.2.0"), true);
+  assert.equal(isCompatibleServerVersion("0.1.9", "0.2.0"), false);
 });

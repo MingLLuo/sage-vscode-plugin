@@ -692,10 +692,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     }
   };
 
+  const startupFailure: { shownForLaunch?: string } = {};
+
   const createScopedController = (folder?: vscode.WorkspaceFolder): LanguageClientLifecycleController<LanguageClient> => {
     const scope = folderKey(folder);
     let controller: LanguageClientLifecycleController<LanguageClient>;
-    let startupFailureShown = false;
     let verifiedLaunch: ReturnType<typeof languageServerLaunch> | undefined;
     controller = new LanguageClientLifecycleController<LanguageClient>({
     createClient: (hooks) => createLanguageClient(context, languageOutputChannel, {
@@ -746,7 +747,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       });
     },
     afterStarted: async () => {
-      startupFailureShown = false;
+      startupFailure.shownForLaunch = undefined;
       await refreshLanguageServerStatus(controller, scope);
       if (scope === activeScope) scheduleLanguageServerStatusRefresh();
     },
@@ -756,14 +757,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       updateStatusBar();
     },
     onStartError: (error) => {
-      if (!startupFailureShown) {
-        startupFailureShown = true;
+      // One notification per failing executable across all folder servers: a missing binary
+      // in an N-root workspace must not raise N identical toasts.
+      const failedCommand = error instanceof LanguageServerLaunchError ? error.command : verifiedLaunch?.command ?? "";
+      if (startupFailure.shownForLaunch !== failedCommand) {
+        startupFailure.shownForLaunch = failedCommand;
         void vscode.window.showErrorMessage(
           error instanceof LanguageServerLaunchError ? error.message : "Sage language server startup failed. See the logs for details.",
           "Show Logs", "Restart", "Open Settings",
         ).then((action) => {
           if (action === "Show Logs") outputChannel.show();
-          if (action === "Restart") { startupFailureShown = false; void controller.manualRestart(); }
+          if (action === "Restart") { startupFailure.shownForLaunch = undefined; void controller.manualRestart(); }
           if (action === "Open Settings") void vscode.commands.executeCommand("workbench.action.openSettings", "sage.languageServer.rustPath");
         });
       }

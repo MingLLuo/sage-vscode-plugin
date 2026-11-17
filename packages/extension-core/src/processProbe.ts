@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 export class ProbeTimeoutError extends Error {}
@@ -23,7 +24,10 @@ export function readProcessProbe(command: string, args: readonly string[], optio
         if (process.platform !== "win32" && child.pid) process.kill(-child.pid, "SIGKILL");
         else if (child.pid) {
           // Windows has no POSIX process groups. Ask taskkill to terminate the tree first.
-          const killer = spawn("taskkill.exe", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
+          // Resolve taskkill from System32: a PATH or working-directory lookup could run
+          // an unrelated executable with the same name.
+          const taskkill = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32", "taskkill.exe");
+          const killer = spawn(taskkill, ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" });
           killer.once("error", () => child.kill());
           killer.once("close", () => child.kill());
           killer.unref();
