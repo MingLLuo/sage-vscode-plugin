@@ -6,7 +6,6 @@ const SERVER_RESTART_SECTIONS = [
   "sage.indexing",
   "sage.docs",
   "sage.logging",
-  "sage.experimental.notebookSupport",
 ];
 
 export function shouldRestartLanguageServer(

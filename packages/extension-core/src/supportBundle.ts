@@ -66,7 +66,6 @@ export function buildSupportBundle(input: SupportBundleInput): string {
       run_target: input.settings.runTarget,
       show_cell_code_lens: input.settings.showCellCodeLens,
       cleanup_generated_python: input.settings.cleanupGeneratedPython,
-      notebook_support_enabled: input.settings.notebookSupportEnabled,
     },
     environment: {
       interpreter_path: input.environment.interpreterPath,

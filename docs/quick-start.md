@@ -17,7 +17,7 @@ code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 
 Open a trusted local folder with a `.sage` file in VS Code. The extension uses the packaged language server and
 discovers nearby Sage source roots. Hover a local name or use Go to Definition, then run **Sage: Run Current File** from
-the command palette. Select a Sage executable with **Sage: Select Interpreter** only if it is not found automatically.
+the command palette. Select a Sage executable with **Sage: Select Sage Interpreter** only if it is not found automatically.
 Click the Sage status bar item for details if indexing or the language server does not become ready.
 
 ## First VS Code Setup

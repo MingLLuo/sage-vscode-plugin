@@ -323,7 +323,7 @@ node scripts/cache-maintenance.mjs --prune --max-age-days 30 --max-total-bytes 2
 The VS Code extension applies the same conservative policy to its own global-storage `rust-index-v2` directory before
 starting `sage-ls`; `npm run test:cache-maintenance` validates the deletion path in a temporary directory.
 
-`Sage: Select Interpreter` is now environment-first. The primary choices should be `Local Sage development environment`
+`Sage: Select Sage Interpreter` is now environment-first. The primary choices should be `Local Sage development environment`
 for a nearby checkout paired with `conda` `sage-dev`, and `System Sage (stable)` for the installed standalone Sage
 runtime.
 

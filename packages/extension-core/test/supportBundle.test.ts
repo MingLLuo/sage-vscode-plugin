@@ -44,7 +44,6 @@ test("buildSupportBundle records troubleshootable state without source contents"
       runTarget: "terminal",
       showCellCodeLens: true,
       cleanupGeneratedPython: false,
-      notebookSupportEnabled: false,
     },
     environment: {
       interpreterPath: "sage",

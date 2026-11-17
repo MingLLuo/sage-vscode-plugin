@@ -37,7 +37,6 @@ export function readSettings(scope?: vscode.WorkspaceFolder | vscode.Uri): SageS
     runTarget: configuration.get<RunTarget>("run.target", "terminal"),
     showCellCodeLens: configuration.get<boolean>("run.showCellCodeLens", true),
     cleanupGeneratedPython: configuration.get<boolean>("run.cleanupGeneratedPython", false),
-    notebookSupportEnabled: configuration.get<boolean>("experimental.notebookSupport", false),
   };
 }
 

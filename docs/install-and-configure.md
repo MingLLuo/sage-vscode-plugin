@@ -20,7 +20,7 @@ Open a trusted local folder with a `.sage` file, hover a symbol or use Go to Def
 File**. The packaged language server and nearby Sage source roots are discovered automatically. The Sage status bar
 item reports startup and indexing; click it for details when a feature does not become ready.
 
-Run **Sage: Select Interpreter** only when Sage was not found or the wrong runtime was selected. Run **Sage: Configure
+Run **Sage: Select Sage Interpreter** only when Sage was not found or the wrong runtime was selected. Run **Sage: Configure
 Workspace** only when you need Sage analysis for `.py` files or a Cython/mixed profile. You can instead configure before
 opening VS Code with `npm run configure:workspace -- --workspace /path/to/project --profile auto`.
 
@@ -112,7 +112,7 @@ runtime-backed Sage documentation probes use the Python that ships inside the se
 10. Use `Sage: Configure Workspace` to write a conservative workspace profile. Choose `Sage-heavy Python workspace` for
    `.py` projects that import `sage.all`, `Sage native/Cython workspace` for `.pyx/.pxd/.pxi`, or `Full Sage research
    workspace` for mixed projects.
-11. Use `Sage: Select Interpreter` to pick a complete detected environment first.
+11. Use `Sage: Select Sage Interpreter` to pick a complete detected environment first.
 12. The preferred local-development path is `Local Sage development environment`, which points run commands and runtime
    docs at a nearby Sage checkout such as `.../sage/sage`.
 13. The preferred stable-runtime path is `System Sage (stable)`, which points run commands and runtime-backed docs at an
@@ -133,11 +133,11 @@ runtime-backed Sage documentation probes use the Python that ships inside the se
 ## Runtime Split
 
 - `sage.interpreter.path`
-  Controls the Sage executable used for `Run Current File`, `Run Selection`, and `Start REPL`.
+  Controls the Sage executable used for `Run Current File`, `Run Selection in REPL`, and `Start REPL`.
 - `sage.languageServer.rustPath`
   Controls the Rust `sage-ls` executable. `auto` prefers `SAGE_LS_PATH`, local `target/debug/sage-ls`, local
   `target/release/sage-ls`, then `sage-ls` on `PATH`.
-- `Sage: Select Interpreter`
+- `Sage: Select Sage Interpreter`
   Presents environment-first choices before advanced path actions. The main choices are `Local Sage development
   environment` for a nearby checkout and `System Sage (stable)` for an installed executable.
 - `Sage: Configure Workspace`
@@ -208,7 +208,6 @@ runtime-backed Sage documentation probes use the Python that ships inside the se
 - `sage.logging.level`: extension and language-client log verbosity.
 - `sage.run.target`: choose standalone terminal execution or managed REPL loading.
 - `sage.run.cleanupGeneratedPython`: clean up new `.sage.py` helpers from uncontended standalone runs; preserve pre-existing helpers and files shared by concurrent runs.
-- `sage.experimental.notebookSupport`: reserved preview switch for future notebook integration.
 
 ## Recommended Profiles
 

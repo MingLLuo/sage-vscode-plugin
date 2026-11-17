@@ -21,7 +21,6 @@ export interface SageSettings {
   runTarget: RunTarget;
   showCellCodeLens: boolean;
   cleanupGeneratedPython: boolean;
-  notebookSupportEnabled: boolean;
 }
 
 export interface LanguageServerInitializationOptions {
@@ -54,9 +53,6 @@ export interface LanguageServerInitializationOptions {
   };
   logging: {
     level: LoggingLevel;
-  };
-  experimental: {
-    notebookSupport: boolean;
   };
 }
 
@@ -106,9 +102,6 @@ export function buildInitializationOptions(
     },
     logging: {
       level: settings.loggingLevel,
-    },
-    experimental: {
-      notebookSupport: settings.notebookSupportEnabled,
     },
   };
 }

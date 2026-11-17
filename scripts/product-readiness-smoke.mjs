@@ -110,7 +110,8 @@ function checkInteractionReadiness() {
   ];
   for (const command of requiredCommands) {
     pushCheck("interaction", `${command} is contributed`, commandIds.has(command), [...commandIds]);
-    pushCheck("interaction", `${command} has activation event`, activationEvents.has(`onCommand:${command}`), [...activationEvents]);
+    // VS Code 1.74+ activates an extension on its contributed commands without onCommand entries.
+    pushCheck("interaction", `${command} activates on invocation`, !activationEvents.has(`onCommand:${command}`) && semverAtLeast(manifest.engines?.vscode, "1.74.0"), [...activationEvents]);
   }
   for (const command of commands) {
     pushCheck("interaction", `${command.command} has Sage category`, command.category === "Sage", command);
@@ -120,9 +121,12 @@ function checkInteractionReadiness() {
   const gettingStarted = walkthroughs.find((walkthrough) => walkthrough.id === "gettingStarted");
   pushCheck("interaction", "getting started walkthrough exists", Boolean(gettingStarted), walkthroughs.map((walkthrough) => walkthrough.id));
   pushCheck("interaction", "walkthrough covers at least four first-run steps", (gettingStarted?.steps?.length ?? 0) >= 4, gettingStarted?.steps?.map((step) => step.id));
-  pushCheck("interaction", "context menu exposes docs/references/UX self-check", hasMenuCommand("editor/context", "sage.showDocumentation")
-    && hasMenuCommand("editor/context", "sage.findReferences")
-    && hasMenuCommand("editor/context", "sage.runUxSelfCheck"), contributes.menus?.["editor/context"]);
+  pushCheck("interaction", "context menu exposes docs and run actions without developer tools", hasMenuCommand("editor/context", "sage.showDocumentation")
+    && hasMenuCommand("editor/context", "sage.runSelection")
+    && !hasMenuCommand("editor/context", "sage.findReferences")
+    && !hasMenuCommand("editor/context", "sage.runUxSelfCheck"), contributes.menus?.["editor/context"]);
+  pushCheck("interaction", "Sage editors bind Shift+Enter and Ctrl/Cmd+Enter", ["sage.runSelection", "sage.runCurrentCell"]
+    .every((command) => (contributes.keybindings ?? []).some((binding) => binding.command === command && /sagemath/.test(binding.when ?? ""))), contributes.keybindings);
 }
 
 function checkLspFeatureParity() {
@@ -394,6 +398,15 @@ Use --json for complete machine-readable check details.`);
     }
   }
   return parsed;
+}
+
+function semverAtLeast(range, minimum) {
+  const actual = String(range ?? "").replace(/^[^\d]*/, "").split(".").map(Number);
+  const required = minimum.split(".").map(Number);
+  for (let index = 0; index < 3; index += 1) {
+    if ((actual[index] ?? 0) !== required[index]) return (actual[index] ?? 0) > required[index];
+  }
+  return true;
 }
 
 function pushCheck(category, name, pass, actual) {

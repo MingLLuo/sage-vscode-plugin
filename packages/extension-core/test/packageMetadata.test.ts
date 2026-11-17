@@ -39,6 +39,7 @@ interface ExtensionManifest {
   };
   activationEvents?: string[];
   contributes?: {
+    keybindings?: Array<{ command: string; key: string; mac?: string; when?: string }>;
     languages?: Array<{
       id: string;
       configuration?: string;
@@ -175,7 +176,7 @@ test("packaged README is user-facing and support-oriented", () => {
     "Preview Limitations",
     "Support and Security",
     "Sage: Open Getting Started",
-    "Sage: Select Interpreter",
+    "Sage: Select Sage Interpreter",
     "Sage: Configure Workspace",
     "Sage: Show Environment Details",
     "Sage: Show Index Status",
@@ -439,8 +440,12 @@ test("user commands are grouped, iconed, and exposed through contextual menus", 
     "missing Sage cell action in the editor context menu",
   );
   assert.ok(
-    menus["editor/context"]?.some((item) => item.command === "sage.findReferences"),
-    "missing Sage references action in the editor context menu",
+    !menus["editor/context"]?.some((item) => item.command === "sage.findReferences"),
+    "the built-in Go to References (Shift+F12) already covers Sage files; a second entry is noise",
+  );
+  assert.ok(
+    !menus["editor/context"]?.some((item) => item.command === "sage.runUxSelfCheck"),
+    "the developer self check must not appear in the editor context menu",
   );
   assert.ok(
     menus.commandPalette?.some((item) => item.command === "sage.showDocumentation" && item.when === "sage.workspaceRuntimeAvailable"),
@@ -450,10 +455,18 @@ test("user commands are grouped, iconed, and exposed through contextual menus", 
     menus.commandPalette?.some((item) => item.command === "sage.findReferences" && item.when === "sage.workspaceRuntimeAvailable"),
     "reference command should remain discoverable whenever the Sage runtime is available",
   );
-  assert.ok(
-    menus.commandPalette?.some((item) => item.command === "sage.runUxSelfCheck" && item.when === "sage.workspaceRuntimeAvailable"),
-    "UX self check should remain discoverable whenever the Sage runtime is available",
-  );
+  for (const internal of ["sage.runUxSelfCheck", "sage.buildDatabase"]) {
+    assert.ok(
+      menus.commandPalette?.some((item) => item.command === internal && item.when === "false"),
+      `${internal} is reachable from the status menu only`,
+    );
+  }
+  const keybindings = manifest.contributes?.keybindings ?? [];
+  for (const [command, key] of [["sage.runSelection", "shift+enter"], ["sage.runCurrentCell", "ctrl+enter"]]) {
+    const binding = keybindings.find((item) => item.command === command);
+    assert.equal(binding?.key, key, `missing ${key} for ${command}`);
+    assert.match(binding?.when ?? "", /sagemath/, `${command} keybinding must be limited to Sage editors`);
+  }
 });
 
 test("extension scopes direct navigation bridges to read-only external Sage sources", () => {
@@ -663,8 +676,8 @@ test("extension contributions are activation-covered and backed by generated ass
     "missing activation event for Sage-heavy Python workspaces",
   );
   assert.ok(
-    activationEvents.has("workspaceContains:**/*sage*.py"),
-    "missing activation event for Sage-named Python research files",
+    !activationEvents.has("workspaceContains:**/*sage*.py"),
+    "a substring glob matches unrelated files such as message.py and usage.py",
   );
   assert.ok(
     activationEvents.has("workspaceContains:**/*.spyx"),
@@ -690,9 +703,11 @@ test("extension contributions are activation-covered and backed by generated ass
   for (const snippet of manifest.contributes?.snippets ?? []) {
     assert.ok(fs.existsSync(path.resolve(packageRoot, snippet.path)), `missing snippet file ${snippet.path}`);
   }
-  for (const command of manifest.contributes?.commands ?? []) {
-    assert.ok(activationEvents.has(`onCommand:${command.command}`), `missing activation event for ${command.command}`);
-  }
+  // VS Code 1.74+ activates on contributed commands automatically; explicit entries are noise.
+  assert.ok(
+    ![...activationEvents].some((event) => event.startsWith("onCommand:")),
+    "contributed commands activate the extension without onCommand entries",
+  );
 });
 
 test("getting started walkthrough covers first-run Sage setup", () => {

@@ -27,7 +27,6 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
     runTarget: "terminal",
     showCellCodeLens: false,
     cleanupGeneratedPython: true,
-    notebookSupportEnabled: true,
   };
 
   assert.deepEqual(
@@ -73,9 +72,6 @@ test("buildInitializationOptions mirrors editor settings and workspace context i
       },
       logging: {
         level: "debug",
-      },
-      experimental: {
-        notebookSupport: true,
       },
     },
   );

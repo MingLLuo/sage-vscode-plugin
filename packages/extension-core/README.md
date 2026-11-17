@@ -16,7 +16,8 @@ The extension identifier is `sage-vscode.sage-vscode-extension`.
 - Accuracy-first navigation: unique high-confidence matches jump directly; uncertain members show multiple ordered source
   candidates when available and never enable an unsafe rename or reference result.
 - Runtime-backed documentation fallback when a configured Sage runtime is available.
-- Run current file, run selection, run cell/region, and managed Sage REPL commands.
+- Run current file, run selection, run cell/region, and managed Sage REPL commands. In Sage editors, `Shift+Enter`
+  sends the selection to the REPL and `Ctrl+Enter` (`Cmd+Enter` on macOS) runs the current cell.
 - Status, environment, index, docs, support bundle, and UX self-check commands for troubleshooting.
 
 ## First Run
@@ -24,7 +25,7 @@ The extension identifier is `sage-vscode.sage-vscode-extension`.
 1. Install the VSIX or marketplace package.
 2. Open a local trusted workspace containing Sage files, Sage-heavy Python files, or native Sage Cython files.
 3. Open a `.sage` file. Hover a symbol or use Go to Definition, then run `Sage: Run Current File` to check execution.
-4. If Sage was not found, run `Sage: Select Interpreter` and choose the intended executable.
+4. If Sage was not found, run `Sage: Select Sage Interpreter` and choose the intended executable.
 5. For Sage-heavy `.py` files or Cython projects, run `Sage: Configure Workspace` and choose the matching profile.
 
 The Sage status bar item shows language-server and indexing progress. Click it for status commands when something does

@@ -24,7 +24,7 @@ code --install-extension dist/sage-vscode-extension-0.1.0.vsix --force
 
 Open a trusted local folder containing a `.sage` file and edit it. The packaged language server and nearby Sage source
 roots are discovered automatically. Use **Run Current File** from the Sage command palette or editor title to run it.
-If Sage is not found, run **Sage: Select Interpreter** once and choose its executable. The status bar shows startup and
+If Sage is not found, run **Sage: Select Sage Interpreter** once and choose its executable. The status bar shows startup and
 indexing progress; click it for environment details if a feature does not become ready.
 
 For Sage-heavy Python projects, run **Sage: Configure Workspace** and choose **Sage-heavy Python workspace**. This

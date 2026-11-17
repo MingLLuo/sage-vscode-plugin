@@ -52,7 +52,6 @@ coverage remains testable without maintaining parallel manuals.
 - `sage.run.target`
 - `sage.run.showCellCodeLens`
 - `sage.run.cleanupGeneratedPython`
-- `sage.experimental.notebookSupport`
 
 ## Verification
 

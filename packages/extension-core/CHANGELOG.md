@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Interaction
+
+- `Shift+Enter` sends the selection and `Ctrl+Enter` / `Cmd+Enter` runs the current cell in Sage editors.
+- Multi-line selections and cells reach the REPL as one bracketed paste, so blocks with blank lines run correctly; the
+  import-path setup is sent once per REPL session.
+- "Run UX Self Check" and "Build Persistent Database" left the editor menu and command palette (both remain in the status
+  menu); the duplicate Find References menu entry is gone (use Shift+F12). Commands are renamed "Run Selection in REPL"
+  and "Select Sage Interpreter".
+- The unused `sage.experimental.notebookSupport` setting is removed, and the extension no longer activates for any
+  Python file whose name merely contains "sage".
+
 ### Removed
 
 - Removed the retired Python `pygls` language server (`packages/sage-lsp`), its test and CI steps, and the

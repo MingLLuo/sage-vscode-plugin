@@ -58,28 +58,10 @@
     "onLanguage:python",
     "workspaceContains:**/*.sage",
     "workspaceContains:**/*.sage.py",
-    "workspaceContains:**/*sage*.py",
     "workspaceContains:**/*.pyx",
     "workspaceContains:**/*.pxd",
     "workspaceContains:**/*.pxi",
-    "workspaceContains:**/*.spyx",
-    "onCommand:sage.openGettingStarted",
-    "onCommand:sage.selectInterpreter",
-    "onCommand:sage.configureWorkspace",
-    "onCommand:sage.restartLanguageServer",
-    "onCommand:sage.runCurrentFile",
-    "onCommand:sage.runSelection",
-    "onCommand:sage.runCurrentCell",
-    "onCommand:sage.startRepl",
-    "onCommand:sage.showDocumentation",
-    "onCommand:sage.findReferences",
-    "onCommand:sage.showEnvironmentDetails",
-    "onCommand:sage.showIndexStatus",
-    "onCommand:sage.showDocsStatus",
-    "onCommand:sage.copySupportBundle",
-    "onCommand:sage.runUxSelfCheck",
-    "onCommand:sage.rebuildIndex",
-    "onCommand:sage.buildDatabase"
+    "workspaceContains:**/*.spyx"
   ],
   "main": "./out/src/extension.js",
   "scripts": {
@@ -161,7 +143,7 @@
       },
       {
         "command": "sage.selectInterpreter",
-        "title": "Select Interpreter",
+        "title": "Select Sage Interpreter",
         "category": "Sage",
         "icon": "$(gear)"
       },
@@ -186,7 +168,7 @@
       },
       {
         "command": "sage.runSelection",
-        "title": "Run Selection",
+        "title": "Run Selection in REPL",
         "category": "Sage",
         "icon": "$(selection)",
         "enablement": "sage.workspaceRuntimeAvailable && (editorLangId == sagemath || (editorLangId == python && config.sage.analysis.enablePythonFiles))"
@@ -342,16 +324,6 @@
           "command": "sage.showDocumentation",
           "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || resourceLangId == sagemath-cython || (resourceLangId == python && config.sage.analysis.enablePythonFiles))",
           "group": "2_sage@10"
-        },
-        {
-          "command": "sage.findReferences",
-          "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || resourceLangId == sagemath-cython || (resourceLangId == python && config.sage.analysis.enablePythonFiles))",
-          "group": "2_sage@15"
-        },
-        {
-          "command": "sage.runUxSelfCheck",
-          "when": "sage.workspaceRuntimeAvailable && (resourceLangId == sagemath || resourceLangId == sagemath-cython || (resourceLangId == python && config.sage.analysis.enablePythonFiles))",
-          "group": "2_sage@20"
         }
       ],
       "commandPalette": [
@@ -377,7 +349,11 @@
         },
         {
           "command": "sage.runUxSelfCheck",
-          "when": "sage.workspaceRuntimeAvailable"
+          "when": "false"
+        },
+        {
+          "command": "sage.buildDatabase",
+          "when": "false"
         }
       ]
     },
@@ -523,14 +499,21 @@
           "default": false,
           "scope": "resource",
           "markdownDescription": "After an uncontended standalone `.sage` run, remove its new `.sage.py` helper. Existing files and concurrent runs are preserved. REPL loads never delete disk helpers."
-        },
-        "sage.experimental.notebookSupport": {
-          "type": "boolean",
-          "default": false,
-          "scope": "resource",
-          "markdownDescription": "Enable preview hooks for future notebook integration."
         }
       }
-    }
+    },
+    "keybindings": [
+      {
+        "command": "sage.runSelection",
+        "key": "shift+enter",
+        "when": "editorTextFocus && sage.workspaceRuntimeAvailable && (editorLangId == sagemath || editorLangId == sagemath-cython || (editorLangId == python && config.sage.analysis.enablePythonFiles)) && editorHasSelection"
+      },
+      {
+        "command": "sage.runCurrentCell",
+        "key": "ctrl+enter",
+        "mac": "cmd+enter",
+        "when": "editorTextFocus && sage.workspaceRuntimeAvailable && (editorLangId == sagemath || editorLangId == sagemath-cython || (editorLangId == python && config.sage.analysis.enablePythonFiles))"
+      }
+    ]
   }
 }
