@@ -421,3 +421,19 @@ fn crlf_sources_with_non_ascii_text_keep_exact_line_offsets() {
         references_in_source(Path::new("demo.py"), lf, "value").len()
     );
 }
+
+#[test]
+fn function_body_lines_are_sliced_exactly_in_crlf_sources() {
+    let source = "def outer(value):\r\n    label = 'é'\r\n    other = 'üü'\r\n    return label\r\n";
+    let scopes = LexicalScopeMap::new(source);
+    let lines: Vec<(u32, &str)> = scopes.direct_function_source_lines(source, 0).collect();
+    assert_eq!(
+        lines,
+        vec![
+            (1, "    label = 'é'"),
+            (2, "    other = 'üü'"),
+            (3, "    return label"),
+        ],
+        "body lines must match the source text regardless of the line terminator"
+    );
+}
