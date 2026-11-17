@@ -68,3 +68,28 @@ post-rebuild RSS is 648.1/793.1 MiB, above the 400 MiB target. These measurement
 
 `validation-diagnostics-2026-11-17.json` records the final local gates and current VSIX hash. The earlier validation files
 are historical checkpoints. Native CI and the remaining storage/client milestones are tracked in the continuation audit.
+
+## 2026-11-17 review checkpoint
+
+`baseline-2026-11-17-review.json` is the run after the review fixes (release build, same host and Sage tree). Memory is
+now recorded as macOS `phys_footprint` (`memory_metric` in the JSON): `ps` RSS also counted pages the allocator had
+already returned as reusable and overstated usage by hundreds of MB.
+
+| Measurement | 2026-11-16 baseline | Now | Target |
+| --- | ---: | ---: | --- |
+| Hover after six saves during the first index pass | 3,125 ms | 21 ms | < 250 ms |
+| `semanticTokens/full`, `generic_graph.py`, p95 | 1,064 ms | 60 ms | < 150 ms |
+| `documentSymbol`, same file, p50 | 333 ms | 41 ms | < 150 ms |
+| Last edit to final versioned diagnostics | not measured | 251 ms | < 500 ms |
+| Hover / completion p95 while typing | 65 / 66 ms | 66 / 10 ms | < 250 ms |
+| References `matrix` (1,898 locations) | 28.8 s | 1.0 s | < 2 s |
+| Hover while that references request runs | 28.9 s | 1 ms | < 250 ms |
+| References `QQ` (2,299 locations) | 6.2 s | 0.5 s | < 2 s |
+| Memory after cold index / peak | 476 MB RSS | 175 / 419 MB | < 400 MB / < 1 GB |
+| Memory after `Rebuild Index` / peak | 820 MB RSS | 250 / 605 MB | < 400 MB / < 1 GB |
+| Warm start: index ready / first hover / memory | 82 / 16 ms / 56 MB | 69 / 8 ms / 46 MB | keep |
+
+Reference results are byte-identical before and after the reference optimizations (result digests compared). The
+full-tree analysis snapshot keeps all 126,514 symbols and 273,949 semantic spans; diagnostics on the Sage library went
+from 78 to 0, every removed one reviewed as a false positive. Two symbol records changed, both improvements (a recovered
+docstring and a recovered Cython signature).
