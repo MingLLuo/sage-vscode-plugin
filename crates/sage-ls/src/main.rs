@@ -2,16 +2,20 @@
 
 mod analysis_mode;
 mod call_hierarchy;
+mod code_actions;
+mod completion_items;
 mod document_links;
 mod documentation;
 mod editor_features;
 mod index_jobs;
 mod initialization;
 mod linked_document_prewarm;
+mod memory;
 mod navigation;
 mod open_documents;
 mod references;
 mod runtime_docs;
+mod semantic_tokens;
 mod signature_help;
 mod source_symbols;
 mod text_positions;
@@ -23,6 +27,11 @@ use call_hierarchy::{
     enclosing_call_hierarchy_item_from_context, high_confidence_call_hierarchy_definition,
     is_identifier_start, push_incoming_call, push_outgoing_call, resolve_outgoing_calls,
     CallHierarchySourceContext,
+};
+use code_actions::{code_actions_for_diagnostics, diagnostic_severity};
+use completion_items::{
+    completion_documentation, completion_item, current_prefix, query_completion_item,
+    CompletionResolveData,
 };
 use document_links::sage_document_links;
 use documentation::{
@@ -41,6 +50,7 @@ use initialization::{
 #[cfg(test)]
 use linked_document_prewarm::import_modules_for_prewarm;
 use linked_document_prewarm::LinkedDocumentPrewarmer;
+pub(crate) use memory::release_freed_memory;
 #[cfg(test)]
 use navigation::{
     live_definition_range, navigation_response_for_links,
@@ -73,6 +83,9 @@ use sage_index::{
     QueryDefinition, QueryFeatures, QueryPosition, QueryResult, SymbolKind as SageSymbolKind,
     SymbolRecord, WorkspaceIndex,
 };
+use semantic_tokens::{encode_semantic_tokens, tokens_for_range};
+#[cfg(test)]
+use semantic_tokens::{encode_semantic_tokens_for_range, token_type_index};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use signature_help::signature_information;
@@ -102,31 +115,6 @@ use tower_lsp_server::{Client, LanguageServer, LspService, Server};
 
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
-
-/// Returns memory freed by an index job to the operating system. Parsing a full Sage tree
-/// briefly holds every file's symbols; without this the resident size stays at that peak.
-pub(crate) fn release_freed_memory() {
-    // Parsing runs on the rayon pool, so freed pages sit in those threads' heaps; collect on
-    // every pool thread and then on the calling thread.
-    // SAFETY: `mi_collect` only inspects and releases the allocator's own free pages.
-    rayon::broadcast(|_| unsafe { libmimalloc_sys::mi_collect(true) });
-    unsafe { libmimalloc_sys::mi_collect(true) };
-    // The bundled SQLite allocates through the C library allocator, which keeps freed pages
-    // resident after a bulk persist; ask it to return them.
-    #[cfg(target_os = "macos")]
-    {
-        extern "C" {
-            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
-        }
-        // SAFETY: a null zone means "all zones"; a zero goal releases as much as possible.
-        unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
-    }
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    // SAFETY: glibc's malloc_trim only releases free heap memory.
-    unsafe {
-        libc::malloc_trim(0);
-    }
-}
 
 const TOKEN_TYPES: &[SemanticTokenType] = &[
     SemanticTokenType::NAMESPACE,
@@ -1657,293 +1645,8 @@ impl Backend {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct CompletionResolveData {
-    name: String,
-    module: Option<String>,
-}
-
-fn completion_item(symbol: SymbolRecord) -> CompletionItem {
-    CompletionItem {
-        label: symbol.name.clone(),
-        kind: Some(completion_kind(&symbol.kind)),
-        detail: symbol.signature.clone().or(Some(symbol.detail)),
-        data: Some(json!(CompletionResolveData {
-            name: symbol.name,
-            module: Some(symbol.module),
-        })),
-        ..CompletionItem::default()
-    }
-}
-
-fn query_completion_item(completion: QueryCompletion) -> CompletionItem {
-    let QueryCompletion {
-        label,
-        kind,
-        detail,
-        signature,
-        documentation,
-        resolve_name,
-        module,
-    } = completion;
-    let inline_documentation = if module.as_deref() == Some("document") {
-        documentation.map(completion_documentation)
-    } else {
-        None
-    };
-    CompletionItem {
-        label: label.clone(),
-        kind: Some(query_completion_kind(&kind)),
-        detail: signature.or(Some(detail)),
-        documentation: inline_documentation,
-        data: Some(json!(CompletionResolveData {
-            name: resolve_name.unwrap_or(label),
-            module,
-        })),
-        ..CompletionItem::default()
-    }
-}
-
-fn completion_documentation(value: String) -> Documentation {
-    Documentation::MarkupContent(MarkupContent {
-        kind: MarkupKind::Markdown,
-        value,
-    })
-}
-
-fn code_actions_for_diagnostics(uri: Uri, diagnostics: &[Diagnostic]) -> CodeActionResponse {
-    let mut actions = Vec::new();
-    for diagnostic in diagnostics {
-        if is_python_sage_exponent_diagnostic(diagnostic) {
-            actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-                title: "Replace Sage-style ^ with Python exponent **".to_string(),
-                kind: Some(CodeActionKind::QUICKFIX),
-                diagnostics: Some(vec![diagnostic.clone()]),
-                edit: Some(workspace_edit_for_text_edits(
-                    uri.clone(),
-                    vec![TextEdit::new(diagnostic.range, "**".to_string())],
-                )),
-                ..CodeAction::default()
-            }));
-            continue;
-        }
-        if !is_incomplete_sage_exponent_diagnostic(diagnostic) {
-            continue;
-        }
-        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-            title: "Remove incomplete Sage exponent operator".to_string(),
-            kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: Some(vec![diagnostic.clone()]),
-            edit: Some(workspace_edit_for_text_edits(
-                uri.clone(),
-                vec![TextEdit::new(diagnostic.range, String::new())],
-            )),
-            ..CodeAction::default()
-        }));
-        actions.push(CodeActionOrCommand::CodeAction(CodeAction {
-            title: "Insert exponent placeholder".to_string(),
-            kind: Some(CodeActionKind::QUICKFIX),
-            diagnostics: Some(vec![diagnostic.clone()]),
-            edit: Some(workspace_edit_for_text_edits(
-                uri.clone(),
-                vec![TextEdit::new(
-                    Range::new(diagnostic.range.end, diagnostic.range.end),
-                    "1".to_string(),
-                )],
-            )),
-            ..CodeAction::default()
-        }));
-    }
-    actions
-}
-
 fn may_fallback_to_enclosing_call_hierarchy(text: &str, position: Position) -> bool {
     word_at_position(text, position).is_none()
-}
-
-fn is_incomplete_sage_exponent_diagnostic(diagnostic: &Diagnostic) -> bool {
-    matches!(
-        diagnostic.code.as_ref(),
-        Some(NumberOrString::String(code)) if code == "syntax-error"
-    ) && diagnostic
-        .message
-        .contains("incomplete Sage exponentiation")
-}
-
-fn is_python_sage_exponent_diagnostic(diagnostic: &Diagnostic) -> bool {
-    matches!(
-        diagnostic.code.as_ref(),
-        Some(NumberOrString::String(code)) if code == "sage-python-caret-exponent"
-    )
-}
-
-fn diagnostic_severity(value: &str) -> DiagnosticSeverity {
-    match value {
-        "warning" => DiagnosticSeverity::WARNING,
-        "information" => DiagnosticSeverity::INFORMATION,
-        "hint" => DiagnosticSeverity::HINT,
-        _ => DiagnosticSeverity::ERROR,
-    }
-}
-
-fn workspace_edit_for_text_edits(uri: Uri, edits: Vec<TextEdit>) -> WorkspaceEdit {
-    let mut changes = HashMap::new();
-    changes.insert(uri, edits);
-    WorkspaceEdit {
-        changes: Some(changes),
-        ..WorkspaceEdit::default()
-    }
-}
-
-fn completion_kind(kind: &SageSymbolKind) -> CompletionItemKind {
-    match kind {
-        SageSymbolKind::Class => CompletionItemKind::CLASS,
-        SageSymbolKind::Function => CompletionItemKind::FUNCTION,
-        SageSymbolKind::Module => CompletionItemKind::MODULE,
-        SageSymbolKind::Variable | SageSymbolKind::PreparserGenerator => {
-            CompletionItemKind::VARIABLE
-        }
-        SageSymbolKind::Import => CompletionItemKind::REFERENCE,
-        SageSymbolKind::CythonDeclaration => CompletionItemKind::FUNCTION,
-    }
-}
-
-fn query_completion_kind(kind: &str) -> CompletionItemKind {
-    match kind {
-        "Class" => CompletionItemKind::CLASS,
-        "Module" => CompletionItemKind::MODULE,
-        "Variable" | "PreparserGenerator" => CompletionItemKind::VARIABLE,
-        "Import" => CompletionItemKind::REFERENCE,
-        "Method" => CompletionItemKind::METHOD,
-        "CythonDeclaration" | "Function" => CompletionItemKind::FUNCTION,
-        _ => CompletionItemKind::METHOD,
-    }
-}
-
-fn current_prefix(text: &str, position: Position) -> Option<String> {
-    let line = text.lines().nth(position.line as usize)?;
-    let character = utf16_character_to_byte_offset(line, position.character)?;
-    let bytes = line.as_bytes();
-    let mut start = character;
-    while start > 0 && is_word_byte(bytes[start - 1]) {
-        start -= 1;
-    }
-    Some(line[start..character].to_string())
-}
-
-fn encode_semantic_tokens(text: &str) -> Vec<SemanticToken> {
-    encode_semantic_spans(text, semantic_spans(text))
-}
-
-#[cfg(test)]
-fn encode_semantic_tokens_for_range(text: &str, range: Range) -> Vec<SemanticToken> {
-    tokens_for_range(&encode_semantic_tokens(text), range)
-}
-
-fn tokens_for_range(tokens: &[SemanticToken], range: Range) -> Vec<SemanticToken> {
-    let (mut line, mut column, mut previous_line, mut previous_column) = (0, 0, 0, 0);
-    let mut filtered = Vec::new();
-    for token in tokens {
-        line += token.delta_line;
-        column = if token.delta_line == 0 {
-            column + token.delta_start
-        } else {
-            token.delta_start
-        };
-        if line > range.end.line {
-            break;
-        }
-        if line < range.start.line
-            || (line == range.start.line && column + token.length <= range.start.character)
-            || (line == range.end.line && column >= range.end.character)
-        {
-            continue;
-        }
-        let mut token = *token;
-        token.delta_line = line - previous_line;
-        token.delta_start = if token.delta_line == 0 {
-            column - previous_column
-        } else {
-            column
-        };
-        filtered.push(token);
-        previous_line = line;
-        previous_column = column;
-    }
-    filtered
-}
-
-fn encode_semantic_spans<I>(text: &str, spans: I) -> Vec<SemanticToken>
-where
-    I: IntoIterator<Item = sage_index::SemanticSpan>,
-{
-    let lines = text_positions::LineIndex::new(text);
-    let mut data = Vec::new();
-    let mut previous_line = 0u32;
-    let mut previous_start = 0u32;
-    for span in spans {
-        let Some((start, length)) = semantic_span_lsp_columns(text, &lines, &span) else {
-            continue;
-        };
-        let delta_line = span.line.saturating_sub(previous_line);
-        let delta_start = if delta_line == 0 {
-            start.saturating_sub(previous_start)
-        } else {
-            start
-        };
-        data.push(SemanticToken {
-            delta_line,
-            delta_start,
-            length,
-            token_type: token_type_index(&span.token_type),
-            token_modifiers_bitset: modifier_bitset(&span.modifiers),
-        });
-        previous_line = span.line;
-        previous_start = start;
-    }
-    data
-}
-
-fn semantic_span_lsp_columns(
-    text: &str,
-    lines: &text_positions::LineIndex,
-    span: &sage_index::SemanticSpan,
-) -> Option<(u32, u32)> {
-    let (line_start, line_end) = lines.bounds(span.line)?;
-    let line = &text[line_start..line_end];
-    let start = byte_offset_to_utf16_character(line, span.start as usize)?;
-    let end =
-        byte_offset_to_utf16_character(line, span.start.saturating_add(span.length) as usize)?;
-    Some((start, end.saturating_sub(start)))
-}
-
-fn token_type_index(name: &str) -> u32 {
-    match name {
-        "namespace" => 0,
-        "type" => 1,
-        "class" => 2,
-        "function" => 3,
-        "method" => 4,
-        "variable" => 5,
-        "parameter" => 6,
-        "keyword" => 7,
-        "decorator" => 8,
-        _ => 5,
-    }
-}
-
-fn modifier_bitset(modifiers: &[String]) -> u32 {
-    let mut bits = 0;
-    for modifier in modifiers {
-        match modifier.as_str() {
-            "declaration" => bits |= 1 << 0,
-            "readonly" => bits |= 1 << 1,
-            "defaultLibrary" => bits |= 1 << 2,
-            _ => {}
-        }
-    }
-    bits
 }
 
 #[cfg(test)]
