@@ -10,7 +10,12 @@ const packageRoot = path.join(repositoryRoot, "packages", "extension-core");
 const args = parseArgs(process.argv.slice(2));
 
 const rootPackage = readJson("package.json");
-const manifest = readJson("packages/extension-core/package.json");
+// Resolve `%key%` placeholders the way VS Code does, so checks see the English strings.
+const manifestStrings = readJson("packages/extension-core/package.nls.json");
+const manifest = JSON.parse(
+  readText("packages/extension-core/package.json"),
+  (_key, value) => typeof value === "string" && /^%[^%]+%$/.test(value) ? manifestStrings[value.slice(1, -1)] ?? value : value,
+);
 const checks = [];
 
 const docs = {

@@ -90,9 +90,27 @@ interface RootPackage {
   scripts?: Record<string, string>;
 }
 
+/** Reads the manifest with `%key%` placeholders resolved from `package.nls.json`, as VS Code does. */
 function readManifest(): ExtensionManifest {
-  return JSON.parse(fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8")) as ExtensionManifest;
+  const strings = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.nls.json"), "utf-8")) as Record<string, string>;
+  return JSON.parse(
+    fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8"),
+    (_key, value) => typeof value === "string" && /^%[^%]+%$/.test(value) ? strings[value.slice(1, -1)] ?? value : value,
+  ) as ExtensionManifest;
 }
+
+test("every manifest string placeholder is translated in English and Simplified Chinese", () => {
+  const raw = fs.readFileSync(path.join(packageRoot, "package.json"), "utf-8");
+  const placeholders = new Set([...raw.matchAll(/"%([^%"]+)%"/g)].map((match) => match[1]));
+  assert.ok(placeholders.size > 40, "user-facing manifest strings should be externalized");
+  for (const locale of ["package.nls.json", "package.nls.zh-cn.json"]) {
+    const strings = JSON.parse(fs.readFileSync(path.join(packageRoot, locale), "utf-8")) as Record<string, string>;
+    for (const key of placeholders) {
+      assert.ok(strings[key]?.trim(), `${locale} is missing ${key}`);
+    }
+    assert.deepEqual(Object.keys(strings).filter((key) => !placeholders.has(key)), [], `${locale} has unused keys`);
+  }
+});
 
 function readRootPackage(): RootPackage {
   return JSON.parse(fs.readFileSync(path.join(repositoryRoot, "package.json"), "utf-8")) as RootPackage;

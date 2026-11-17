@@ -40,6 +40,8 @@ const EXTENSION_PACKAGE_FILES = new Set([
   "LICENSE",
   "README.md",
   "package.json",
+  "package.nls.json",
+  "package.nls.zh-cn.json",
   "resources/bin/README.md",
   stagedFiles.binary,
   stagedFiles.sha256,
@@ -56,6 +58,7 @@ const EXTENSION_PACKAGE_PATTERNS = [
   /^resources\/generated\/syntax\/language-configuration\.json$/,
   /^resources\/generated\/syntax\/(?:snippets|syntaxes)\/[^/]+\.json$/,
   /^resources\/walkthrough\/[^/]+\.md$/,
+  /^l10n\/bundle\.l10n(?:\.[a-z-]+)?\.json$/,
 ];
 const DEPENDENCY_RUNTIME_EXTENSIONS = new Set([
   ".cjs",
@@ -393,6 +396,14 @@ function contentTypeForUnknownExtension(extension) {
   return "text/plain";
 }
 
+// The gallery manifest is not localized: resolve `%key%` placeholders to the English strings.
+function englishManifestString(value) {
+  const match = /^%([^%]+)%$/.exec(value ?? "");
+  if (!match) return value;
+  const strings = JSON.parse(fs.readFileSync(path.join(packageRoot, "package.nls.json"), "utf8"));
+  return strings[match[1]] ?? value;
+}
+
 function vsixManifestXml(extensionManifest) {
   const categories = (extensionManifest.categories ?? []).join(",");
   const tags = (extensionManifest.keywords ?? []).join(" ");
@@ -405,8 +416,8 @@ function vsixManifestXml(extensionManifest) {
 <PackageManifest Version="2.0.0" xmlns="http://schemas.microsoft.com/developer/vsx-schema/2011">
   <Metadata>
     <Identity Language="en-US" Id="${xmlEscape(extensionManifest.name)}" Version="${xmlEscape(extensionManifest.version)}" Publisher="${xmlEscape(extensionManifest.publisher)}" TargetPlatform="${xmlEscape(packageTarget.name)}"/>
-    <DisplayName>${xmlEscape(extensionManifest.displayName ?? extensionManifest.name)}</DisplayName>
-    <Description xml:space="preserve">${xmlEscape(extensionManifest.description ?? "")}</Description>
+    <DisplayName>${xmlEscape(englishManifestString(extensionManifest.displayName) ?? extensionManifest.name)}</DisplayName>
+    <Description xml:space="preserve">${xmlEscape(englishManifestString(extensionManifest.description) ?? "")}</Description>
     <Tags>${xmlEscape(tags)}</Tags>
     <Categories>${xmlEscape(categories)}</Categories>
     <GalleryFlags>${xmlEscape(galleryFlags)}</GalleryFlags>
