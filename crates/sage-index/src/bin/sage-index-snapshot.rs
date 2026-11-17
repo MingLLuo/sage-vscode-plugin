@@ -31,8 +31,12 @@ fn digest(parts: impl IntoIterator<Item = String>) -> String {
 }
 
 fn main() -> Result<()> {
+    // `--diagnostics` adds every diagnostic (code, message, range) so remaining reports on
+    // library code can be reviewed one by one, not only counted.
+    let with_diagnostics = env::args().any(|arg| arg == "--diagnostics");
     let roots: Vec<PathBuf> = env::args()
         .skip(1)
+        .filter(|arg| arg != "--diagnostics")
         .map(|root| PathBuf::from(root).canonicalize())
         .collect::<std::io::Result<_>>()
         .context("resolve source roots")?;
@@ -105,7 +109,7 @@ fn main() -> Result<()> {
                     diagnostic.range.end_character,
                 )
             }));
-            let line = json!({
+            let mut line = json!({
                 "path": relative,
                 "module": parsed.module,
                 "symbols": parsed.symbols.len(),
@@ -115,6 +119,17 @@ fn main() -> Result<()> {
                 "diagnostics": diagnostics.len(),
                 "diagnostic_digest": diagnostic_digest,
             });
+            if with_diagnostics && !diagnostics.is_empty() {
+                line["diagnostic_details"] = json!(diagnostics
+                    .iter()
+                    .map(|diagnostic| json!({
+                        "code": diagnostic.code,
+                        "message": diagnostic.message,
+                        "line": diagnostic.range.start_line + 1,
+                        "column": diagnostic.range.start_character,
+                    }))
+                    .collect::<Vec<_>>());
+            }
             Some((relative, line.to_string()))
         })
         .collect();

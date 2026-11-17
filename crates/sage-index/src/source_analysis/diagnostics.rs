@@ -8,23 +8,29 @@ fn parse_with_tree_sitter(source: &str) -> Option<tree_sitter::Tree> {
     parser.parse(source, None)
 }
 
+const MAX_DIAGNOSTICS_PER_KIND: usize = 100;
+
 pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<DiagnosticRecord> {
     let normalized = source.replace("\r\n", "\n").replace('\r', "\n");
     let source = normalized.as_str();
     let is_sage = path.extension().is_some_and(|ext| ext == "sage");
-    let mut diagnostics = if path.extension().is_some_and(|ext| ext == "py")
+    // Warnings are capped separately so they can never crowd out syntax errors.
+    let mut warnings = if path.extension().is_some_and(|ext| ext == "py")
         && source_looks_sage_heavy_python(source)
+        && !is_sage_library_module(path)
     {
         sage_python_caret_exponent_diagnostics(source)
     } else {
         Vec::new()
     };
+    warnings.truncate(MAX_DIAGNOSTICS_PER_KIND);
     if path
         .extension()
-        .is_some_and(|ext| ext == "pyx" || ext == "pxd" || ext == "pxi")
+        .is_some_and(|ext| matches!(ext.to_str(), Some("pyx" | "pxd" | "pxi" | "spyx")))
     {
-        return diagnostics;
+        return warnings;
     }
+    let mut diagnostics = Vec::new();
     // Normalizing line endings preserves line/byte-column coordinates, including
     // lone CR lines, while giving the Python grammar its expected LF input.
     let (generated, mapping) = if is_sage {
@@ -40,13 +46,13 @@ pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<Diagnosti
         Vec::new()
     };
     let Some(tree) = parse_with_tree_sitter(&generated) else {
-        return diagnostics;
+        return warnings;
     };
     // Walk only erroneous branches. Prefer the smallest ERROR nodes; cap reports
     // so an unfinished large paste cannot flood the editor with diagnostics.
     let mut pending = vec![tree.root_node()];
     while let Some(node) = pending.pop() {
-        if diagnostics.len() >= 100 {
+        if diagnostics.len() >= MAX_DIAGNOSTICS_PER_KIND {
             break;
         }
         let mut cursor = node.walk();
@@ -56,7 +62,13 @@ pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<Diagnosti
             .collect();
         if children.is_empty() && (node.is_error() || node.is_missing()) {
             let start = map_position(node.start_position(), &mapping, &original_lines, false);
-            let end = map_position(node.end_position(), &mapping, &original_lines, true);
+            let mut end = map_position(node.end_position(), &mapping, &original_lines, true);
+            if end.0 != start.0 {
+                // An unclosed bracket can make one ERROR node span the rest of the file.
+                // Underline only where the problem starts.
+                let line_len = original_lines.get(start.0 as usize).map_or(0, |line| line.len());
+                end = (start.0, (line_len as u32).max(start.1 + 1));
+            }
             let range = SourceRange {
                 start_line: start.0,
                 start_character: start.1,
@@ -94,7 +106,8 @@ pub(super) fn diagnostics_for_source(path: &Path, source: &str) -> Vec<Diagnosti
             pending.extend(children.into_iter().rev());
         }
     }
-    diagnostics.truncate(100);
+    diagnostics.truncate(MAX_DIAGNOSTICS_PER_KIND);
+    diagnostics.extend(warnings);
     diagnostics.sort_by_key(|diagnostic| {
         (
             diagnostic.range.start_line,
@@ -171,6 +184,15 @@ fn sage_trailing_caret_errors(source: &str) -> Vec<SourceRange> {
         offset += line.len() + 1;
     }
     ranges
+}
+
+/// The XOR warning targets user scripts that mistake `^` for exponentiation. Sage's own
+/// library is plain Python whose authors use `^` deliberately (hashes, bit vectors, booleans),
+/// so modules inside a `sage` package that has an `all.py` are exempt.
+fn is_sage_library_module(path: &Path) -> bool {
+    path.ancestors()
+        .skip(1)
+        .any(|ancestor| ancestor.file_name().is_some_and(|name| name == "sage") && ancestor.join("all.py").is_file())
 }
 
 fn source_looks_sage_heavy_python(source: &str) -> bool {

@@ -33,8 +33,39 @@ pub(super) fn preprocess_with_mapping(source: &str) -> (PreprocessResult, Vec<Pr
                 }
             }
         }
-        let (rewritten, mut line_edits) =
-            rewrite_sage_operators_in_segment(line, line_index as u32, 0, 0, &mut quote);
+        // Sage's symbolic function definition `f(x, y) = rhs` is not a Python assignment
+        // target. `f = lambda x, y: rhs` keeps the right-hand side and its columns parseable.
+        let function_definition = quote
+            .is_outside_string()
+            .then(|| symbolic_function_definition_re().captures(line))
+            .flatten();
+        let (prefix, source_base) = match &function_definition {
+            Some(captures) => {
+                let name = captures.name("name").expect("name group");
+                let header_end = captures.get(0).expect("whole match").end();
+                let args = captures.name("args").map_or("", |args| args.as_str());
+                let head = format!("{}{} = lambda {}:", &line[..name.start()], name.as_str(), args.trim());
+                let edit = PreprocessEdit {
+                    line: line_index as u32,
+                    source_character: name.start() as u32,
+                    generated_character: name.start() as u32,
+                    source_text: line[name.start()..header_end].to_string(),
+                    generated_text: head[name.start()..].to_string(),
+                };
+                mapping.push(edit.clone());
+                edits.push(edit);
+                (head, header_end)
+            }
+            None => (String::new(), 0),
+        };
+        let (rewritten, mut line_edits) = rewrite_sage_operators_in_segment(
+            &line[source_base..],
+            line_index as u32,
+            source_base,
+            prefix.len(),
+            &mut quote,
+        );
+        generated.push_str(&prefix);
         generated.push_str(&rewritten);
         mapping.extend(line_edits.iter().cloned());
         edits.append(&mut line_edits);
@@ -45,6 +76,16 @@ pub(super) fn preprocess_with_mapping(source: &str) -> (PreprocessResult, Vec<Pr
         line_index += 1;
     }
     (PreprocessResult { generated, edits }, mapping)
+}
+
+fn symbolic_function_definition_re() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| {
+        Regex::new(
+            r"^\s*(?P<name>[A-Za-z_][A-Za-z0-9_]*)\((?P<args>\s*[A-Za-z_][A-Za-z0-9_]*(?:\s*,\s*[A-Za-z_][A-Za-z0-9_]*)*\s*)\)\s*=(?:[^=]|$)",
+        )
+        .expect("valid symbolic function regex")
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -233,6 +274,20 @@ fn rewrite_sage_operators_in_segment(
             }
             continue;
         }
+        if ch == '^' && chars.peek().is_some_and(|(_, next)| *next == '^') {
+            // Sage's `^^` is Python's XOR.
+            let generated_character = generated_base + generated.len();
+            generated.push('^');
+            edits.push(PreprocessEdit {
+                line: line_index,
+                source_character: (source_base + character) as u32,
+                generated_character: generated_character as u32,
+                source_text: "^^".to_string(),
+                generated_text: "^".to_string(),
+            });
+            chars.next();
+            continue;
+        }
         if ch == '^' {
             let generated_character = generated_base + generated.len();
             generated.push_str("**");
@@ -271,14 +326,21 @@ fn rewrite_sage_operators_in_segment(
                 let previous = segment[..character].chars().next_back();
                 let after_next = segment[next_index + 1..].chars().next();
                 if previous != Some('.') && after_next != Some('.') {
+                    // `[a..b]` becomes `[a,b]`. In the stepped form `[a, b, .., c]` the dots
+                    // stand alone between commas, so an Ellipsis keeps the list parseable.
+                    let standalone = segment[..character]
+                        .trim_end()
+                        .ends_with([',', '(', '['])
+                        && segment[next_index + 1..].trim_start().starts_with([',', ')', ']']);
+                    let replacement = if standalone { "..." } else { "," };
                     let generated_character = generated_base + generated.len();
-                    generated.push(',');
+                    generated.push_str(replacement);
                     edits.push(PreprocessEdit {
                         line: line_index,
                         source_character: (source_base + character) as u32,
                         generated_character: generated_character as u32,
                         source_text: "..".to_string(),
-                        generated_text: ",".to_string(),
+                        generated_text: replacement.to_string(),
                     });
                     chars.next();
                     continue;

@@ -386,7 +386,8 @@ fn diagnostics_locate_errors_on_cr_lines() {
     let diagnostics = diagnostics_for_source(Path::new("demo.py"), source);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert_eq!(diagnostics[0].range.start_line, 1);
-    assert_eq!(diagnostics[0].range.end_line, 2);
+    // Multi-line error nodes are clamped to the line where the problem starts.
+    assert_eq!(diagnostics[0].range.end_line, 1);
 }
 
 #[test]
@@ -435,5 +436,101 @@ fn function_body_lines_are_sliced_exactly_in_crlf_sources() {
             (3, "    return label"),
         ],
         "body lines must match the source text regardless of the line terminator"
+    );
+}
+
+fn syntax_errors(path: &str, source: &str) -> Vec<DiagnosticRecord> {
+    diagnostics_for_source(Path::new(path), source)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.code == "syntax-error")
+        .collect()
+}
+
+#[test]
+fn valid_sage_syntax_is_not_reported() {
+    for source in [
+        "value = a ^^ b\n",
+        "values = [1, 3, .., 11]\n",
+        "values = [1,3,..,11]\n",
+        "f(x) = x^2 + 1\n",
+        "g(x, y) = x*y\n",
+        "R.<x,y> = QQ[]\n",
+        "values = [n^2 for n in [1..5]]\n",
+    ] {
+        let errors = syntax_errors("demo.sage", source);
+        assert!(errors.is_empty(), "{source:?}: {errors:?}");
+    }
+}
+
+#[test]
+fn spyx_sources_are_treated_as_cython() {
+    let errors = syntax_errors("demo.spyx", "cdef int value = 1\ncpdef double twice(double x):\n    return 2 * x\n");
+    assert!(errors.is_empty(), "{errors:?}");
+}
+
+#[test]
+fn an_unclosed_bracket_does_not_underline_the_rest_of_the_file() {
+    let mut source = String::from("values = foo(1,\n");
+    for index in 0..50 {
+        source.push_str(&format!("x{index} = {index}\n"));
+    }
+    let errors = syntax_errors("demo.py", &source);
+    assert!(!errors.is_empty());
+    for error in &errors {
+        assert_eq!(
+            error.range.start_line, error.range.end_line,
+            "a syntax error must stay on one line: {error:?}"
+        );
+    }
+}
+
+#[test]
+fn syntax_errors_survive_many_xor_warnings() {
+    let mut source = String::from("from sage.all import ZZ\n");
+    for index in 0..150 {
+        source.push_str(&format!("v{index} = a ^ b\n"));
+    }
+    source.push_str("def broken(:\n    pass\n");
+    let diagnostics = diagnostics_for_source(Path::new("demo.py"), &source);
+    assert!(
+        diagnostics.iter().any(|diagnostic| diagnostic.code == "syntax-error"),
+        "syntax errors must not be crowded out by XOR warnings"
+    );
+}
+
+#[test]
+fn errors_after_a_symbolic_function_header_keep_source_columns() {
+    // The rewritten header is longer than the source; positions must map back so the
+    // diagnostic covers the stray `)` and never runs past the end of the source line.
+    let source = "f(x, y) = x^2 + )\n";
+    let errors = syntax_errors("demo.sage", source);
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    let line_len = source.trim_end().len() as u32;
+    let stray = source.rfind(')').unwrap() as u32;
+    let range = &errors[0].range;
+    assert_eq!((range.start_line, range.end_line), (0, 0));
+    assert!(range.start_character <= stray && stray < range.end_character, "{errors:?}");
+    assert_eq!(range.end_character, line_len, "{errors:?}");
+}
+
+#[test]
+fn sage_library_modules_do_not_get_the_user_xor_warning() {
+    let root = test_root("sage-library-xor");
+    let package = root.join("sage").join("graphs");
+    fs::create_dir_all(&package).unwrap();
+    fs::write(root.join("sage").join("all.py"), "").unwrap();
+    let library_module = package.join("partial_cube.py");
+    let source = "from sage.graphs.graph import Graph\ndiff = left ^ right\n";
+    fs::write(&library_module, source).unwrap();
+    assert!(diagnostics_for_source(&library_module, source).is_empty());
+
+    let user_script = root.join("analysis.py");
+    fs::write(&user_script, source).unwrap();
+    assert_eq!(
+        diagnostics_for_source(&user_script, source)
+            .iter()
+            .filter(|diagnostic| diagnostic.code == "sage-python-caret-exponent")
+            .count(),
+        1
     );
 }
